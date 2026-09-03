@@ -1,0 +1,10 @@
+# Ядро инструмента (attacks/, core/, attacks_loader.py, cli.py) — намеренно лёгкий стек,
+# без langchain/langgraph (это зависимости ЦЕЛЕВОГО стенда, не наши). Apache-2.0/MIT only.
+httpx>=0.27.0
+pymongo>=4.6.0
+pyyaml>=6.0.1
+
+# Опционально: если заданы LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY — core/tracer.py
+# зеркалит трассы в Langfuse поверх обязательного локального JSONL-трейсера.
+# Не ставится жёстким требованием — импорт обёрнут в try/except в core/tracer.py.
+langfuse>=2.0.0

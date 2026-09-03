@@ -1,0 +1,76 @@
+# config.yaml — профиль запуска против конкретного таргета. Стенд-специфика
+# (auth_mode, схема Mongo) живёт ЗДЕСЬ и в adapters/, core/ про неё ничего не знает.
+#
+# Секреты — НЕ здесь. Ключи читаются из переменных окружения по именам ниже
+# (см. TargetConfig.api_key_env / LLMClientConfig.api_key_env в core/).
+# Скопируй в config.yaml, впиши свои ENV-имена, .env / config.yaml — в .gitignore.
+
+target:
+  base_url: "http://localhost:8600"
+  chat_path: "/v1/chat/completions"
+  finalize_path_template: "/v1/sessions/{session_id}/finalize"
+  finalize_via_chat_keyword: "finalize"
+  # genai-invest-agent-memory-stand расширяет OpenAI-контракт полем auth_mode —
+  # это стенд-специфика, поэтому не поле TargetConfig, а request_extra_fields:
+  request_extra_fields:
+    auth_mode: "vulnerable"   # "vulnerable" | "protected"
+  timeout_s: 60
+  retries: 2
+
+# Идентичности для TargetPool — cross-user атаки говорят за нескольких клиентов
+# одновременно, каждому нужен свой sk-genai-… ключ (получить на :8501, раздел
+# "Мой аккаунт", для client1001..client1005 — ЛОГИН client100N, но user_id внутри
+# стенда — голый номер "100N"; см. ключи ниже).
+#
+# ПРОВЕРЕНО НА ЖИВОМ СТЕНДЕ 2026-09-03: ключ здесь ДОЛЖЕН быть тем же значением, что
+# реально лежит в Mongo как user_id (dialog_sessions.user_id, semantic_memories.user_id
+# и т.п.) — это "1001", а НЕ "client1001". agent_policy_memories не фильтруется по
+# user_id вообще, поэтому с "client1001" cross_user_scope_global работал "случайно" —
+# а single-user паки (conditional_risk_flag, salience_compaction_flood) молча получали
+# пустой evidence. Если меняешь на другой таргет — сверься с его реальной схемой, не
+# с тем, что "кажется логичным" по логину/username.
+identities:
+  "1001":
+    api_key_env: TARGET_API_KEY_CLIENT1001
+  "1002":
+    api_key_env: TARGET_API_KEY_CLIENT1002
+  "1003":
+    api_key_env: TARGET_API_KEY_CLIENT1003
+  "1004":
+    api_key_env: TARGET_API_KEY_CLIENT1004
+  "1005":
+    api_key_env: TARGET_API_KEY_CLIENT1005
+
+evidence:
+  adapter: mongo_direct   # пока единственный адаптер для этого стенда
+  mongo_uri: "mongodb://localhost:27017"
+  mongo_db: "agent_memory"
+
+# auth_scheme — схема заголовка Authorization ("<auth_scheme> <ключ>"). Дефолт (если
+# поле не указано) — "Bearer", подходит OpenRouter/Ollama/большинству OpenAI-совместимых
+# эндпоинтов. Обнаружено 2026-09-03: Yandex Cloud LLM API ждёт "Api-Key <ключ>", не
+# "Bearer" — см. core/llm_client.py::LLMClientConfig.auth_scheme.
+judge:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: JUDGE_API_KEY
+  model: "openai/gpt-5-mini"
+  temperature: 0.0
+  auth_scheme: "Bearer"
+
+# Пример под Yandex Cloud LLM API вместо OpenRouter (замени folder_id/JUDGE_API_KEY
+# на свои — ключ ТОЛЬКО через env, сюда его не вписывать):
+#
+# judge:
+#   base_url: "https://llm.api.cloud.yandex.net/v1"
+#   api_key_env: JUDGE_API_KEY
+#   model: "gpt://<folder_id>/deepseek-v4-flash/latest"
+#   temperature: 0.0
+#   auth_scheme: "Api-Key"
+
+attacker:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: ATTACKER_API_KEY
+  model: "openai/gpt-5-mini"
+
+traces_dir: "traces"
+report_path: "reports/latest.json"
