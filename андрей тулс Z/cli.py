@@ -203,7 +203,8 @@ def cmd_mutate(args):
                 "Вставь API-ключ в файл judge_key_qwen.txt — он общий для "
                 "судьи и атакующего этого профиля")
         print(f"Атакующий-LLM: {att.describe()}")
-        items = attackermod.generate_mutations(att, args.text, args.canary)
+        items = attackermod.generate_mutations(att, args.text, args.canary,
+                                               n=args.n)
         atks = mutations.generate_llm(items, args.canary,
                                       triggers=args.trigger, prefix=args.prefix)
     else:
@@ -414,11 +415,13 @@ def main():
                    help="режим BAC стенда")
     p.add_argument("--judge", default=None, help="профиль LLM-судьи: deepseek | qwen")
 
-    p = sub.add_parser("mutate", help="цель атаки → 8 мутаций-формулировок")
+    p = sub.add_parser("mutate", help="цель атаки → N мутаций-формулировок")
     p.add_argument("--text", required=True, help="цель атаки (что должен делать агент)")
     p.add_argument("--canary", required=True, help="канарейка-маркер")
     p.add_argument("--trigger", action="append", default=None,
                    help="свой триггер (можно несколько)")
+    p.add_argument("--n", type=int, default=8,
+                   help="сколько формулировок просить у атакующего-LLM (по умолч. 8)")
     p.add_argument("--out", default=None, help="куда писать YAML (по умолч. attacks/mutated)")
     p.add_argument("--prefix", default="MUT", help="префикс id атак")
     p.add_argument("--llm", default=None, metavar="ПРОФИЛЬ",
