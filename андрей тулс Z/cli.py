@@ -226,11 +226,12 @@ def cmd_report(args):
     """Сводный отчёт одной командой — то, что забирает ASOC."""
     import subprocess
     for script in ("tools/coverage_report.py", "tools/export_findings.py",
-                   "tools/agreement.py"):
+                   "tools/agreement.py", "tools/proof_report.py"):
         print(f"\n===== {script} =====")
         subprocess.run([sys.executable, script], cwd=str(ROOT))
     print("\nГотово: docs/findings.json + docs/findings.sarif + "
-          "docs/coverage-matrix.md + docs/labeling-sample.md")
+          "docs/coverage-matrix.md + docs/labeling-sample.md + "
+          "docs/proof-report.md")
     return 0
 
 

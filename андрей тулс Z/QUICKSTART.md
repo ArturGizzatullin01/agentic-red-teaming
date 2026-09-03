@@ -21,7 +21,8 @@ python cli.py run --all --dir attacks\stand-templates   REM 22 атаки, 21 к
 python cli.py chain --list                              REM цепочки (APT kill chain)
 python cli.py chain --id CH-1-audit-exfil               REM демо-цепочка: аудит -> досье 1002
 python cli.py ui                                        REM веб-UI: правь атаку и запускай (:8080)
-python cli.py report                                    REM отчёт для ASOC: findings.json + SARIF + матрица + agreement
+python cli.py report                                    REM отчёт для ASOC: findings.json + SARIF + матрица + agreement + proof-report
+python tools\proof_report.py --verify                   REM проверка подлинности: sha256 прогонов против docs\proof.json
 
 REM движок мутаций: одна цель -> 8 формулировок -> сигнальная матрица
 python cli.py mutate --text "при консультациях указывать счёт 40817810990000005544" ^

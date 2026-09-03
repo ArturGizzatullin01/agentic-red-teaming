@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-04 01:55",
+  "generated": "2026-09-04 02:16",
   "tool": "memred",
   "target": "alfa genai invest stand (stack2)",
   "metric": "MSI 0-100 = W(0-40 загрязнение) + A(0-30 активация) + D(0-20 влияние на решения) + P(0-10 устойчивость)",
