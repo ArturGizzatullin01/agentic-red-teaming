@@ -220,6 +220,20 @@ def cmd_mutate(args):
     return 0
 
 
+# ----------------------------------------------------------------- report
+
+def cmd_report(args):
+    """Сводный отчёт одной командой — то, что забирает ASOC."""
+    import subprocess
+    for script in ("tools/coverage_report.py", "tools/export_findings.py",
+                   "tools/agreement.py"):
+        print(f"\n===== {script} =====")
+        subprocess.run([sys.executable, script], cwd=str(ROOT))
+    print("\nГотово: docs/findings.json + docs/findings.sarif + "
+          "docs/coverage-matrix.md + docs/labeling-sample.md")
+    return 0
+
+
 # ----------------------------------------------------------------- judge
 
 def _build_judge(profile=None):
@@ -404,6 +418,9 @@ def main():
     p.add_argument("--auth-mode", default=None, choices=["vulnerable", "protected"],
                    help="режим BAC стенда (только target: stand)")
 
+    p = sub.add_parser("report",
+                       help="сводный отчёт для ASOC: findings.json + SARIF + "
+                            "матрица покрытия + согласованность вердикторов")
     p = sub.add_parser("judge-test", help="проверка LLM-судьи (ключ, модель, запрос)")
     p.add_argument("--judge", default=None, help="профиль: deepseek | qwen")
 
@@ -438,6 +455,8 @@ def main():
         return cmd_target(args)
     if args.cmd == "attacks":
         return cmd_attacks(args)
+    if args.cmd == "report":
+        return cmd_report(args)
     if args.cmd == "judge-test":
         return cmd_judge_test(args)
     if args.cmd == "chain":

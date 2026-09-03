@@ -29,6 +29,9 @@ DEFAULTS = {
 
 def load_config(root: str, overrides: dict = None) -> dict:
     cfg = dict(DEFAULTS)
+    # цель из окружения (Docker/CI): MEMRED_TARGET=local|stand
+    if os.environ.get("MEMRED_TARGET"):
+        cfg["target"] = os.environ["MEMRED_TARGET"]
     path = os.path.join(root, "config.yaml")
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
