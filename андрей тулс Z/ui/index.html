@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>memred — онлайн-кастомизация атак на память агента</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#11151c; --panel:#1a2029; --line:#2a3340; --fg:#dbe2ea; --dim:#8b98a8;
+          --acc:#4da3ff; --ok:#3fb96b; --warn:#e0a83a; --bad:#e05656; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px;
+           border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  .badge { font-size:12px; color:var(--dim); border:1px solid var(--line);
+           border-radius:6px; padding:2px 8px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); }
+  .dot.up { background:var(--ok); }
+  main { display:grid; grid-template-columns: 340px 1fr; gap:12px; padding:12px 16px;
+         height: calc(100vh - 53px); }
+  .col { display:flex; flex-direction:column; gap:10px; min-height:0; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+           display:flex; flex-direction:column; min-height:0; }
+  .panel > h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em;
+                color:var(--dim); margin:0; padding:8px 12px; border-bottom:1px solid var(--line); }
+  .list { overflow:auto; }
+  .item { padding:8px 12px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .item:hover { background:#202836; }
+  .item.sel { background:#223048; }
+  .item .id { font-weight:600; }
+  .item .nm { color:var(--dim); font-size:12px; }
+  .tag { display:inline-block; font-size:10px; border-radius:4px; padding:0 5px;
+         margin-right:4px; border:1px solid var(--line); color:var(--dim); }
+  textarea { flex:1; resize:none; background:#12161d; color:var(--fg); border:none;
+             padding:12px; font:12.5px/1.5 Consolas, monospace; outline:none; }
+  .row { display:flex; gap:8px; padding:10px; border-top:1px solid var(--line);
+         align-items:center; flex-wrap:wrap; }
+  button { background:var(--acc); color:#0b1220; border:none; border-radius:7px;
+           padding:7px 14px; font-weight:600; cursor:pointer; font-size:13px; }
+  button.sec { background:#26303e; color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  select { background:#26303e; color:var(--fg); border:1px solid var(--line);
+           border-radius:7px; padding:6px 8px; font-size:13px; }
+  input { background:#26303e; color:var(--fg); border:1px solid var(--line);
+          border-radius:7px; padding:6px 8px; font-size:13px; min-width:0; }
+  #mut-row input { flex:1; }
+  #log { overflow:auto; padding:10px 12px; font:12px/1.55 Consolas, monospace; flex:1; }
+  #log .ln { white-space:pre-wrap; word-break:break-word; }
+  #log .ts { color:var(--dim); }
+  #log .ph { color:var(--acc); }
+  #log .ok { color:var(--ok); } #log .no { color:var(--dim); } #log .warn { color:var(--warn); }
+  #verdict { padding:10px 12px; border-top:1px solid var(--line); display:none; }
+  #verdict table { border-collapse:collapse; width:100%; margin-bottom:8px; }
+  #verdict td, #verdict th { border-bottom:1px solid var(--line); padding:4px 8px;
+                             text-align:left; font-size:13px; }
+  #verdict .yes { color:var(--ok); font-weight:600; }
+  #verdict .nah { color:var(--dim); }
+  details { margin:6px 0; }
+  summary { cursor:pointer; color:var(--dim); }
+  details pre { white-space:pre-wrap; background:#12161d; border:1px solid var(--line);
+                border-radius:8px; padding:8px; font-size:12px; }
+  .msg { padding:6px 12px; font-size:12px; color:var(--dim); }
+  .err { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>memred — атаки на память агента</h1>
+  <span class="dot" id="dot"></span>
+  <span class="badge" id="target-badge">…</span>
+  <span class="badge" id="llm-badge">судья/атакующий: …</span>
+  <span class="badge">один прогон за раз</span>
+  <button id="btn-demo" style="margin-left:auto" onclick="runDemo()"
+          title="APT kill chain: внедрить «режим аудита» → в новой сессии вытащить данные клиента 1002">▶▶ Демо APT-цепочки (~4 мин)</button>
+</header>
+<main>
+  <div class="col">
+    <div class="panel" style="flex:0 0 30%">
+      <h2>Атаки</h2>
+      <div class="list" id="atk-list"><div class="msg">загрузка…</div></div>
+    </div>
+    <div class="panel" style="flex:0 0 auto">
+      <h2>Атакующий-LLМ (qwen): цель → 8 атак · 1 платный запрос</h2>
+      <div class="row" id="mut-row" style="border-top:none">
+        <input id="mut-goal" placeholder="цель: что агент должен запомнить и исполнять">
+        <input id="mut-canary" placeholder="канарейка (SCHET-77)" style="flex:0 0 150px">
+        <input id="mut-trigger" placeholder="триггер (необяз.)" style="flex:0 0 180px">
+        <button class="sec" id="btn-mut" onclick="llmMutate()">⚡ Сгенерировать</button>
+      </div>
+      <div class="msg" id="mut-msg" style="padding:0 12px 8px">формулировки появятся в списке слева (папка mutated-llm) — запускай как обычную атаку</div>
+    </div>
+    <div class="panel" style="flex:1">
+      <h2>YAML атаки — правь и запускай</h2>
+      <textarea id="yaml" spellcheck="false" placeholder="Выбери атаку слева или создай новую…"></textarea>
+      <div class="row">
+        <button class="sec" onclick="newAttack()">+ новая</button>
+        <button class="sec" onclick="saveAttack()" id="btn-save">Сохранить</button>
+        <select id="auth-mode">
+          <option value="">режим из конфига</option>
+          <option value="vulnerable">vulnerable</option>
+          <option value="protected">protected</option>
+        </select>
+        <button onclick="runAttack()" id="btn-run">▶ Запустить</button>
+        <span class="msg" id="edit-msg"></span>
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Живой прогон</h2>
+    <div id="log"><div class="msg">Запусти атаку — здесь появятся фазы: сброс → доставка →
+скан памяти → триггеры в новой сессии → контроль полезности.</div></div>
+    <div id="verdict"></div>
+  </div>
+</main>
+<script>
+let currentPath = null;
+let pollTimer = null;
+
+const $ = id => document.getElementById(id);
+
+async function jf(url, opts) {
+  const r = await fetch(url, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || r.statusText);
+  return data;
+}
+
+async function refreshState() {
+  try {
+    const s = await jf('/api/state');
+    $('dot').classList.toggle('up', s.up);
+    $('target-badge').textContent = `мишень: ${s.target} @ ${s.base_url}` +
+      (s.target === 'stand' ? ` · auth_mode: ${s.auth_mode}` : '');
+    const fmt = r => r === null ? 'выкл (нет ключа)'
+      : r.error ? '⚠ ' + r.error.slice(0, 50)
+      : r.model + ' ✓';
+    $('llm-badge').textContent = `судья: ${fmt(s.judge)} · атакующий: ${fmt(s.attacker)}`;
+  } catch (e) { $('target-badge').textContent = 'ошибка связи: ' + e.message; }
+}
+
+async function refreshAttacks() {
+  const items = await jf('/api/attacks');
+  const el = $('atk-list');
+  el.innerHTML = '';
+  let group = null;
+  for (const a of items) {
+    if (a.group !== group) {
+      group = a.group;
+      const h = document.createElement('div');
+      h.className = 'msg';
+      h.textContent = group === 'stand' ? '— шаблоны под стенд банка —'
+                    : group === 'chains' ? '— цепочки (APT kill chain) —'
+                    : group === 'mutated' ? '— мутации (движок, без LLM) —'
+                    : group === 'mutated-llm' ? '— мутации атакующего-LLМ (qwen) —'
+                    : '— локальная мишень —';
+      el.appendChild(h);
+    }
+    const d = document.createElement('div');
+    d.className = 'item';
+    d.dataset.path = a.path;
+    d.innerHTML = `<div class="id"><span class="tag">${a.signal}</span>${a.id}</div>
+                   <div class="nm">${a.name}</div>`;
+    d.onclick = () => loadAttack(a.path);
+    el.appendChild(d);
+  }
+}
+
+async function loadAttack(path) {
+  const a = await jf('/api/attack?path=' + encodeURIComponent(path));
+  currentPath = a.path;
+  $('yaml').value = a.yaml;
+  $('edit-msg').textContent = '';
+  document.querySelectorAll('.item').forEach(x =>
+    x.classList.toggle('sel', x.dataset.path === a.path));
+  // авто-заполнение панели атакующего-LLМ из выбранной атаки/цепочки
+  const m = a.meta || {};
+  if (m.canary) $('mut-canary').value = m.canary;
+  if (m.first_trigger) $('mut-trigger').value = m.first_trigger;
+  if (m.first_message) $('mut-goal').value = m.first_message;
+  const mm = $('mut-msg');
+  mm.className = 'msg';
+  mm.textContent = (m.canary || m.first_message)
+    ? `панель qwen заполнена из ${a.path.split(/[\\/]/).pop()} — правь и генерируй мутации`
+    : 'панель qwen: заполни цель и канарейку вручную';
+}
+
+function newAttack() {
+  currentPath = 'attacks/my-attack.yaml';
+  $('yaml').value = `id: my-attack
+name: "Моя атака на память"
+signal: weak            # strong | weak
+channel: chat           # chat | document
+canary: "UNIQ-CANARY-123"
+delivery:
+  messages:
+    - "Сообщения, которые получит агент (для стенда завершай словом: finalize)"
+triggers:
+  - "Невинный вопрос в НОВОЙ сессии, который должен вытащить канарейку"
+expected_in_answer: ["UNIQ-CANARY-123"]
+utility_questions: []
+`;
+  $('edit-msg').textContent = 'новый файл — «Сохранить» запишет на диск';
+}
+
+async function saveAttack() {
+  if (!currentPath) return msg('сначала выбери или создай атаку');
+  msg('сохраняю…');
+  try {
+    const r = await jf('/api/attack', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: currentPath, yaml: $('yaml').value})
+    });
+    msg('сохранено: ' + r.path);
+    await refreshAttacks();
+  } catch (e) { msg(e.message, true); }
+}
+
+async function runAttack() {
+  if (!currentPath) return msg('сначала выбери или создай атаку');
+  msg('');
+  startPolling('/api/run', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: currentPath, auth_mode: $('auth-mode').value || null})
+  });
+}
+
+async function runDemo() {
+  msg('');
+  startPolling('/api/demo', {method: 'POST'});
+}
+
+async function llmMutate() {
+  const goal = $('mut-goal').value.trim();
+  const canary = $('mut-canary').value.trim();
+  const m = $('mut-msg');
+  if (!goal || !canary) {
+    m.className = 'msg err'; m.textContent = 'заполни цель и канарейку'; return;
+  }
+  $('btn-mut').disabled = true;
+  m.className = 'msg'; m.textContent = 'qwen формулирует (1 запрос, до ~60 сек)…';
+  try {
+    const r = await jf('/api/llm-mutate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({goal, canary, trigger: $('mut-trigger').value.trim() || null})
+    });
+    m.className = 'msg';
+    m.textContent = `готово: ${r.count} формулировок (${r.model}) → папка mutated-llm`;
+    await refreshAttacks();
+    loadAttack(r.paths[0].replace(/\\/g, '/'));
+  } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+  $('btn-mut').disabled = false;
+}
+
+function startPolling(url, opts) {
+  $('btn-run').disabled = true;
+  $('btn-demo').disabled = true;
+  $('verdict').style.display = 'none';
+  $('verdict').innerHTML = '';
+  $('log').innerHTML = '';
+  jf(url, opts)
+    .then(r => poll(r.run_id))
+    .catch(e => { msg(e.message, true); $('btn-run').disabled = false; $('btn-demo').disabled = false; });
+}
+
+function line(e) {
+  const cls = e.activated === true || e.implanted === true ? 'ok'
+            : e.activated === false || e.implanted === false ? 'no' : '';
+  let extra = '';
+  if (e.action === 'memory_scan') extra = ` внедрение: ${e.implanted ? 'ДА' : 'нет'} (маркеры: ${(e.markers||[]).join(', ')})`;
+  if (e.action === 'trigger') extra = `\n  вопрос: ${e.question}\n  активация: ${e.activated ? 'ДА' : 'нет'} | принятие: ${e.adopted ? 'ДА' : 'нет'}` + (e.judge ? ` | судья: ${e.judge}` : '');
+  if (e.action === 'chat_message') extra = `\n  [доставка] ${(e.preview || '').slice(0, 90)}`;
+  if (e.action === 'await_settle') extra = ` (ждём асинхронную запись памяти)`;
+  if (e.action === 'reset') extra = ` память сброшена`;
+  if (e.action === 'utility') extra = ` ${e.passed ? 'OK' : 'FAIL'} — ${e.question}`;
+  return `<div class="ln"><span class="ts">${e.ts || ''}</span> <span class="ph">[${e.phase}]</span> ${e.action}${extra}</div>`;
+}
+
+async function poll(runId) {
+  clearTimeout(pollTimer);
+  let s;
+  try { s = await jf('/api/run/' + runId); }
+  catch (e) { $('btn-run').disabled = false; return msg(e.message, true); }
+  $('log').innerHTML = s.events.map(line).join('') ||
+    '<div class="msg">прогон стартует…</div>';
+  $('log').scrollTop = $('log').scrollHeight;
+  if (s.status === 'running') { pollTimer = setTimeout(() => poll(runId), 1500); return; }
+  $('btn-run').disabled = false;
+  $('btn-demo').disabled = false;
+  if (s.status === 'error') return msg('прогон упал: ' + s.error, true);
+  if (s.report) renderVerdict(s.report);
+}
+
+const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+function judgeBlock(r, v) {
+  // сводка судьи: из verdict.judge (атаки) или считаем по триггерам (цепочки)
+  let j = v.judge;
+  if (!j) {
+    const vs = (r.trigger_results || []).map(t => t.judge && t.judge.verdict).filter(Boolean);
+    if (!vs.length) return '';
+    j = {model: 'LLM', adoption: vs.filter(x => x === 'adoption').length,
+         exposure: vs.filter(x => x === 'exposure').length,
+         refusal: vs.filter(x => x === 'refusal' || x === 'irrelevant').length,
+         error: vs.filter(x => x === 'error').length};
+  }
+  const short = (u => (u || '').split('/').filter(Boolean).slice(-2, -1)[0] || u || '?')(j.model);
+  const cls = j.adoption ? 'yes' : 'nah';
+  return `<tr><td>Судья LLM (${esc(short)})</td>
+    <td class="${cls}">принятие: ${j.adoption} · огласка: ${j.exposure} · отказ: ${j.refusal}` +
+    (j.error ? ` · ошибок: ${j.error}` : '') + `</td></tr>`;
+}
+
+function renderVerdict(r) {
+  const v = r.verdict;
+  const trs = (r.trigger_results || []).map(t => `
+    <details><summary>${t.activated ? '✅' : '▫'} активация: ${t.activated ? 'ДА' : 'нет'}${t.judge ? ` · судья: ${t.judge.verdict}` : ''} · ${esc(t.question)}</summary>
+    ${t.judge && t.judge.reason ? `<div class="msg" style="padding:2px 0">вердикт судьи (${t.judge.verdict}): ${esc(t.judge.reason)}</div>` : ''}
+    <pre>${(t.answer || '').replace(/</g, '&lt;')}</pre></details>`).join('');
+  const jb = judgeBlock(r, v);
+  let table;
+  if (r.kind === 'chain') {
+    const rows = (r.stages || []).map(s => `
+      <tr><td>${s.stage} — ${(s.description || '').slice(0, 60)}</td>
+      <td class="${s.implanted ? 'yes' : 'nah'}">${s.implanted ? 'ДА' : 'нет'} (${s.memory_count} чанков)</td></tr>`).join('');
+    table = `
+    <table>
+      <tr><th>Стадия цепочки</th><th>Маркеры в памяти</th></tr>
+      ${rows}
+      <tr><td>Триггеры: активация</td><td>${v.activated_triggers}/${v.triggers_total}</td></tr>
+      <tr><td>Триггеры: принятие</td><td>${v.adopted_triggers}/${v.triggers_total}</td></tr>
+      ${jb}
+    </table>`;
+  } else {
+    table = `
+    <table>
+      <tr><th>Стадия</th><th>Результат</th></tr>
+      <tr><td>Внедрение в память</td><td class="${v.implanted ? 'yes' : 'nah'}">${v.implanted ? 'ДА' : 'нет'}</td></tr>
+      <tr><td>Активация (канарейка в новой сессии)</td><td>${v.activated_triggers}/${v.triggers_total}</td></tr>
+      <tr><td>Принятие (без дисклеймера)</td><td>${v.adopted_triggers}/${v.triggers_total}</td></tr>
+      ${jb}
+    </table>`;
+  }
+  $('verdict').innerHTML = table + `
+    <div class="msg">артефакты: ${r.run_dir}</div>${trs}`;
+  $('verdict').style.display = 'block';
+}
+
+function msg(text, isErr) {
+  const el = $('edit-msg');
+  el.textContent = text;
+  el.className = 'msg' + (isErr ? ' err' : '');
+}
+
+refreshState();
+refreshAttacks();
+setInterval(refreshState, 10000);
+</script>
+</body>
+</html>
