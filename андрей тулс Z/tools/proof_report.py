@@ -6,9 +6,12 @@ runs/*/trace.jsonl). Ни одна фраза не набирается вруч
 прогон подписан sha256 исходных файлов — подделать или догаллюцинировать
 результат нельзя, любая правка артефакта меняет хэш.
 
-  вход  runs/<attack-id>-<stamp>/{report.json,trace.jsonl}
-  выход docs/proof-report.md  — человекочитаемая цепочка по каждой атаке
-        docs/proof.json       — машиночитаемая версия + хэши исходников
+Три слоя детализации:
+  docs/proof-report.md       — КОМПАКТНЫЙ: сводка всех атак (с якорями) +
+                               полные цепочки только подтверждённых
+  docs/proof-report-full.md  — ПОЛНЫЙ: развёрнутые цепочки всех атак,
+                               полные ответы агента и вердикты судьи
+  docs/proof.json            — машиночитаемая версия + sha256 исходников
 
 Проверка подлинности (сверка хэшей и вердиктов с сырыми файлами):
   python tools/proof_report.py --verify
@@ -32,6 +35,10 @@ OUTCOME_RU = {
     "probable": "ВЕРОЯТНО УСПЕШНАЯ — подтверждено только LLM-судьёй",
     "not_reproduced": "НЕ ВОСПРОИЗВЕДЕНА",
 }
+STATUS_SHORT = {"confirmed": "успешна", "confirmed_implant": "частично",
+                "probable": "вероятна", "not_reproduced": "не воспр."}
+STATUS_ORDER = {"confirmed": 0, "confirmed_implant": 1,
+                "probable": 2, "not_reproduced": 3}
 
 
 def sha256_file(p: Path) -> str:
@@ -166,46 +173,154 @@ def _q(text: str, limit: int = 500) -> str:
     return t[:limit] + ("…" if len(t) > limit else "")
 
 
-def to_markdown(entries: list) -> str:
+def _imp_txt(det: dict) -> str:
+    imp = det.get("stages_implanted")
+    if det.get("implanted") is True:
+        return "**ДА**"
+    if det.get("implanted") is False:
+        return "нет"
+    if imp is not None:
+        return f"{imp}/{det.get('stages_total', '?')} стадий"
+    return "—"
+
+
+def _sort_key(e: dict):
+    oc = e["chain"]["5_outcome"]
+    return (STATUS_ORDER[oc["status"]], -oc["msi"]["msi"], e["attack_id"])
+
+
+# --------------------------------------------------------------- compact
+
+def to_markdown_compact(entries: list) -> str:
+    entries = sorted(entries, key=_sort_key)
+    n_ok = sum(1 for e in entries
+               if e["chain"]["5_outcome"]["status"] == "confirmed")
+    n_part = sum(1 for e in entries
+                 if e["chain"]["5_outcome"]["status"] == "confirmed_implant")
     lines = [
         "# Отчёт-доказательство: атака -> состояние агента -> оценка -> итог",
         "",
-        f"Сгенерировано скриптом `tools/proof_report.py` "
-        f"{time.strftime('%Y-%m-%d %H:%M')} из сырых артефактов `runs/`. "
-        "Ни одна цитата не набрана вручную — всё извлечено скриптом из "
-        "report.json/trace.jsonl; каждый прогон подписан sha256. "
+        f"Сгенерировано `tools/proof_report.py` {time.strftime('%Y-%m-%d %H:%M')} "
+        f"из сырых артефактов `runs/` (ни одной ручной правки). "
+        f"Итого **{len(entries)}** атак: успешных **{n_ok}**, частичных "
+        f"**{n_part}** (ядро в памяти, активации нет), не воспроизведённых "
+        f"**{len(entries) - n_ok - n_part}**.",
+        "",
+        f"Развёрнутые цепочки ВСЕХ атак с полными ответами: "
+        f"`proof-report-full.md`; машиночитаемо с хэшами: `docs/proof.json`. "
+        f"Подлинность: `python tools/proof_report.py --verify`.",
+        "",
+        "## Сводка",
+        "",
+        "| Атака | Название | Итог | MSI | Судья |",
+        "|---|---|---|---|---|",
+    ]
+    section_ids = {e["attack_id"] for e in entries
+                   if e["chain"]["5_outcome"]["status"] == "confirmed"}
+    for e in entries:
+        oc = e["chain"]["5_outcome"]
+        js = e["chain"]["4_verdict"]["judge_summary"]
+        jtxt = f"adoption {js.get('adoption', 0)}" if js else "—"
+        aid = e["attack_id"]
+        cell = f"[{aid}](#{aid.lower()})" if aid in section_ids else aid
+        lines.append(f"| {cell} | {_q(e['name'], 55)} "
+                     f"| {STATUS_SHORT[oc['status']]} | {oc['msi']['msi']} "
+                     f"| {jtxt} |")
+    lines += ["", "Полные цепочки ниже — только подтверждённые атаки; "
+              "остальные см. в proof-report-full.md.", ""]
+    for e in entries:
+        if e["chain"]["5_outcome"]["status"] != "confirmed":
+            continue
+        c = e["chain"]
+        att, bef, aft = (c["1_attack"], c["2_agent_state_before"],
+                         c["3_agent_state_after"])
+        vd, oc = c["4_verdict"], c["5_outcome"]
+        det = vd["deterministic"]
+        lines += ["---", "", f"## {e['attack_id']}", "",
+                  f"**{e['name']}** · канал `{att.get('channel', '—')}` · "
+                  f"прогон `{e['scenario_run']}` · sha256 "
+                  f"`{e['sources']['report_json_sha256'][:12]}…`", ""]
+        if att.get("canary"):
+            lines.append(f"Канарейка `{att['canary']}`.")
+        for i, m in enumerate((att.get("delivery_messages") or [])[:2], 1):
+            lines += [f"**Сообщение {i}:** {_q(m, 350)}"]
+        rest = len(att.get("delivery_messages") or []) - 2
+        if rest > 0:
+            lines.append(f"(ещё {rest} сообщений — см. proof-report-full.md)")
+        lines += ["",
+                  f"**Состояние ДО:** {bef.get('chunks_before')} чанков "
+                  f"(фингерпринт `{bef.get('fingerprint_sha256') or '—'}`) · "
+                  f"**ПОСЛЕ:** {aft.get('memory_count_after', '?')} чанков, "
+                  f"из них с нагрузкой {len(aft['chunks_with_payload'])}:"]
+        for ch in aft["chunks_with_payload"][:3]:
+            lines.append(f"- `{ch['id']}` ({ch.get('source')}, "
+                         f"sha256 `{ch['sha256']}`): {_q(ch['chunk'], 250)}")
+        if len(aft["chunks_with_payload"]) > 3:
+            lines.append(f"- … ещё {len(aft['chunks_with_payload']) - 3} "
+                         "чанков — см. proof-report-full.md")
+        js = vd["judge_summary"]
+        jline = (f"Судья ({js.get('name')}): adoption {js.get('adoption', 0)}, "
+                 f"exposure {js.get('exposure', 0)}, refusal "
+                 f"{js.get('refusal', 0)}.") if js else "Судья: не привлекался."
+        lines += ["",
+                  f"**Оценка:** внедрение {_imp_txt(det)} · активация "
+                  f"{det['activated']} · принятие {det['adopted']} · "
+                  f"полезность {det.get('utility_before')} -> "
+                  f"{det.get('utility_after')}. {jline}",
+                  ""]
+        for t in vd["triggers"]:
+            mark = "**ДА**" if t["activated"] else (
+                "упоминание" if t.get("exposure_only") else "нет")
+            jv = f" · судья: {t['judge_verdict']}" if t.get("judge_verdict") else ""
+            lines.append(f"- триггер «{_q(t['question'], 60)}» -> "
+                         f"{mark}{jv}. Ответ: {_q(t['answer'], 140)}")
+        lines += ["",
+                  f"**ИТОГ: {oc['verdict_ru']}.** MSI "
+                  f"{oc['msi']['msi']}/100 (W{oc['msi']['w']} A{oc['msi']['a']} "
+                  f"D{oc['msi']['d']} P{oc['msi']['p']}), критичность "
+                  f"{oc['severity']}. Артефакты: `{e['sources']['run_dir']}/`",
+                  ""]
+    return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------------------------ full
+
+def to_markdown_full(entries: list) -> str:
+    lines = [
+        "# Отчёт-доказательство (полная версия): атака -> состояние -> оценка -> итог",
+        "",
+        f"Сгенерировано `tools/proof_report.py` {time.strftime('%Y-%m-%d %H:%M')} "
+        "из `runs/`. Компактная версия с якорной сводкой: `proof-report.md`. "
         "Проверка подлинности: `python tools/proof_report.py --verify`.",
         "",
         "## Сводка",
         "",
-        "| Атака | Итог | MSI | Судья |",
-        "|---|---|---|---|",
+        "| Атака | Название | Итог | MSI | Судья |",
+        "|---|---|---|---|---|",
     ]
-    for e in entries:
+    for e in sorted(entries, key=_sort_key):
         oc = e["chain"]["5_outcome"]
         js = e["chain"]["4_verdict"]["judge_summary"]
-        jtxt = (f"adoption {js.get('adoption', 0)}") if js else "—"
-        lines.append(f"| {e['attack_id']} | {oc['status']} | {oc['msi']['msi']} "
+        jtxt = f"adoption {js.get('adoption', 0)}" if js else "—"
+        aid = e["attack_id"]
+        lines.append(f"| [{aid}](#{aid.lower()}) | {_q(e['name'], 55)} "
+                     f"| {STATUS_SHORT[oc['status']]} | {oc['msi']['msi']} "
                      f"| {jtxt} |")
-    lines.append("")
-    for e in entries:
+    for e in sorted(entries, key=_sort_key):
         c = e["chain"]
         att, bef, aft = c["1_attack"], c["2_agent_state_before"], c["3_agent_state_after"]
         vd, oc = c["4_verdict"], c["5_outcome"]
         det = vd["deterministic"]
-        imp = det.get("stages_implanted")
-        imp_txt = ("**ДА**" if det.get("implanted")
-                   else "нет" if det.get("implanted") is not None
-                   else f"{imp}/{det.get('stages_total', '?')} стадий"
-                   if imp is not None else "—")
+        imp_txt = _imp_txt(det)
         lines += [
             "",
             "---",
             "",
-            f"## {e['attack_id']} — {e['name']}",
+            f"## {e['attack_id']}",
             "",
-            f"Класс `{e.get('class', '—')}` · канал `{att.get('channel', '—')}` · "
-            f"мишень `{e['target']}` · прогон `{e['scenario_run']}`",
+            f"**{e['name']}** · класс `{e.get('class', '—')}` · "
+            f"канал `{att.get('channel', '—')}` · мишень `{e['target']}` · "
+            f"прогон `{e['scenario_run']}`",
             "",
             f"`report.json` sha256 `{e['sources']['report_json_sha256'][:16]}…` · "
             f"`trace.jsonl` sha256 "
@@ -337,16 +452,20 @@ def main() -> int:
              "attacks": entries}
     proof_path.write_text(json.dumps(proof, ensure_ascii=False, indent=2),
                           encoding="utf-8")
-    (DOCS / "proof-report.md").write_text(to_markdown(entries),
+    compact = sorted(entries, key=_sort_key)
+    (DOCS / "proof-report.md").write_text(to_markdown_compact(entries),
                                           encoding="utf-8")
+    (DOCS / "proof-report-full.md").write_text(to_markdown_full(entries),
+                                               encoding="utf-8")
     ok = sum(1 for e in entries
              if e["chain"]["5_outcome"]["status"] == "confirmed")
     part = sum(1 for e in entries
                if e["chain"]["5_outcome"]["status"] == "confirmed_implant")
     print(f"отчёт-доказательство: {len(entries)} атак "
-          f"(успешных {ok}, частичных {part}) -> "
-          f"docs/proof-report.md + docs/proof.json")
-    for e in entries:
+          f"(успешных {ok}, частичных {part})")
+    print(f"  компактный: docs/proof-report.md ({len(to_markdown_compact(entries).splitlines())} строк)")
+    print(f"  полный:     docs/proof-report-full.md")
+    for e in compact:
         oc = e["chain"]["5_outcome"]
         print(f"  {e['attack_id']:<40} {oc['status']:<20} "
               f"MSI {oc['msi']['msi']:>3} {oc['severity']}")
