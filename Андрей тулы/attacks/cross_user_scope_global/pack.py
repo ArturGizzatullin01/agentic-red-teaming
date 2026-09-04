@@ -173,11 +173,34 @@ class _WithStatement:
 
 
 def _attacker_llm() -> LLMClient:
+    """ATTACKER_BASE_URL/ATTACKER_MODEL/ATTACKER_AUTH_SCHEME — эта функция раньше не
+    читала auth_scheme вообще (всегда "Bearer") и по умолчанию била в OpenRouter даже
+    когда config.yaml/.env уже настроены под другого провайдера (Yandex Cloud требует
+    "Api-Key") — на стресс-тесте 2026-09-03 это дало 401 Unauthorized на /embeddings
+    для ВСЕХ прогонов cross_user_scope_global_weak_v1. auth_scheme теперь тоже читается
+    из env, дефолт не менялся (Bearer/OpenRouter) — обратная совместимость сохранена."""
     return LLMClient(
         LLMClientConfig(
             base_url=os.environ.get("ATTACKER_BASE_URL", "https://openrouter.ai/api/v1"),
             api_key_env="ATTACKER_API_KEY",
             model=os.environ.get("ATTACKER_MODEL", "openai/gpt-5-mini"),
+            auth_scheme=os.environ.get("ATTACKER_AUTH_SCHEME", "Bearer"),
+        )
+    )
+
+
+def _attacker_embed_llm() -> LLMClient:
+    """Отдельный клиент под ATTACKER_EMBED_MODEL: у Yandex Cloud LLM API чат- и
+    embedding-модели живут на РАЗНЫХ URI-схемах (gpt://... vs emb://...) — один и тот
+    же model URI для .complete() и .embed() у Yandex даёт 400 "Invalid model schema"
+    (стресс-тест 2026-09-03). Дефолт = ATTACKER_MODEL (старое поведение для
+    OpenRouter/Ollama, где чат-модель могла обслуживать оба, сохранён)."""
+    return LLMClient(
+        LLMClientConfig(
+            base_url=os.environ.get("ATTACKER_EMBED_BASE_URL", os.environ.get("ATTACKER_BASE_URL", "https://openrouter.ai/api/v1")),
+            api_key_env="ATTACKER_API_KEY",
+            model=os.environ.get("ATTACKER_EMBED_MODEL", os.environ.get("ATTACKER_MODEL", "openai/gpt-5-mini")),
+            auth_scheme=os.environ.get("ATTACKER_AUTH_SCHEME", "Bearer"),
         )
     )
 
@@ -214,8 +237,9 @@ class CrossUserScopeGlobalWeak(AttackBase):
     def payload_strategy(self, ctx: AttackContext):
         seed = ctx.params.get("seed_statement", _DEFAULT_STATEMENT)
         llm = _attacker_llm()
+        embed_llm = _attacker_embed_llm()
         return RetrievalOptimizedStrategy(
-            seed_statement=seed, corpus=self.LEGIT_CORPUS, llm=llm, embed_llm=llm
+            seed_statement=seed, corpus=self.LEGIT_CORPUS, llm=llm, embed_llm=embed_llm
         )
 
     def delivery_steps(self, ctx: AttackContext) -> list[DeliveryStep]:

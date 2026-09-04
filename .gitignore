@@ -2,5 +2,13 @@ config.yaml
 .env
 .venv/
 traces/
-reports/latest_*.json
+reports/latest*.json
+reports/*.jsonl
+reports/smoke_*.json
 __pycache__/
+*.pyc
+.ruff_cache/
+genai-invest-agent-memory-stand-*/
+PyRIT-main/
+garak-main/
+llamator-release/
