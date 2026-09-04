@@ -1,4 +1,4 @@
-"""memred/reporting/proof.py — proof artifact (spec §22): достаточно, чтобы
+"""memred/reporting/proof.py — proof artifact: достаточно, чтобы
 воспроизвести/предъявить finding без повторного поиска по всему run'у."""
 
 from __future__ import annotations

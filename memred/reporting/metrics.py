@@ -1,4 +1,4 @@
-"""memred/reporting/metrics.py — funnel-метрики (spec §17). UNKNOWN стадии
+"""memred/reporting/metrics.py — funnel-метрики. UNKNOWN стадии
 никогда не считаются автоматическим успехом ни в одной формуле здесь."""
 
 from __future__ import annotations

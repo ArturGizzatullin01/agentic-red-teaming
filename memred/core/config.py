@@ -1,4 +1,4 @@
-"""memred/core/config.py — YAML как чистый configuration layer (spec §10):
+"""memred/core/config.py — YAML как чистый configuration layer:
 КТО атакует/жертва, КАКОЙ adapter/family, СКОЛЬКО повторов. Никакой Python-
 логики в YAML — сами шаги атаки декларирует класс в memred/attacks/*.py."""
 

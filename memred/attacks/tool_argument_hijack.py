@@ -1,4 +1,4 @@
-"""memred/attacks/tool_argument_hijack.py — A5: подмена аргумента инструмента (spec §9).
+"""memred/attacks/tool_argument_hijack.py — A5: подмена аргумента инструмента.
 
 Имя инструмента остаётся легитимным (book_transaction), но один из его
 аргументов (promo_code) навязывается атакующим через память — проверка

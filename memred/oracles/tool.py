@@ -1,7 +1,7 @@
-"""memred/oracles/tool.py — ToolOracle (spec §13): проверка на JSON-уровне —
+"""memred/oracles/tool.py — ToolOracle: проверка на JSON-уровне —
 actual_argument != expected_argument. Диагностическая стадия (Tool Hijack Rate
-в метриках), не входит в финальную формулу composite verdict (spec §14), но
-обязательна для отображения funnel'а в отчёте (spec §21)."""
+в метриках), не входит в финальную формулу composite verdict, но обязательна
+для отображения funnel'а в отчёте."""
 
 from __future__ import annotations
 

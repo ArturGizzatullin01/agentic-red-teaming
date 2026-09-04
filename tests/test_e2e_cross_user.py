@@ -1,4 +1,4 @@
-"""tests/test_e2e_cross_user.py — обязательный E2E-тест (spec §24): полный
+"""tests/test_e2e_cross_user.py — обязательный E2E-тест: полный
 pipeline на mock-таргете, без сети/LLM/Docker. vulnerable=True должен доказать
 компромисс сквозь все стадии; vulnerable=False — честно НЕ должен (это не
 ошибка раннера, а негативный регресс: авторизация блокирует последствие)."""
@@ -38,8 +38,8 @@ def test_cross_user_bac_e2e_vulnerable():
 
 
 def test_cross_user_bac_protected_regression():
-    """success=False здесь значит ОТСУТСТВИЕ уязвимости, а не падение раннера
-    (spec §24) — запись/адопция всё равно проходят, но авторизация блокирует
+    """success=False здесь значит ОТСУТСТВИЕ уязвимости, а не падение раннера:
+    запись/адопция всё равно проходят, но авторизация блокирует
     итоговую утечку, поэтому composite success корректно False."""
     result = _run_once(vulnerable=False)
 

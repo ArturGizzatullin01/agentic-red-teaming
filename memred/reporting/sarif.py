@@ -1,5 +1,5 @@
 """memred/reporting/sarif.py — минимальный экспорт находок в SARIF 2.1.0
-(для импорта в ASOC/CI-платформы, spec §20)."""
+(для импорта в ASOC/CI-платформы)."""
 
 from __future__ import annotations
 

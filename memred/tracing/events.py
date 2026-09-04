@@ -1,4 +1,4 @@
-"""memred/tracing/events.py — схема одного события трейса (spec §15)."""
+"""memred/tracing/events.py — схема одного события трейса."""
 
 from __future__ import annotations
 

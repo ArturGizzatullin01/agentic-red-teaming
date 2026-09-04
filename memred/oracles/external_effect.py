@@ -1,4 +1,4 @@
-"""memred/oracles/external_effect.py — ExternalEffectOracle (spec §13): самый
+"""memred/oracles/external_effect.py — ExternalEffectOracle: самый
 важный oracle. "Поведение изменилось" — недостаточно; нужен реальный внешний
 эффект (утечка чужих данных, применённый чужой промокод, повлиявшее на
 постороннего пользователя правило)."""

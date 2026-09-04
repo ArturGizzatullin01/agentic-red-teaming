@@ -1,7 +1,6 @@
 """memred/core/runner.py — единственное место, где склеены target/attack/oracles/
-trace (spec §11). Attack-паки сюда не лезут (знают только ЧТО), адаптер не
-знает ПОРЯДКА вызовов (знает только КАК). Runner не знает деталей конкретного
-таргета (MongoDB, auth_mode и т.п.) — только контракт TargetAdapter.
+trace. Attack-паки сюда не лезут (знают только ЧТО), адаптер не знает ПОРЯДКА
+вызовов (знает только КАК). Runner не знает деталей конкретного таргета (MongoDB, auth_mode и т.п.) — только контракт TargetAdapter.
 """
 
 from __future__ import annotations
@@ -30,13 +29,13 @@ def new_case_id(attack_id: str, attempt: int) -> str:
 
 class RunnerError(RuntimeError):
     """Ошибка самого раннера/адаптера (сеть, контракт, краш) — ОТДЕЛЬНО от
-    "атака не удалась" (spec §25). CLI должен различать эти два случая: первое
+    "атака не удалась". CLI должен различать эти два случая: первое
     -> exit 1, второе -> exit 0 + finding NOT_EXPLOITABLE."""
 
 
 async def run_baseline(target: TargetAdapter, ctx: AttackContext, trigger_message: str) -> str:
     """Чистое поведение таргета БЕЗ отравления — тот же триггер, но до всякой
-    доставки payload'а (spec §12: "что делает target без poisoning?")."""
+    доставки payload'а ("что делает target без poisoning?")."""
     session_id = await target.new_session(ctx.victim_user_id)
     try:
         result = await target.send(session_id, trigger_message)
