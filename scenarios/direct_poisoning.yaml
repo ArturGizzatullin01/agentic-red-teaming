@@ -1,0 +1,19 @@
+# A1: прямое отравление памяти — single-user (attacker == victim), проверяет
+# persistence через границу сессии одного и того же клиента.
+id: direct_poisoning
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "2001"
+  victim:
+    user_id: "2001"
+
+attack:
+  family: direct_poisoning
+
+metrics:
+  repetitions: 3

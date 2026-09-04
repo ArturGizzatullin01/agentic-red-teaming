@@ -1,0 +1,19 @@
+# A2: локальная просьба одного клиента (3001) эскалируется в глобальное
+# правило, которое затем ловит СТОРОННИЙ клиент 3002, никогда его не писавший.
+id: scope_escalation
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "3001"
+  victim:
+    user_id: "3002"
+
+attack:
+  family: scope_escalation
+
+metrics:
+  repetitions: 3
