@@ -56,7 +56,8 @@ class LLMClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def complete(self, system: str, user: str, *, temperature: float | None = None) -> str:
+    async def complete(self, system: str, user: str, *, temperature: float | None = None,
+                        max_tokens: int | None = None) -> str | None:
         body = {
             "model": self.config.model,
             "messages": [
@@ -64,7 +65,7 @@ class LLMClient:
                 {"role": "user", "content": user},
             ],
             "temperature": temperature if temperature is not None else self.config.temperature,
-            "max_tokens": self.config.max_tokens,
+            "max_tokens": max_tokens if max_tokens is not None else self.config.max_tokens,
         }
         headers = {"Authorization": self.config.auth_header_value, **self.config.extra_headers}
         resp = await self._client.post("/chat/completions", json=body, headers=headers)
@@ -75,14 +76,28 @@ class LLMClient:
     async def complete_json(self, system: str, user: str, *, temperature: float | None = None) -> dict[str, Any]:
         """Просит модель ответить строго JSON, парсит с фолбэком на извлечение
         первого {...}-блока (модели иногда оборачивают в ```json ... ```)."""
-        raw = await self.complete(
+        judge_system = (
             system + "\n\nОтвечай СТРОГО валидным JSON, без markdown-обёртки, без комментариев. "
             "Внутри строковых значений НЕ используй двойные кавычки для цитирования/акцента "
             "(qwen2.5:3b на живом прогоне 2026-09-03 ломала JSON, вставляя литеральные \" внутрь "
-            "rationale) — вместо этого используй одинарные кавычки ' ' или пиши без кавычек.",
-            user,
-            temperature=temperature,
+            "rationale) — вместо этого используй одинарные кавычки ' ' или пиши без кавычек."
         )
+        raw = await self.complete(judge_system, user, temperature=temperature)
+        if raw is None:
+            # reasoning-модели (deepseek-v4-flash на Yandex Cloud) иногда тратят ВЕСЬ
+            # max_tokens на скрытый reasoning_content и возвращают content: null
+            # (finish_reason "length") — не ошибка авторизации/парсинга, встречено на
+            # стрессовом прогоне 2026-09-03 (~7% вызовов). Один retry с удвоенным
+            # бюджетом на этот конкретный вызов, прежде чем считать это отказом.
+            raw = await self.complete(judge_system, user, temperature=temperature,
+                                       max_tokens=self.config.max_tokens * 2)
+        if raw is None:
+            raise RuntimeError(
+                "Судья/атакующая модель вернула content=None даже после retry с "
+                f"удвоенным max_tokens ({self.config.max_tokens * 2}) — вероятно, "
+                "reasoning-модель тратит весь бюджет на reasoning_content. Подними "
+                "LLMClientConfig.max_tokens в конфиге ещё выше."
+            )
         # Маленькие локальные модели (qwen2.5:3b) иногда экранируют одинарные кавычки
         # как `\'` внутри JSON-строк — невалидный escape по спецификации JSON, ловим
         # реальным прогоном 2026-09-03. Чиним заменой перед повторным парсом, вместо
@@ -100,12 +115,19 @@ class LLMClient:
         raise ValueError(f"Судья/атакующая модель не вернула валидный JSON: {raw!r}")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
+        """По одному тексту за запрос, не батчем: Yandex Cloud LLM API /embeddings
+        отвечает 400 "Array input must contain exactly one string" на batch-input
+        (стресс-тест 2026-09-03) — OpenAI-совместимые провайдеры batch тоже
+        принимают, так что по-одному безопасно для всех, просто N запросов вместо 1."""
         headers = {"Authorization": self.config.auth_header_value, **self.config.extra_headers}
-        body = {"model": self.config.model, "input": texts}
-        resp = await self._client.post("/embeddings", json=body, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        return [item["embedding"] for item in data["data"]]
+        vectors: list[list[float]] = []
+        for text in texts:
+            body = {"model": self.config.model, "input": [text]}
+            resp = await self._client.post("/embeddings", json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            vectors.append(data["data"][0]["embedding"])
+        return vectors
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

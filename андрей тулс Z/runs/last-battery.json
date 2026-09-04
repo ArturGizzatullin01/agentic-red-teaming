@@ -1,0 +1,7 @@
+{
+  "battery_report": "C:\\memred-lab\\runs\\battery-20260904-123655.md",
+  "runs": [
+    "C:\\memred-lab\\runs\\ST23-tool-param-injection-20260904-123442",
+    "C:\\memred-lab\\runs\\ST24-tool-result-poisoning-20260904-123553"
+  ]
+}

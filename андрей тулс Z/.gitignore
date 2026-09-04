@@ -1,5 +1,4 @@
 .venv/
-runs/
 target/target_db/
 __pycache__/
 *.pyc

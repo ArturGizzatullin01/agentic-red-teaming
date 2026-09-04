@@ -60,10 +60,13 @@ def _build_evidence_source(cfg: dict) -> MongoEvidenceSource:
 
 def _build_llm(cfg: dict, role: str) -> LLMClient:
     r = cfg[role]
-    return LLMClient(LLMClientConfig(
+    kwargs = dict(
         base_url=r["base_url"], api_key_env=r["api_key_env"], model=r["model"],
         temperature=r.get("temperature", 0.0), auth_scheme=r.get("auth_scheme", "Bearer"),
-    ))
+    )
+    if "max_tokens" in r:
+        kwargs["max_tokens"] = r["max_tokens"]
+    return LLMClient(LLMClientConfig(**kwargs))
 
 
 async def _run_many(attack_classes: list, ctx: AttackContext, cfg: dict) -> None:
