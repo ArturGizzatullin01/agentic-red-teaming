@@ -12,7 +12,13 @@ dependencies = [
 memred = "memred.cli:main"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["memred*"]
+
+[tool.pytest.ini_options]
+# src-layout: пакет живёт в src/, поэтому тесты запускаются без установки пакета.
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [build-system]
 requires = ["setuptools>=68"]
