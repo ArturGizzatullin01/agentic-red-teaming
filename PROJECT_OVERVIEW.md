@@ -64,11 +64,12 @@
 ## 3. Центральная идея архитектуры: pluggable-атаки + жёсткие роли
 
 Одна мысль, из которой следует вся структура: **атака — это декларативный файл,
-а не код внутри ядра**. Новая атака = новый файл в [src/memnotsafe/attacks/](src/memnotsafe/attacks/),
-без единой правки ядра. Достигается это жёстким разделением ответственности —
-пять ролей, которые **нельзя смешивать**:
+а не код внутри ядра**. Новая атака = новый файл в
+[src/memnotsafe/attacks/](src/memnotsafe/attacks/), без единой правки ядра.
+Достигается это жёстким разделением ответственности — пять ролей, которые
+**нельзя смешивать**:
 
-```
+```text
 Attack        знает ЧТО делать   (payload, шаги доставки, шаги триггера, ожидаемый эффект)
 TargetAdapter знает КАК говорить  (сессии, отправка, снапшот памяти — специфика стенда)
 Runner        знает КОГДА         (единственное место, где всё склеено в порядок)
@@ -91,7 +92,7 @@ Reporter      знает КАК ПОКАЗАТЬ  (воронка, findings, SAR
 Каждый прогон (`run`) — это одна воронка стадий. Runner
 ([src/memnotsafe/core/runner.py](src/memnotsafe/core/runner.py)) проводит по ней:
 
-```
+```text
               ┌─ baseline: что таргет отвечает на триггер БЕЗ отравления
               │
 attacker сессия ─► delivery_steps ─► memory_write ─► [конец сессии]
@@ -119,7 +120,7 @@ victim сессия ─► trigger_steps ─► retrieval ─► adoption ─►
 
 ### Композитный вердикт (когда атака = успех)
 
-```
+```text
 success = write ∧ persistence ∧ (retrieval=True ∨ retrieval=UNKNOWN)
                  ∧ adoption ∧ external_effect
 ```
@@ -141,7 +142,7 @@ success = write ∧ persistence ∧ (retrieval=True ∨ retrieval=UNKNOWN)
 
 ## 5. Карта каталога `src/memnotsafe/` (по одной строке на модуль)
 
-```
+```text
 src/memnotsafe/
 ├── cli.py            # точка входа: probe / run / campaign / report / replay
 ├── core/
