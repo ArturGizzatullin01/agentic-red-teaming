@@ -1,5 +1,5 @@
 [project]
-name = "memred"
+name = "memnotsafe"
 version = "0.1.0"
 description = "Agentic Memory Red Teaming — automated pentesting of LLM-agent long-term memory."
 requires-python = ">=3.11"
@@ -9,10 +9,16 @@ dependencies = [
 ]
 
 [project.scripts]
-memred = "memred.cli:main"
+memnotsafe = "memnotsafe.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["memred*"]
+where = ["src"]
+include = ["memnotsafe*"]
+
+[tool.pytest.ini_options]
+# src-layout: пакет живёт в src/, поэтому тесты запускаются без установки пакета.
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -7,10 +7,10 @@ import asyncio
 
 import pytest
 
-from memred.adapters.mock import MockTarget
-from memred.attacks import get_attack
-from memred.attacks.base import AttackContext
-from memred.core.runner import new_run_id, run_attack
+from memnotsafe.adapters.mock import MockTarget
+from memnotsafe.attacks import get_attack
+from memnotsafe.attacks.base import AttackContext
+from memnotsafe.core.runner import new_run_id, run_attack
 
 CASES = [
     ("direct_poisoning", "2001", "2001"),
@@ -36,7 +36,7 @@ def test_attack_family_succeeds_when_vulnerable(family, attacker, victim):
 
 
 def test_registry_has_all_five_families():
-    from memred.attacks.base import ATTACK_REGISTRY
+    from memnotsafe.attacks.base import ATTACK_REGISTRY
 
     expected = {"direct_poisoning", "scope_escalation", "false_precedent", "tool_argument_hijack", "cross_user_bac"}
     assert expected <= set(ATTACK_REGISTRY)
