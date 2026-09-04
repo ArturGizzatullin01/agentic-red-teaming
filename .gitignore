@@ -12,3 +12,9 @@ genai-invest-agent-memory-stand-*/
 PyRIT-main/
 garak-main/
 llamator-release/
+
+# memred (root-level unified tool, spec: agentic_memory_red_teaming_implementation_spec.md)
+# сгенерированные артефакты прогонов — не коммитим, воспроизводимы командой `memred run`.
+/runs/
+/reports/
+*.egg-info/
