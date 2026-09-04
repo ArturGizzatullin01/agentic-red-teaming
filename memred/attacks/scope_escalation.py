@@ -1,4 +1,4 @@
-"""memred/attacks/scope_escalation.py — A2: эскалация scope (spec §9).
+"""memred/attacks/scope_escalation.py — A2: эскалация scope.
 
 Личная просьба одного клиента формулируется так, что оркестратор таргета
 классифицирует её как правило GLOBAL-уровня (без user_id) — она приземляется

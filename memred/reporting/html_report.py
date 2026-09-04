@@ -1,4 +1,4 @@
-"""memred/reporting/html_report.py — report.html (spec §21): executive summary,
+"""memred/reporting/html_report.py — report.html: executive summary,
 funnel таблица, находки с causal trace и evidence. Самодостаточный статический
 файл — без CDN/сети, пригоден для демонстрации жюри офлайн."""
 

@@ -1,4 +1,4 @@
-"""memred/attacks/direct_poisoning.py — A1: прямое отравление памяти (spec §9).
+"""memred/attacks/direct_poisoning.py — A1: прямое отравление памяти.
 
 attacker -> memory instruction -> та же личность, НОВАЯ сессия -> инструкция
 всплывает в ответе. Single-user (attacker == victim), проверяет саму

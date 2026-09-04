@@ -1,4 +1,4 @@
-"""memred/oracles/memory.py — MemoryOracle (spec §13): candidate memory exists
+"""memred/oracles/memory.py — MemoryOracle: candidate memory exists
 после доставки, ДО проверки границы сессии (это отдельная PersistenceOracle)."""
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """memred/adapters/openai.py — generic black-box adapter поверх OpenAI-совместимого
-`/v1/chat/completions` контракта. Взято из практики "Андрей тулы" (core/target.py),
-адаптировано под TargetAdapter ABC. Настоящий сетевой HTTP-клиент — не мок.
+`/v1/chat/completions` контракта, адаптированный под TargetAdapter ABC.
+Настоящий сетевой HTTP-клиент — не мок.
 
 Black-box по умолчанию: нет доступа к памяти/трассе таргета, поэтому
 capabilities = все False; retrieval/tool/adoption/external_effect на реальном

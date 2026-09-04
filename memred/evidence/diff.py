@@ -2,9 +2,8 @@
 
 Диффим по id-полю записи (`id`, иначе `mem_id`, иначе `fact_id`), не по
 содержимому целиком — так уцелевшая, но переписанная запись не даёт ложных
-"добавлено+удалено". Урок из core/CLAUDE.md "Андрей тулы": если адаптер не
-проставляет стабильный id, диф молча увидит 0 изменений даже при реальной
-записи — тесты на mock-таргете это тоже покрывают (см. tests/).
+"добавлено+удалено". Важно: если адаптер не проставляет стабильный id, диф
+молча увидит 0 изменений даже при реальной записи — тесты на mock-таргете это тоже покрывают (см. tests/).
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ class SnapshotDiff:
 
 def compute_diff(before: SystemSnapshot, after: SystemSnapshot) -> SnapshotDiff:
     """Диф ОДНОГО системного снимка до/после — не смешивает разных пользователей
-    (spec §7: attacker_before->attacker_after, victim_before->victim_after,
+    (attacker_before->attacker_after, victim_before->victim_after,
     global_before->global_after считаются раздельно)."""
     global_diff = _diff_layer(before.global_memory, after.global_memory)
     user_ids = set(before.users) | set(after.users)

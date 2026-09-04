@@ -1,4 +1,4 @@
-"""memred/oracles/retrieval.py — RetrievalOracle (spec §13).
+"""memred/oracles/retrieval.py — RetrievalOracle.
 
 Если trace доступен: memory_id кандидата должен появиться в событии
 memory_retrieval victim-сессии. Если trace недоступен — UNKNOWN, НИКОГДА не

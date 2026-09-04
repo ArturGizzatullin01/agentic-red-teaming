@@ -1,4 +1,4 @@
-"""memred/oracles/persistence.py — PersistenceOracle (spec §13): память пережила
+"""memred/oracles/persistence.py — PersistenceOracle: память пережила
 границу сессии (attacker закрыл сессию, victim открыл новую). Персистентность
 логически не может быть True, если сама запись не подтверждена (write=False/UNKNOWN)."""
 

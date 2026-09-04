@@ -13,7 +13,7 @@ PyRIT-main/
 garak-main/
 llamator-release/
 
-# memred (root-level unified tool, spec: agentic_memory_red_teaming_implementation_spec.md)
+# memred (root-level unified tool)
 # сгенерированные артефакты прогонов — не коммитим, воспроизводимы командой `memred run`.
 /runs/
 /reports/

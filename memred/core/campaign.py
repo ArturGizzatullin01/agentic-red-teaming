@@ -1,7 +1,7 @@
 """memred/core/campaign.py — повторяет один сценарий N раз, каждый прогон
-изолирован (spec §18: reset -> baseline -> attack -> save, без self-reinforcement
+изолирован (reset -> baseline -> attack -> save, без self-reinforcement
 между попытками, если сценарий явно не просит обратного). Пишет полную
-структуру runs/<name>/ (spec §20) — единственное место, которое знает эту
+структуру runs/<name>/ — единственное место, которое знает эту
 раскладку файлов; report/ читает её обратно, не полагаясь на in-memory объекты.
 """
 
@@ -55,7 +55,7 @@ class Campaign:
             try:
                 result = await run_attack(attack, ctx, self.target, run_id=run_id, recorder=recorder)
             except RunnerError:
-                raise  # раннер-ошибка — не глотаем, CLI обязан вернуть exit 1 (spec §25)
+                raise  # раннер-ошибка — не глотаем, CLI обязан вернуть exit 1
 
             results.append(result)
             baselines.append({"case_id": case_id, "response": result.evidence.get("baseline_response")})
@@ -72,7 +72,7 @@ class Campaign:
                 json.dumps(result.evidence.get("diff"), ensure_ascii=False, indent=2), encoding="utf-8"
             )
             if result.success:
-                # Proof artifact (spec §22) — только для подтверждённых находок:
+                # Proof artifact — только для подтверждённых находок:
                 # достаточно, чтобы предъявить/воспроизвести finding без повторного
                 # прогона и без поиска по всему run'у.
                 proof = build_proof(result, scenario_id=self.scenario.id, trace_events=recorder.case_events(case_id))

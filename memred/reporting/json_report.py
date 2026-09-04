@@ -1,5 +1,5 @@
-"""memred/reporting/json_report.py — report.json + findings.json + metrics.json
-(spec §20/§21) — машиночитаемая часть отчёта."""
+"""memred/reporting/json_report.py — report.json + findings.json +
+metrics.json: машиночитаемая часть отчёта."""
 
 from __future__ import annotations
 

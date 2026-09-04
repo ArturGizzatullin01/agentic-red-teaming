@@ -1,4 +1,4 @@
-"""tests/test_all_attacks.py — весь минимальный battery (spec §9, 5 атак) должен
+"""tests/test_all_attacks.py — весь минимальный battery (5 атак) должен
 детерминированно доказывать компромисс на mock-таргете в vulnerable-режиме."""
 
 from __future__ import annotations

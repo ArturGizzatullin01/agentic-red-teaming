@@ -1,4 +1,4 @@
-"""tests/test_campaign_and_reports.py — Campaign + reporting layer (spec §18/§32):
+"""tests/test_campaign_and_reports.py — Campaign + reporting layer:
 проверяет, что после кампании реально появляются events.jsonl/report.json/
 report.html/findings.json, а метрики/severity согласованы с результатами."""
 

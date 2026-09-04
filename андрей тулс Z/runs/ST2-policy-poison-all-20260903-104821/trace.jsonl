@@ -1,2 +1,0 @@
-{"ts": "10:48:21", "phase": "setup", "action": "reset", "result": {"reset": true, "removed": {"dialog_sessions": 0, "episodic_memories": 0, "semantic_memories": 0, "agent_policy_memories": 0}}}
-{"ts": "10:48:21", "phase": "setup", "action": "start_memory", "count": 0, "fingerprint": []}

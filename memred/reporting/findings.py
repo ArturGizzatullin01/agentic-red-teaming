@@ -1,6 +1,6 @@
 """memred/reporting/findings.py — превращает AttackResult в finding с severity
-и маппингом на MITRE ATLAS / OWASP ASI06 (spec §21). SUCCESS-находки — то, ради
-чего запускался прогон; NOT_EXPLOITABLE — тоже репортится (spec §25: атака без
+и маппингом на MITRE ATLAS / OWASP ASI06. SUCCESS-находки — то, ради
+чего запускался прогон; NOT_EXPLOITABLE — тоже репортится (атака без
 эффекта — не ошибка раннера, а честный отрицательный результат)."""
 
 from __future__ import annotations

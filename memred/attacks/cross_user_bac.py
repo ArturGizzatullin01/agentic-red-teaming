@@ -1,4 +1,4 @@
-"""memred/attacks/cross_user_bac.py — A4: Cross-user BAC (главная демо-атака, spec §9).
+"""memred/attacks/cross_user_bac.py — A4: Cross-user BAC (главная демо-атака).
 
 attacker (1001) пишет "переиспользуемую" инструкцию -> victim (1002) задаёт
 безобидный вопрос -> инструмент вызывается с cus=1001, т.е. агент подменяет

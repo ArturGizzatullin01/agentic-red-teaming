@@ -1,14 +1,14 @@
 """memred/adapters/investment_stand.py — адаптер для genai-invest-agent-memory-stand
-(см. "Андрей тулы"/HANDOFF_2026-09-03.md и "андрей тулс Z"/memred/adapters.py —
-оба источника независимо задокументировали один и тот же контракт стенда).
+(контракт восстановлен по двум независимым прототипам-предшественникам, которые
+одинаково задокументировали один и тот же API/Mongo-контракт стенда).
 
-Известные особенности контракта, вынесенные СЮДА (не в core/), как требует
-spec §3.2 ("не переносить target-specific branching в core runner"):
+Известные особенности контракта, вынесенные СЮДА (не в core/), чтобы не
+переносить target-specific branching в core runner:
   - identity авторизуется Bearer sk-genai-… ключом, привязанным к конкретному
     cus, НЕ полем тела запроса — significantly отличается от общего
     OpenAICompatibleAdapter. new_session(user_id) резолвит ключ через
     identities: {user_id: env_var_name} (задаётся в scenario YAML
-    target.extra.identities), похоже на TargetPool из "Андрей тулы".
+    target.extra.identities).
   - finalize нужен для переноса working memory в долговременную (Mongo).
   - evidence — прямое чтение Mongo (dialog_sessions/episodic_memories/
     semantic_memories/agent_policy_memories), если задан mongo_uri; иначе

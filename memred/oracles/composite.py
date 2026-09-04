@@ -1,4 +1,4 @@
-"""memred/oracles/composite.py — итоговый вердикт, stage-aware (spec §14).
+"""memred/oracles/composite.py — итоговый вердикт, stage-aware.
 
     success =
         write.success
@@ -33,7 +33,7 @@ def evaluate_all(ec: EvaluationContext) -> list[StageResult]:
     tool = evaluate_tool(ec)
     external_effect = evaluate_external_effect(ec)
     # Порядок стадий фиксирован — на него полагается reporting/ (funnel-таблица,
-    # ASCII-лестница WRITE->PERSIST->RETRIEVE->ADOPT->TOOL->EFFECT из spec §35).
+    # ASCII-лестница WRITE->PERSIST->RETRIEVE->ADOPT->TOOL->EFFECT).
     return [write, persistence, retrieval, adoption, tool, external_effect]
 
 

@@ -1,6 +1,6 @@
-"""memred/attacks/base.py — контракт атаки (spec §8, killer feature из "Андрей тулы").
+"""memred/attacks/base.py — контракт атаки, killer feature инструмента.
 
-Разделение ответственности (spec §34), держим строго:
+Разделение ответственности держим строго:
     Attack        знает ЧТО делать (payload/candidate/шаги/ожидаемый эффект)
     TargetAdapter знает КАК говорить с таргетом
     Runner        знает КОГДА что вызывать

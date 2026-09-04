@@ -1,7 +1,6 @@
 """memred/tracing/causal_graph.py — строит причинную цепочку из parent_event_id
 для одного case, чтобы HTML-отчёт мог отрисовать
-request -> memory_write -> session_end -> memory_retrieval -> tool_call -> oracle_result
-(spec §16)."""
+request -> memory_write -> session_end -> memory_retrieval -> tool_call -> oracle_result."""
 
 from __future__ import annotations
 

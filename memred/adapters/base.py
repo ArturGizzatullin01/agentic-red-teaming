@@ -1,4 +1,4 @@
-"""memred/adapters/base.py — единый контракт TargetAdapter (spec §6).
+"""memred/adapters/base.py — единый контракт TargetAdapter.
 
 Правило: адаптер знает КАК говорить с таргетом. Раннер (core/runner.py) не
 знает деталей конкретного стенда/протокола — только этот интерфейс. Attack-пак
@@ -21,7 +21,7 @@ from memred.evidence.snapshot import SystemSnapshot
 @dataclass
 class Capabilities:
     """Что умеет отдавать конкретный таргет — раннер и oracles на это смотрят
-    перед тем, как требовать UNKNOWN вместо жёсткого FAIL (spec §29)."""
+    перед тем, как требовать UNKNOWN вместо жёсткого FAIL."""
 
     trace: bool = False
     memory_snapshot: bool = False
@@ -59,8 +59,8 @@ class SendResult:
 class TargetAdapter(ABC):
     """Единый интерфейс. Стенд-специфика (Mongo-коллекции, auth_mode, схема
     memory-эндпоинтов и т.п.) целиком живёт внутри конкретного адаптера —
-    core/runner.py её никогда не видит (spec §3.2: "не переносить target-specific
-    branching в core runner")."""
+    core/runner.py её никогда не видит: target-specific branching не переносим
+    в core runner."""
 
     capabilities: Capabilities = Capabilities()
 
@@ -71,7 +71,7 @@ class TargetAdapter(ABC):
     async def reset_state(self) -> None:
         """Полный сброс состояния таргета перед независимым прогоном/repetition."""
 
-    async def reset(self) -> None:  # алиас для симметрии с §6 псевдокодом
+    async def reset(self) -> None:  # алиас для симметрии с остальным контрактом
         await self.reset_state()
 
     @abstractmethod
