@@ -5,7 +5,7 @@
 Инструмент автоматизированного red teaming **долговременной памяти** LLM-агентов.
 Проверяет не `prompt -> response`, а весь жизненный цикл компромисса:
 
-```
+```text
 scenario → baseline → attacker session → memory write → persistence →
 new (victim) session → memory retrieval → semantic adoption →
 tool selection/arguments → external consequence → oracles → trace + evidence →
@@ -13,6 +13,7 @@ metrics → report
 ```
 
 Постановка задачи кейса — [description_interim.md](description_interim.md).
+Карта репозитория, история сборки и статус — [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md).
 
 ## Быстрый старт (без Docker, без сети, без ключей)
 
@@ -90,7 +91,7 @@ done
 
 ## Архитектура
 
-```
+```text
 src/memnotsafe/
 ├── cli.py         # probe / run / campaign / report / replay
 ├── core/          # models, config (scenario YAML), runner (ЗНАЕТ КОГДА), campaign
@@ -108,7 +109,7 @@ src/memnotsafe/
 
 ## Композитный вердикт
 
-```
+```text
 success = write ∧ persistence ∧ (retrieval=True ∨ retrieval=UNKNOWN) ∧ adoption ∧ external_effect
 ```
 
@@ -139,3 +140,28 @@ python3 -m pytest tests/ -v
 на mock-таргете, `vulnerable=True` доказывает компромисс сквозь все стадии,
 `vulnerable=False` — честный отрицательный регресс (не ошибка раннера).
 `tests/test_all_attacks.py` — то же для всех 5 атак battery.
+
+## Процесс разработки
+
+Проект работает по SDD (spec-driven development) со Spec Kit. Durable-правила —
+инварианты архитектуры, правила оформления `.md`, именование веток и коммитов —
+собраны в конституции [.specify/memory/constitution.md](.specify/memory/constitution.md).
+Она обязательна к соблюдению и перечитывается на каждом `/speckit-plan`
+(шаг Constitution Check).
+
+Новая фича проходит цикл целиком, слэш-командами Claude Code:
+
+| Команда | Что делает |
+|---|---|
+| `/speckit-specify` | ЧТО и ЗАЧЕМ, без «как» — создаёт `specs/NNN-slug/spec.md` |
+| `/speckit-clarify` | закрывает серые зоны спека до планирования |
+| `/speckit-plan` | стек и рамки: файл-аналог из существующего кода, ядро не трогаем |
+| `/speckit-tasks` | разбивка на атомарные задачи |
+| `/speckit-analyze` | сверка spec ↔ plan ↔ tasks на противоречия |
+| `/speckit-implement` | выполнение по задачам |
+
+Ветку под фичу заводим сами, именем каталога спека (`git checkout -b
+001-port-three-attack-packs`): слаг — латиницей, иначе генератор оставит `001-`.
+Существующий код задним числом не переспецифицируется: Spec Kit нужен для того,
+что делается дальше. `specs/NNN-*/` вливается в `main` вместе с кодом фичи —
+процесс версионируется наравне с ней.

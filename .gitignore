@@ -18,3 +18,7 @@ llamator-release/
 /runs/
 /reports/
 *.egg-info/
+
+# Spec Kit: процесс версионируем (.specify/, specs/, .claude/skills/),
+# машинно-локальное состояние агента — нет.
+.claude/settings.local.json
