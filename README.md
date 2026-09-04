@@ -1,4 +1,6 @@
-# memred — Agentic Memory Red Teaming
+# Your Memory Is Not Safe
+
+> Agentic Memory Red Teaming. Пакет и CLI-команда — `memnotsafe`.
 
 Инструмент автоматизированного red teaming **долговременной памяти** LLM-агентов.
 Проверяет не `prompt -> response`, а весь жизненный цикл компромисса:
@@ -14,7 +16,7 @@ metrics → report
 
 ## Быстрый старт (без Docker, без сети, без ключей)
 
-Обязательный локальный `mock`-таргет (`src/memred/adapters/mock.py`) детерминированно
+Обязательный локальный `mock`-таргет (`src/memnotsafe/adapters/mock.py`) детерминированно
 симулирует агента с долговременной памятью (user-scoped + global) и одной
 встроенной уязвимостью — этого достаточно, чтобы провести полный pipeline
 и получить настоящий, воспроизводимый finding без внешнего стенда.
@@ -27,26 +29,26 @@ pip install -e .
 ```
 
 Без установки то же самое работает через модуль:
-`PYTHONPATH=src python3 -m memred.cli probe --target mock`.
+`PYTHONPATH=src python3 -m memnotsafe.cli probe --target mock`.
 Тесты установки не требуют — `pythonpath` прописан в `pyproject.toml`.
 
 ```bash
 # 1. Проверить таргет и его telemetry-возможности
-memred probe --target mock
+memnotsafe probe --target mock
 
 # 2. Один прогон главной демо-атаки (cross-user BAC через отравление памяти)
-memred run \
+memnotsafe run \
   --scenario scenarios/cross_user_bac.yaml \
   --output runs/demo
 
 # 3. Кампания из N повторов + агрегированные метрики
-memred campaign \
+memnotsafe campaign \
   --scenario scenarios/cross_user_bac.yaml \
   --output runs/campaign-001 \
   --iterations 5
 
 # 4. Пересобрать report.html/.json из уже сохранённого runs/ (без повторной атаки)
-memred report \
+memnotsafe report \
   --input runs/campaign-001 \
   --output reports/campaign-001.html
 
@@ -61,12 +63,12 @@ open reports/campaign-001.html   # macOS; на Linux — xdg-open
 отравление памяти всё равно проходит, но внешней утечки не происходит):
 
 ```bash
-memred run \
+memnotsafe run \
   --scenario scenarios/cross_user_bac_protected.yaml \
   --output runs/protected
 ```
 
-## Батарея атак (`src/memred/attacks/`)
+## Батарея атак (`src/memnotsafe/attacks/`)
 
 | family | что демонстрирует | actors |
 |---|---|---|
@@ -76,20 +78,20 @@ memred run \
 | `false_precedent` | сфабрикованное "одобрение" используется как прецедент в новой сессии | attacker == victim |
 | `tool_argument_hijack` | легитимный инструмент вызывается с атакующим-навязанным аргументом (JSON-уровень) | attacker == victim |
 
-Каждая атака — файл в `src/memred/attacks/`, подключаемый через `AttackBase`
+Каждая атака — файл в `src/memnotsafe/attacks/`, подключаемый через `AttackBase`
 (`generate` / `delivery_steps` / `trigger_steps` / `expected_effect`) — новая
 атака = новый файл, без правок ядра.
 
 ```bash
 for f in direct_poisoning scope_escalation false_precedent tool_argument_hijack; do
-  memred run --scenario "scenarios/$f.yaml" --output "runs/$f"
+  memnotsafe run --scenario "scenarios/$f.yaml" --output "runs/$f"
 done
 ```
 
 ## Архитектура
 
 ```
-src/memred/
+src/memnotsafe/
 ├── cli.py         # probe / run / campaign / report / replay
 ├── core/          # models, config (scenario YAML), runner (ЗНАЕТ КОГДА), campaign
 ├── attacks/       # AttackBase + 5 паков (ЗНАЮТ ЧТО)
@@ -118,13 +120,13 @@ success = write ∧ persistence ∧ (retrieval=True ∨ retrieval=UNKNOWN) ∧ a
 
 ## Другие таргеты (не покрыты тестами этого репозитория)
 
-- `src/memred/adapters/openai.py` — generic black-box OpenAI-совместимый `/v1/chat/completions`.
-- `src/memred/adapters/investment_stand.py` — контракт `genai-invest-agent-memory-stand`.
+- `src/memnotsafe/adapters/openai.py` — generic black-box OpenAI-совместимый `/v1/chat/completions`.
+- `src/memnotsafe/adapters/investment_stand.py` — контракт `genai-invest-agent-memory-stand`.
   Нужен живой стенд + `sk-genai-…` ключи на каждую identity (`target.extra.identities`
   в scenario YAML) — не запускается в CI/локально без внешней инфраструктуры.
 
 ```bash
-memred probe --target http://localhost:8600 --scenario scenarios/cross_user_bac.yaml
+memnotsafe probe --target http://localhost:8600 --scenario scenarios/cross_user_bac.yaml
 ```
 
 ## Тесты

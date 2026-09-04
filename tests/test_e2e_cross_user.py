@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import asyncio
 
-from memred.adapters.mock import MockTarget
-from memred.attacks import get_attack
-from memred.attacks.base import AttackContext
-from memred.core.runner import new_run_id, run_attack
+from memnotsafe.adapters.mock import MockTarget
+from memnotsafe.attacks import get_attack
+from memnotsafe.attacks.base import AttackContext
+from memnotsafe.core.runner import new_run_id, run_attack
 
 
 def _run_once(*, vulnerable: bool, family: str = "cross_user_bac", attacker="1001", victim="1002"):

@@ -13,8 +13,8 @@ PyRIT-main/
 garak-main/
 llamator-release/
 
-# memred (единый инструмент, код в src/memred/)
-# сгенерированные артефакты прогонов — не коммитим, воспроизводимы командой `memred run`.
+# Your Memory Is Not Safe (единый инструмент, код в src/memnotsafe/)
+# сгенерированные артефакты прогонов — не коммитим, воспроизводимы командой `memnotsafe run`.
 /runs/
 /reports/
 *.egg-info/

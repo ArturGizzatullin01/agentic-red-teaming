@@ -7,13 +7,13 @@ from __future__ import annotations
 import asyncio
 import json
 
-from memred.adapters.mock import MockTarget
-from memred.core.campaign import Campaign
-from memred.core.config import ActorConfig, Scenario, TargetSpec
-from memred.reporting.findings import build_findings
-from memred.reporting.html_report import write_html_report
-from memred.reporting.json_report import write_json_reports
-from memred.reporting.metrics import aggregate_metrics
+from memnotsafe.adapters.mock import MockTarget
+from memnotsafe.core.campaign import Campaign
+from memnotsafe.core.config import ActorConfig, Scenario, TargetSpec
+from memnotsafe.reporting.findings import build_findings
+from memnotsafe.reporting.html_report import write_html_report
+from memnotsafe.reporting.json_report import write_json_reports
+from memnotsafe.reporting.metrics import aggregate_metrics
 
 
 def _scenario(tmp_path, family="cross_user_bac", attacker="1001", victim="1002", reps=3) -> Scenario:
