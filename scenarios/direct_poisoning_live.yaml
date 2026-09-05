@@ -1,0 +1,31 @@
+# Батарея по живому стенду (US2): A1 прямое отравление памяти на живом таргете.
+# Single-user (attacker == victim == 1003): проверяет персистентность отравления
+# через границу сессии одного клиента. Тот же attack.family, что на mock —
+# направление на живой стенд делается только полями target/metrics (Принцип II).
+#
+# Клиенты стенда: cus=1001..1005. Секреты (sk-genai-…) в YAML НЕ хранятся —
+# только имена ENV-переменных (FR-009).
+id: direct_poisoning_live
+
+target:
+  adapter: investment_stand
+  base_url: "http://localhost:8600"
+  auth_mode: vulnerable
+  identities:
+    "1003": SK_GENAI_1003
+  mongo_uri: "mongodb://localhost:27017"
+  mongo_db: agent_memory
+  settle_timeout_s: 10
+
+actors:
+  attacker:
+    user_id: "1003"
+  victim:
+    user_id: "1003"
+
+attack:
+  family: direct_poisoning
+
+metrics:
+  repetitions: 5
+  stop_on_success: true

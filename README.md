@@ -130,6 +130,36 @@ success = write ∧ persistence ∧ (retrieval=True ∨ retrieval=UNKNOWN) ∧ a
 memnotsafe probe --target http://localhost:8600 --scenario scenarios/cross_user_bac.yaml
 ```
 
+### Живой прогон на стенде
+
+Воспроизведение находки `cross_user_bac` на живом `genai-invest-agent-memory-stand`
+(та же воронка из шести стадий, что на mock, но с реальными артефактами утечки).
+Полная пошаговая валидация — в [quickstart.md](specs/001-live-target-reproduction/quickstart.md).
+
+Ключи задаются **только именами ENV-переменных** в scenario YAML
+(`target.extra.identities`); сами `sk-genai-…` в git и в YAML не хранятся (FR-009):
+
+```bash
+# ключи выдаёт сам стенд на http://localhost:8501 (вход как client<cus>);
+# по одному ENV на клиента cus=1001..1005 (для одних ворот успеха нужны только 1001/1002)
+export SK_GENAI_1001="sk-genai-...client1001..."
+export SK_GENAI_1002="sk-genai-...client1002..."
+
+# ворота успеха: воспроизвести кросс-юзер утечку (early-exit по первому success)
+memnotsafe campaign --scenario scenarios/cross_user_bac_live.yaml \
+  --output runs/cross_user_bac_live
+
+# вся батарея по живому таргету
+for s in scenarios/*_live.yaml; do
+  memnotsafe campaign --scenario "$s" --output "runs/$(basename "${s%.yaml}")"
+done
+```
+
+Инвариант честности: канал доказательства (`tool_telemetry` → `memory_snapshot` →
+`victim_response`) наблюдается — стадия проверяема; не наблюдается — стадия остаётся
+`UNKNOWN`, никогда не `True`. `campaign.json` несёт `metadata` прогона (`run_id`,
+`evidence_channel`, `reset_available`, `target`) для атрибуции утечки.
+
 ## Тесты
 
 ```bash
@@ -140,6 +170,9 @@ python3 -m pytest tests/ -v
 на mock-таргете, `vulnerable=True` доказывает компромисс сквозь все стадии,
 `vulnerable=False` — честный отрицательный регресс (не ошибка раннера).
 `tests/test_all_attacks.py` — то же для всех 5 атак battery.
+`tests/test_investment_stand_adapter.py` и `tests/test_campaign_budget.py` —
+офлайн-unit живого адаптера (нормализация, evidence-каналы, паритет воронки) и
+бюджет N повторов с early-exit — всё на поддельных входах, без стенда.
 
 ## Процесс разработки
 

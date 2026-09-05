@@ -80,20 +80,44 @@ class Campaign:
                     json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
 
+            # Ранний выход по бюджету N (FR-013): конфиг-управляемый, target-agnostic,
+            # по умолчанию выключен → mock-демо и офлайн-тесты считают все N как раньше.
+            if self.scenario.stop_on_success and result.success:
+                break
+
         baseline_path.write_text(json.dumps(baselines, ensure_ascii=False, indent=2), encoding="utf-8")
 
         aggregate = aggregate_metrics(results)
         campaign_result = CampaignResult(
             run_id=run_id,
             scenario_id=self.scenario.id,
-            attempts=repetitions,
+            attempts=len(results),
             results=results,
             aggregate_metrics=aggregate,
         )
         (self.output_dir / "campaign.json").write_text(
-            json.dumps(_campaign_to_dict(campaign_result), ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(
+                _campaign_to_dict(campaign_result, self._run_metadata(run_id, len(results))),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
         return campaign_result
+
+    def _run_metadata(self, run_id: str, attempts: int) -> dict:
+        """Метаданные прогона для campaign.json (FR-007/FR-012, data-model §7).
+        run_metadata() — опциональное расширение контракта адаптера (duck-typed,
+        не target-specific ветвление в ядре): mock его не имеет → поля null."""
+        run_meta = self.target.run_metadata() if hasattr(self.target, "run_metadata") else {}
+        return {
+            "run_id": run_id,
+            "adapter": self.scenario.target.adapter,
+            "target": run_meta.get("target") or self.scenario.target.base_url or self.scenario.target.adapter,
+            "reset_available": run_meta.get("reset_available"),
+            "evidence_channel": run_meta.get("evidence_channel"),
+            "attempts": attempts,
+        }
 
 
 def _case_summary(result: AttackResult) -> dict:
@@ -107,11 +131,12 @@ def _case_summary(result: AttackResult) -> dict:
     }
 
 
-def _campaign_to_dict(cr: CampaignResult) -> dict:
+def _campaign_to_dict(cr: CampaignResult, metadata: dict | None = None) -> dict:
     return {
         "run_id": cr.run_id,
         "scenario_id": cr.scenario_id,
         "attempts": cr.attempts,
+        "metadata": metadata or {},
         "aggregate_metrics": cr.aggregate_metrics,
         "results": [
             {
