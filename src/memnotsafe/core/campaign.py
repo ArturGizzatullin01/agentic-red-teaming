@@ -80,13 +80,18 @@ class Campaign:
                     json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
 
+            # Ранний выход по бюджету N (FR-013): конфиг-управляемый, target-agnostic,
+            # по умолчанию выключен → mock-демо и офлайн-тесты считают все N как раньше.
+            if self.scenario.stop_on_success and result.success:
+                break
+
         baseline_path.write_text(json.dumps(baselines, ensure_ascii=False, indent=2), encoding="utf-8")
 
         aggregate = aggregate_metrics(results)
         campaign_result = CampaignResult(
             run_id=run_id,
             scenario_id=self.scenario.id,
-            attempts=repetitions,
+            attempts=len(results),
             results=results,
             aggregate_metrics=aggregate,
         )
