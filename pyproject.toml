@@ -8,6 +8,12 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+[project.optional-dependencies]
+# Канал доказательства memory_snapshot читает Mongo живого стенда напрямую.
+# Изолировано в adapters/investment_stand.py (ленивый импорт) — офлайн-тесты и
+# mock-путь не требуют pymongo.
+mongo = ["pymongo>=4.6"]
+
 [project.scripts]
 memnotsafe = "memnotsafe.cli:main"
 
