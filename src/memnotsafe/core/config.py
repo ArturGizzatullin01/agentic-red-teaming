@@ -71,6 +71,7 @@ class Scenario:
     # Путь к корпусу атак для family="generated" (фича 004). Аддитивно: у обычных
     # сценариев остаётся None, поведение существующих прогонов не меняется.
     corpus_path: Path | None = None
+    require_case_marker: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -106,6 +107,7 @@ def load_scenario(path: str | Path) -> Scenario:
         oracle_overrides=raw.get("oracle", {}) or {},
         judge=_parse_judge(raw.get("judge")),
         corpus_path=(Path(attack["corpus"]) if attack.get("corpus") else None),
+        require_case_marker=bool(raw.get("require_case_marker", False)),
         raw=raw,
     )
 

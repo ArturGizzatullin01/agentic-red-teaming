@@ -48,6 +48,19 @@ class TraceRecorder:
         )
         return path
 
+    def record_case_transcript(self, case_id: str, builder) -> Path | None:
+        """002-reporting: сохранить журнал диалога кейса (полный или наблюдённая
+        часть при ошибке) в traces/<case_id>-transcript.json. Отдельно от
+        events-трассы: другой consumer, другой wire-контракт (schema_version)."""
+        if not self.traces_dir:
+            return None
+        path = self.traces_dir / f"{case_id}-transcript.json"
+        path.write_text(
+            json.dumps(builder.to_wire(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return path
+
 
 def read_events_jsonl(path: Path) -> list[dict]:
     if not path.exists():

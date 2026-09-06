@@ -1,0 +1,14 @@
+id: system-log-impersonation
+target:
+  adapter: mock
+  vulnerable: true
+actors:
+  attacker:
+    user_id: '1001'
+  victim:
+    user_id: '1001'
+attack:
+  family: system_log_impersonation
+metrics:
+  repetitions: 1
+  stop_on_success: true

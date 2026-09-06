@@ -45,7 +45,9 @@ def test_campaign_writes_expected_artifacts(tmp_path):
     assert (out / "campaign.json").exists()
     assert (out / "baseline.json").exists()
     assert len(list((out / "evidence").glob("*-diff.json"))) == 3
-    assert len(list((out / "traces").glob("*.json"))) == 3
+    # 002-reporting: к 3 трейсам событий добавились 3 журнала диалога
+    assert len(list((out / "traces").glob("*.json"))) == 6
+    assert len(list((out / "evidence").glob("*-transcript.json"))) == 3
 
 
 def test_metrics_and_findings_consistent(tmp_path):

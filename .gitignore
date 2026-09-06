@@ -22,3 +22,7 @@ llamator-release/
 # Spec Kit: процесс версионируем (.specify/, specs/, .claude/skills/),
 # машинно-локальное состояние агента — нет.
 .claude/settings.local.json
+
+# Локальные артефакты исполнителя, не часть фичи.
+/.agent-work/
+/.venv-integration/

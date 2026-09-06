@@ -1,0 +1,20 @@
+# T004-2: consent_laundering — офлайн-сценарий на mock (перенос донора,
+# двухходовая доставка elicit→consent, payload побайтно равен донорскому).
+id: consent_laundering
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1001"   # single-user persistence: та же личность, новая сессия
+
+attack:
+  family: consent_laundering
+
+metrics:
+  repetitions: 1
+  stop_on_success: true

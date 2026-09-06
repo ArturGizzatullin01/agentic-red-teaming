@@ -1,0 +1,16 @@
+id: cross-topic-smuggle-global
+target:
+  adapter: mock
+  vulnerable: true
+actors:
+  attacker:
+    user_id: '1001'
+  victim:
+    user_id: '1002'
+attack:
+  family: cross_topic_smuggle
+metrics:
+  repetitions: 1
+  stop_on_success: true
+params:
+  mode: global

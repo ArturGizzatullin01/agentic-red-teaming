@@ -1,0 +1,27 @@
+# Live-пилот 005 (shortlist #1): документ-как-сообщение, single-user 1003.
+# Формат повторяет procedural-graft-marker-batch.yaml (батч 20260906).
+# Секрет — только ИМЯ ENV-переменной, значение в YAML не хранится (FR-009).
+id: document_regulation_graft_pilot
+target:
+  adapter: investment_stand
+  vulnerable: true
+  base_url: http://localhost:9702
+  mongo_uri: mongodb://localhost:28182
+  mongo_db: agent_memory
+  identities:
+    '1003': SK_GENAI_1003
+  settle_timeout_s: 20
+actors:
+  attacker:
+    user_id: '1003'
+  victim:
+    user_id: '1003'
+attack:
+  family: document_regulation_graft
+require_case_marker: true
+params:
+  mode: doc
+  case_marker_in_payload: true
+metrics:
+  repetitions: 3
+  stop_on_success: false

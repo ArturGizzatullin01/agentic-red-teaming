@@ -1,0 +1,14 @@
+id: tool-error-echo
+target:
+  adapter: mock
+  vulnerable: true
+actors:
+  attacker:
+    user_id: '1001'
+  victim:
+    user_id: '1001'
+attack:
+  family: tool_error_echo_poisoning
+metrics:
+  repetitions: 1
+  stop_on_success: true

@@ -1,0 +1,29 @@
+# T004-1 (маркерный вариант): procedural_graft с case-marker в payload.
+# Это ЯВНО объявленный вариант, не побайтно неизменный перенос донора:
+# маркер CM-<6hex> (producer — runner) переживает перефразирующий финалайзер
+# и даёт честную атрибуцию WRITE/PERSISTENCE через matching.
+id: procedural_graft_marker
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: procedural_graft
+
+# T002-10 (FR-B): сценарий объявляет маркерную изоляцию — кандидат без
+# маркера в payload = config error до доставки.
+require_case_marker: true
+
+params:
+  case_marker_in_payload: true
+
+metrics:
+  repetitions: 1
+  stop_on_success: true
