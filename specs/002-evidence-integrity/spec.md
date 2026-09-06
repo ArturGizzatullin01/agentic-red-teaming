@@ -9,7 +9,7 @@
 **Input**: User description: "Исправить достоверность общего pipeline: finalize до
 persistence-проверки, честное сопоставление evidence с case-канарейкой и нормализацией,
 trigger-only adoption/tool/effect, regression-набор на все известные ложные исходы.
-Основание — [аудит A01–A08](../../docs/integration-handoff/audit.md)."
+Основание — [основания и решения](research.md)."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -119,9 +119,8 @@ call без result, несвязанные call/result, событие чужо�
   общая утилита; привязка к полям хранилища — только в адаптерах
   (`adapters/investment_stand.py`, `adapters/mock.py`).
 
-Требования-источник: FR-003, FR-004, FR-005, FR-012
-([спека переноса](../../docs/integration-handoff/spec.md)), ошибки A01–A08
-([аудит](../../docs/integration-handoff/audit.md)).
+Основания требований: [research.md](research.md); контракт стадий и маркера:
+[contracts/evidence-and-verdict.md](contracts/evidence-and-verdict.md).
 
 ## Success Criteria
 

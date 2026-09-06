@@ -6,8 +6,7 @@ description: "Tasks for 002-evidence-integrity"
 # Tasks: Достоверность evidence-конвейера
 
 **Input**: [plan.md](plan.md), [spec.md](spec.md). Каноническая нумерация фичи —
-`T002-N`; соответствие старым ID handoff — в [analyze.md](../analyze.md) (замечание
-R5). После gate фичи: baseline 35 passed.
+`T002-N`; состав текущего пакета — в [analyze.md](analyze.md). После gate фичи: baseline 35 passed.
 
 ## Phase 1: matching-утилита (вне ядра)
 

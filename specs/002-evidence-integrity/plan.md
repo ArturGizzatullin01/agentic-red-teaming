@@ -82,4 +82,4 @@ tests/
 не «магическая вставка в payload»: подстановка только через явный плейсхолдер
 `{case_marker}` шаблона атаки; legacy-сценарии без маркера не меняются
 (round-trip тест обязателен). Связи requirement → task → test и открытые вопросы —
-[analyze.md](../analyze.md).
+[analyze.md](analyze.md).
