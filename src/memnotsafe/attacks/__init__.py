@@ -7,6 +7,7 @@ from memnotsafe.attacks import (  # noqa: F401
     cross_user_bac,
     direct_poisoning,
     false_precedent,
+    generated,
     scope_escalation,
     tool_argument_hijack,
 )

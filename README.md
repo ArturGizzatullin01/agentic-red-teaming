@@ -291,13 +291,92 @@ for f in direct_poisoning scope_escalation false_precedent tool_argument_hijack;
 done
 ```
 
+## Генерация корпуса атак и онлайн-эскалация
+
+Кроме рукописных паков, батарею можно **сгенерировать** под нового агента по его
+файлу-профилю, а слабые атаки — **добить** онлайн-адаптацией. Оба слоя добавлены
+поверх ядра, не меняя его: корпус исполняется тем же раннером, эскалация —
+цикл вокруг него. Всё проходит офлайн через `--attacker-provider stub` (без сети
+и ключей), как и остальной инструмент.
+
+Три версионируемых каталога-входа (коммитятся, как `scenarios/`):
+
+| каталог | что лежит | схема |
+|---|---|---|
+| `profiles/` | файл-профиль агента (назначение, интерфейс, инструменты, память, признаки компрометации) | [contracts/agent-profile.schema.md](specs/004-llm-attack-generation/contracts/agent-profile.schema.md) |
+| `attack_classes/` | универсальные, агент-независимые описания классов атак (по одному YAML на класс) | [contracts/attack-class.schema.md](specs/004-llm-attack-generation/contracts/attack-class.schema.md) |
+| `corpora/` | сгенерированные корпуса (выход `generate`, вход прогона) | [contracts/corpus.schema.md](specs/004-llm-attack-generation/contracts/corpus.schema.md) |
+
+### Precompute: собрать корпус под профиль (US1)
+
+```bash
+# Офлайн-заглушка (stub) не требует ключей — годится для CI и демо
+memnotsafe generate \
+  --profile profiles/support-agent.yaml \
+  --classes attack_classes/ \
+  --out corpora/support-agent.yaml \
+  --attacker-provider stub
+
+# Прогнать корпус существующим run/campaign: family=generated + corpus: в сценарии
+memnotsafe run --scenario scenarios/generated_support.yaml --output runs/gen
+```
+
+Корпус переиспользуется на других похожих агентах **без** повторной генерации —
+его происхождение (профиль, sha256, модель, классы) зафиксировано в `provenance`.
+Профиль без `compromise.external_effect` — это config-ошибка (`exit 1`) до любых
+вызовов атакующей LLM: бесполезный корпус не генерируется.
+
+### Онлайн-эскалация: добить атаку (US2/US3)
+
+По умолчанию онлайн-уровень **выключен** — поведение и стоимость совпадают с
+текущим инструментом. Включается флагом; при неуспехе атакующая LLM переписывает
+атаку по ответу защищающегося и пробует снова, до предела попыток и бюджета, со
+стопом на первом успехе:
+
+```bash
+# Без флага — как сейчас (ноль вызовов атакующей LLM)
+memnotsafe run --scenario scenarios/generated_escalation.yaml --output runs/esc-off
+
+# С флагом — та же атака пробивается адаптацией; попыток не больше лимита
+memnotsafe run --scenario scenarios/generated_escalation.yaml --output runs/esc-on \
+  --online --online-attempts 5 --attacker-provider stub
+```
+
+Исходы честно разделены (как и везде в инструменте): исчерпание лимита попыток
+или бюджета — штатный `exit 0` + finding `NOT_EXPLOITABLE`; сбой самой атакующей
+LLM (нет ключа, недоступна) — `exit 1`, но уже полученные результаты сохраняются
+в `runs/`. В отчёте у каждой находки видно происхождение (рукописный пак / корпус
+/ онлайн), а у онлайновых — число попыток и факт исчерпания бюджета.
+
+### Флаги атакующей LLM (общие у `generate` и онлайн-уровня)
+
+| флаг | по умолчанию | смысл |
+|---|---|---|
+| `--attacker-provider` | `stub` | `stub` (офлайн/CI/демо) \| `openai` (живая генерация) |
+| `--attacker-model` | — | имя модели генератора атак |
+| `--attacker-base-url` | — | base URL для `openai`-совместимого провайдера |
+| `--attacker-api-key-env` | `ATTACKER_API_KEY` | **имя** переменной окружения с ключом (не сам ключ — FR-016) |
+| `--attacker-budget` | `50` | лимит вызовов атакующей LLM на операцию |
+| `--online` | выкл | включить онлайн-эскалацию (только `run`/`campaign`) |
+| `--online-attempts` | `5` | предел попыток онлайн-эскалации на атаку |
+
+Живая генерация — тем же паттерном, что судья и стенд: секрет только через
+переменную окружения по имени.
+
+```bash
+export ATTACKER_API_KEY="sk-..."
+memnotsafe generate --profile profiles/support-agent.yaml --out corpora/support-agent.yaml \
+  --attacker-provider openai --attacker-model gpt-4o --attacker-base-url https://api.openai.com
+```
+
 ## Архитектура
 
 ```text
 src/memnotsafe/
-├── cli.py         # probe / run / campaign / report / replay
-├── core/          # models, config (scenario YAML), runner (ЗНАЕТ КОГДА), campaign
-├── attacks/       # AttackBase + 5 паков (ЗНАЮТ ЧТО)
+├── cli.py         # probe / run / campaign / generate / report / replay / judge-calibrate
+├── core/          # models, config, runner (ЗНАЕТ КОГДА), campaign, escalation (онлайн-цикл)
+├── attacks/       # AttackBase + 5 паков + generated (data-driven исполнитель корпуса)
+├── generation/    # атакующая LLM: профиль, классы, корпус, precompute, rewrite (ЗНАЕТ ЧТО)
 ├── adapters/      # TargetAdapter + mock/openai/investment_stand (ЗНАЮТ КАК)
 ├── tracing/       # JSONL trace + causal graph (parent_event_id)
 ├── evidence/      # SystemSnapshot + diff по слоям (global / per-user)

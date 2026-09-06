@@ -15,6 +15,7 @@ from pathlib import Path
 from memnotsafe.core.campaign import Campaign
 from memnotsafe.core.config import build_adapter, load_scenario, validate_judge_spec
 from memnotsafe.core.runner import RunnerError
+from memnotsafe.generation.errors import AttackerError
 from memnotsafe.reporting.html_report import write_html_report
 from memnotsafe.reporting.json_report import write_json_reports
 from memnotsafe.reporting.sarif import write_sarif
@@ -93,16 +94,30 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int) -
     repetitions = args.iterations if getattr(args, "iterations", None) else default_repetitions
 
     run_output = Path(args.output)
-    campaign = Campaign(scenario, target, run_output)
+    online = getattr(args, "online", False)
+    # При выключенном онлайне (по умолчанию) атакующая LLM не конфигурируется вовсе
+    # (SC-003): ни вызовов, ни клиента. AttackerConfig создаётся только под --online.
+    attacker_config = _online_attacker_config(args, scenario) if online else None
+    campaign = Campaign(
+        scenario,
+        target,
+        run_output,
+        attacker_config=attacker_config,
+        online=online,
+        online_attempts=getattr(args, "online_attempts", 5),
+    )
     try:
         result = await campaign.run(repetitions=repetitions)
-    except RunnerError as exc:
+    except (RunnerError, AttackerError) as exc:
+        # AttackerError здесь — config-ошибка ДО прогона (например, битый путь к
+        # корпусу): результатов ещё нет, exit 1.
         print(f"[FATAL] {exc}", file=sys.stderr)
         return 1
     finally:
         await target.aclose()
         if campaign.judge is not None:
             await campaign.judge.aclose()
+        await campaign.aclose_attacker()
 
     report_dir, html_name = _resolve_report_dir(str(run_output / "report"))
     written = write_json_reports(result, report_dir)
@@ -116,7 +131,47 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int) -
     html_path = write_html_report(result, report_dir / html_name, by_case)
 
     _print_summary(result, html_path)
+
+    # Сбой атакующей LLM В ХОДЕ эскалации ≠ «атака не пробила» (FR-011, SC-005):
+    # уже полученные результаты сохранены в runs/ и отчёт собран, но код — 1.
+    if campaign.attacker_error is not None:
+        print(f"[FATAL] сбой атакующей LLM в онлайн-эскалации: {campaign.attacker_error}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _online_attacker_config(args: argparse.Namespace, scenario):
+    """Конфигурация атакующей LLM для онлайн-уровня. Офлайн-заглушка без скрипта
+    получает детерминированные «переписывания» (research §9). При совпадении
+    модели атакующей LLM с моделью цели печатает предупреждение (FR-015)."""
+    from memnotsafe.generation.config import PROVIDER_STUB, warn_on_model_collision
+
+    config = _attacker_config_from_args(args)
+    if config.provider == PROVIDER_STUB and not config.scripted:
+        config.scripted = _online_stub_scripts(scenario, getattr(args, "online_attempts", 5))
+
+    target_model = (scenario.target.extra or {}).get("model_name")
+    warn = warn_on_model_collision(config, target_model)
+    if warn:
+        print(warn, file=sys.stderr)
+    return config
+
+
+def _online_stub_scripts(scenario, online_attempts: int) -> list[str]:
+    """Достаточно эталонных «переписываний» под офлайн-демо: по одному на попытку
+    каждой записи корпуса, с запасом. Заглушка бросит AttackerError, только если
+    скрипт реально исчерпан (что для этой оценки не случается)."""
+    from memnotsafe.generation.offline import escalation_stub_script
+
+    n = 1
+    if scenario.attack_family == "generated" and scenario.corpus_path:
+        try:
+            from memnotsafe.generation.corpus import read_corpus, valid_records
+
+            n = max(1, len(valid_records(read_corpus(scenario.corpus_path))))
+        except AttackerError:
+            n = 1
+    return [escalation_stub_script()] * (n * max(online_attempts, 1) + 2)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -362,6 +417,91 @@ def _print_judge_summary(m: dict) -> None:
               f"находки помечены INCONCLUSIVE, это не отрицательный результат атаки")
 
 
+def _add_online_flags(parser: argparse.ArgumentParser) -> None:
+    """Онлайн-уровень (US3). По умолчанию ВЫКЛ (FR-009): без флага поведение и
+    стоимость совпадают с текущим инструментом (SC-003)."""
+    parser.add_argument("--online", action="store_true", help="включить онлайн-эскалацию (по умолчанию выкл)")
+    parser.add_argument("--online-attempts", type=int, default=5, help="предел попыток онлайн-эскалации на атаку")
+
+
+def _add_attacker_flags(parser: argparse.ArgumentParser) -> None:
+    """Общий блок конфигурации атакующей LLM (contracts/cli-commands.md). Общий у
+    `generate` и онлайн-уровня `run`/`campaign` — одна модель в двух режимах.
+    Секрет — только именем переменной окружения (`--attacker-api-key-env`), не
+    значением (FR-016)."""
+    parser.add_argument("--attacker-provider", default="stub", help="stub (офлайн/CI/демо) | openai (живая генерация)")
+    parser.add_argument("--attacker-model", default=None, help="имя модели генератора атак")
+    parser.add_argument("--attacker-base-url", default=None, help="base URL для openai-совместимого провайдера")
+    parser.add_argument("--attacker-api-key-env", default="ATTACKER_API_KEY", help="имя переменной окружения с ключом атакующей LLM")
+    parser.add_argument("--attacker-budget", type=int, default=50, help="лимит вызовов атакующей LLM на операцию")
+
+
+def _attacker_config_from_args(args: argparse.Namespace):
+    from memnotsafe.generation.config import AttackerConfig
+
+    return AttackerConfig(
+        provider=getattr(args, "attacker_provider", "stub"),
+        model=getattr(args, "attacker_model", None),
+        base_url=getattr(args, "attacker_base_url", None),
+        api_key_env=getattr(args, "attacker_api_key_env", "ATTACKER_API_KEY"),
+        budget=getattr(args, "attacker_budget", 50),
+    )
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    """Precompute-генерация корпуса атак под профиль (US1). Коды возврата:
+    0 — корпус собран и сохранён (даже если часть записей отбракована, FR-012);
+    1 — config-ошибка профиля/классов или сбой атакующей LLM (AttackerError)."""
+    from memnotsafe.generation.attack_classes import load_attack_classes
+    from memnotsafe.generation.attacker_client import build_attacker_client
+    from memnotsafe.generation.budget import CallBudget
+    from memnotsafe.generation.config import PROVIDER_STUB
+    from memnotsafe.generation.corpus import write_corpus
+    from memnotsafe.generation.corpus_gen import generate_corpus
+    from memnotsafe.generation.errors import AttackerError
+    from memnotsafe.generation.offline import reference_answers
+    from memnotsafe.generation.profile import load_profile
+
+    try:
+        profile = load_profile(args.profile)
+        classes = load_attack_classes(args.classes or "attack_classes/")
+    except AttackerError as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 1
+
+    config = _attacker_config_from_args(args)
+    # Офлайн-заглушка без явного скрипта → детерминированные эталонные ответы под
+    # каждый класс (research §9): `generate --attacker-provider stub` работает без
+    # ключей и без сети, годится для CI и демо.
+    if config.provider == PROVIDER_STUB and not config.scripted:
+        config.scripted = reference_answers(classes)
+
+    client = build_attacker_client(config)
+    budget = CallBudget(limit=config.budget)
+
+    async def _run():
+        try:
+            return await generate_corpus(
+                profile, classes, client, budget, provider=config.provider, model=config.model
+            )
+        finally:
+            await client.aclose()
+
+    try:
+        corpus = asyncio.run(_run())
+    except AttackerError as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 1
+
+    out = write_corpus(corpus, args.out)
+    prov = corpus.provenance
+    print(f"Корпус сохранён: {out}")
+    print(f"  профиль: {prov.profile_id} (sha256 {prov.profile_sha256[:12]}…)")
+    print(f"  классы:  {', '.join(prov.attack_classes) or '—'}")
+    print(f"  записей: {len(corpus.records)}; вызовов атакующей LLM: {prov.attacker_calls}")
+    return 0
+
+
 def _add_judge_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--judge", action="store_true", help="включить LLM-судью независимо от judge.enabled в сценарии")
     parser.add_argument("--no-judge", action="store_true", help="выключить судью независимо от сценария (приоритет над --judge)")
@@ -386,6 +526,8 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--scenario", required=True)
     pr.add_argument("--output", required=True)
     pr.add_argument("--iterations", type=int, default=None)
+    _add_online_flags(pr)
+    _add_attacker_flags(pr)
     _add_judge_flags(pr)
     pr.set_defaults(func=cmd_run)
 
@@ -394,8 +536,17 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--scenario", required=True)
     pc.add_argument("--output", required=True)
     pc.add_argument("--iterations", type=int, default=5)
+    _add_online_flags(pc)
+    _add_attacker_flags(pc)
     _add_judge_flags(pc)
     pc.set_defaults(func=cmd_campaign)
+
+    pgen = sub.add_parser("generate", help="precompute-генерация корпуса атак под профиль (US1)")
+    pgen.add_argument("--profile", required=True, help="путь к файлу-профилю агента")
+    pgen.add_argument("--classes", default=None, help="каталог/файл описаний классов (по умолчанию attack_classes/)")
+    pgen.add_argument("--out", required=True, help="куда сохранить корпус (corpora/<name>.yaml)")
+    _add_attacker_flags(pgen)
+    pgen.set_defaults(func=cmd_generate)
 
     prep = sub.add_parser("report", help="пересобрать report.html/.json из сохранённого runs/<name>")
     prep.add_argument("--input", required=True)

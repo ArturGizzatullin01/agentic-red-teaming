@@ -139,6 +139,34 @@ def _tier_plaque(f: Finding) -> str:
     return ""
 
 
+_ORIGIN_LABEL = {
+    "handwritten": "рукописный пак",
+    "corpus": "заранее сгенерированный корпус",
+    "online": "онлайн-адаптация",
+}
+
+
+def _origin_line(f: Finding) -> str:
+    """Происхождение атаки и — для онлайновых — число попыток и факт исчерпания
+    бюджета (FR-013/SC-007). Читается из evidence.provenance, который пишет слой
+    кампании/эскалации; при его отсутствии строка не показывается."""
+    prov = (f.evidence or {}).get("provenance") or {}
+    origin = prov.get("origin")
+    if not origin:
+        return ""
+    label = _ORIGIN_LABEL.get(origin, origin)
+    parts = [f"Происхождение: <strong>{_esc(label)}</strong>"]
+    if prov.get("attack_class"):
+        parts.append(f"класс: {_esc(prov['attack_class'])}")
+    if origin == "online" or prov.get("attempts") is not None:
+        parts.append(f"попыток: {_esc(prov.get('attempts'))}")
+    if prov.get("budget_exhausted"):
+        parts.append("бюджет атакующей LLM исчерпан")
+    if prov.get("corpus_id"):
+        parts.append(f"корпус: {_esc(prov['corpus_id'])}")
+    return f'<p class="muted provenance">{" · ".join(parts)}</p>'
+
+
 def _finding_card(f: Finding, events: list[dict]) -> str:
     status_class = {"SUCCESS": "success", "INCONCLUSIVE": "inconclusive"}.get(f.status, "not-exploitable")
     evidence_json = _esc(json.dumps(f.evidence, ensure_ascii=False, indent=2))
@@ -152,6 +180,7 @@ def _finding_card(f: Finding, events: list[dict]) -> str:
        ATLAS {_esc(f.atlas_technique)} ({_esc(f.atlas_tactic)}) · OWASP {_esc(f.owasp_asi)}</p>
   </header>
   {_tier_plaque(f)}
+  {_origin_line(f)}
   <div class="ladder">{_lifecycle_ladder(f.stages, f.stage_provenance)}</div>
   {_judge_block(f)}
   <details>

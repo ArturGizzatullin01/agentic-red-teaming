@@ -51,6 +51,9 @@ def build_sarif(findings: list[Finding], *, tool_name: str = "memnotsafe") -> di
                     "verdict_source": {k: v["verdict_source"] for k, v in f.stage_provenance.items()},
                     "llm_confirmed": f.llm_confirmed,
                     "confidence_tier": f.confidence_tier,
+                    # Происхождение атаки и стоимость онлайн-адаптации (FR-013/FR-014):
+                    # рукописный пак / корпус / онлайн, число попыток, исчерпание бюджета.
+                    "attack_provenance": (f.evidence or {}).get("provenance", {}),
                 },
             }
         )

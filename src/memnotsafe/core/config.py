@@ -68,6 +68,9 @@ class Scenario:
     trigger_override: str | None = None
     oracle_overrides: dict[str, Any] = field(default_factory=dict)
     judge: JudgeSpec = field(default_factory=JudgeSpec)
+    # Путь к корпусу атак для family="generated" (фича 004). Аддитивно: у обычных
+    # сценариев остаётся None, поведение существующих прогонов не меняется.
+    corpus_path: Path | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -102,6 +105,7 @@ def load_scenario(path: str | Path) -> Scenario:
         trigger_override=(raw.get("trigger") or {}).get("prompt"),
         oracle_overrides=raw.get("oracle", {}) or {},
         judge=_parse_judge(raw.get("judge")),
+        corpus_path=(Path(attack["corpus"]) if attack.get("corpus") else None),
         raw=raw,
     )
 
