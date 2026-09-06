@@ -67,10 +67,12 @@ class Campaign:
                 victim_user_id=self.scenario.victim.user_id,
                 run_seed=attempt,
                 case_id=case_id,
+                params=self.scenario.raw.get("params", {}) or {},
             )
             try:
                 result = await run_attack(
-                    attack, ctx, self.target, run_id=run_id, recorder=recorder, judge=self.judge
+                    attack, ctx, self.target, run_id=run_id, recorder=recorder, judge=self.judge,
+                    require_case_marker=self.scenario.require_case_marker,
                 )
             except RunnerError:
                 raise  # раннер-ошибка — не глотаем, CLI обязан вернуть exit 1
@@ -88,6 +90,11 @@ class Campaign:
             )
             (evidence_dir / f"{case_id}-diff.json").write_text(
                 json.dumps(result.evidence.get("diff"), ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            # 002-reporting: полный журнал диалога кейса — отдельным файлом,
+            # чтобы основной HTML не тащил весь диалог в себе
+            (evidence_dir / f"{case_id}-transcript.json").write_text(
+                json.dumps(result.evidence.get("transcript"), ensure_ascii=False, indent=2), encoding="utf-8"
             )
             if result.success:
                 # Proof artifact — только для подтверждённых находок:

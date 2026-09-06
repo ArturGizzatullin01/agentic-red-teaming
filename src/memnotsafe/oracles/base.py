@@ -47,6 +47,15 @@ class EvaluationContext:
     # сейчас значение задаётся только явным конструированием EvaluationContext
     # в офлайн-тестах. Не путать с expected_effect.markers (маркеры эффекта).
     case_marker: str | None = None
+    # Доверенный контекст происхождения (T002-5): runner — единственный, кто
+    # знает, какая сессия в какой фазе создавалась; эти поля передают это
+    # знание oracle'ам явно (не задним числом по событиям). Событие
+    # trigger-фазы правильного principal'а = session_id ∈ trigger_session_ids
+    # И actor == victim_user_id. Пустые кортежи = контекст не передан
+    # (ручные/старые конструкции) → фазовая атрибуция событий невозможна,
+    # ADOPT/TOOL/EFFECT обязаны отвечать UNKNOWN, не False.
+    delivery_session_ids: tuple[str, ...] = ()
+    trigger_session_ids: tuple[str, ...] = ()
 
 
 def unknown(stage: str, reason: str, *, evidence_kind: str = EVIDENCE_KIND_DETERMINISTIC) -> StageResult:

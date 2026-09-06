@@ -1,0 +1,14 @@
+id: cross-lingual-insertion
+target:
+  adapter: mock
+  vulnerable: true
+actors:
+  attacker:
+    user_id: '1001'
+  victim:
+    user_id: '1001'
+attack:
+  family: cross_lingual_insertion
+metrics:
+  repetitions: 1
+  stop_on_success: true

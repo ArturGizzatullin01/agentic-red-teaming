@@ -4,10 +4,20 @@
 вызывающим кодом — тоже сработает благодаря __init_subclass__)."""
 
 from memnotsafe.attacks import (  # noqa: F401
+    consent_laundering,
+    contact_supersede,
+    cross_lingual_insertion,
+    cross_topic_smuggle,
     cross_user_bac,
     direct_poisoning,
+    document_regulation_graft,
+    fake_shared_past,
     false_precedent,
+    procedural_graft,
+    recommendation_hijack,
     scope_escalation,
+    system_log_impersonation,
     tool_argument_hijack,
+    tool_error_echo_poisoning,
 )
 from memnotsafe.attacks.base import ATTACK_REGISTRY, AttackBase, get_attack  # noqa: F401

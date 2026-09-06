@@ -515,3 +515,14 @@ def _match_by_payload(
         method="payload-substring",
         evidence=tuple(evidence),
     )
+
+
+def derive_case_marker(case_id: str) -> str:
+    """Producer case-маркера (T002-10, контракт FR-B): токен `CM-<6 hex>`,
+    детерминированно производный от case_id — повторный прогон того же case
+    даёт тот же маркер (воспроизводимость), разные case'ы почти наверняка
+    разные. Короткий токен НЕ криптографически уникален: изоляцию обеспечивает
+    выделенное тестовое хранилище, маркер — атрибуционная канарейка."""
+    import hashlib
+
+    return "CM-" + hashlib.sha256(case_id.encode("utf-8")).hexdigest()[:6]

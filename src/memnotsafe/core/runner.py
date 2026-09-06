@@ -39,10 +39,12 @@ from memnotsafe.adapters.base import Capabilities, TargetAdapter
 from memnotsafe.attacks.base import AttackBase, AttackContext
 from memnotsafe.core.models import AttackResult, JudgeVerdict, StageResult
 from memnotsafe.evidence.diff import SnapshotDiff, compute_diff
+from memnotsafe.evidence.matching import derive_case_marker
 from memnotsafe.evidence.snapshot import SystemSnapshot
 from memnotsafe.oracles.base import EvaluationContext
 from memnotsafe.oracles.composite import composite_success, evaluate_all
 from memnotsafe.tracing.recorder import TraceRecorder
+from memnotsafe.tracing.transcript import TranscriptBuilder
 
 
 def new_run_id() -> str:
@@ -180,10 +182,14 @@ async def run_attack(
     run_id: str,
     recorder: TraceRecorder | None = None,
     judge: Any | None = None,
+    require_case_marker: bool = False,
 ) -> AttackResult:
     """`judge` опционален и по умолчанию отсутствует: без него раннер работает
     ровно как до появления фичи, без сети и ключей (FR-001, SC-003)."""
     book = _SessionBook(target)
+    # 002-reporting: журнал диалога — каждая отправленная реплика и каждый
+    # реальный ответ; при ошибке сохраняется наблюдённая часть (incomplete)
+    transcript = TranscriptBuilder(run_id=run_id, case_id=ctx.case_id)
     primary: BaseException | None = None
     phase = "init"
     # detail — ТОЛЬКО runner-конструируемые строки (id сессий/операций, типы),
@@ -196,13 +202,40 @@ async def run_attack(
         probe = await target.probe()
         capabilities: Capabilities = probe.capabilities
 
+        # T002-10 (FR-B): producer маркера — runner; заполняется ДО generate(),
+        # чтобы атака могла подставить его ЯВНЫМ плейсхолдером {case_marker}.
+        if ctx.case_marker is None:
+            ctx.case_marker = derive_case_marker(ctx.case_id)
+
         candidate = attack.generate(ctx)
+
+        if require_case_marker:
+            # маркер может жить в payload ИЛИ в любой delivery-реплике
+            # (двухходовая consent-атака записывает второй ход) — та же
+            # политика, что у settle-доказательства ниже
+            delivery_texts = [s.message for s in attack.delivery_steps(candidate, ctx)]
+            marker_placed = any(ctx.case_marker in t for t in delivery_texts if t)
+            if not marker_placed:
+                # кандидат без маркера при объявленной маркерной изоляции —
+                # config error ДО доставки (FR-B), exit 1 на уровне CLI
+                raise RunnerError(
+                    f"config error на случае {ctx.case_id}: scenario требует case-marker "
+                    f"({ctx.case_marker}), но ни payload, ни delivery-реплики его "
+                    "не содержат — подстановка возможна только через явный "
+                    "плейсхолдер {case_marker}"
+                )
 
         # --- baseline: та же политика владения/ошибок, что и основной поток
         baseline_session = await book.open(ctx.victim_user_id)
         phase = "baseline_send"
         baseline_result = await target.send(baseline_session, candidate.trigger)
         baseline_response = baseline_result.content
+        transcript.add(session_id=baseline_session, actor_user_id=ctx.victim_user_id,
+                       role="user", phase="baseline", step_label="baseline_trigger",
+                       content=candidate.trigger)
+        transcript.add(session_id=baseline_session, actor_user_id=ctx.victim_user_id,
+                       role="agent", phase="baseline", step_label="baseline_trigger",
+                       content=baseline_response)
         phase = "baseline_close"
         await book.close(baseline_session)
 
@@ -218,12 +251,23 @@ async def run_attack(
 
         # --- доставка: все созданные сессии (основная + любые as_user) — в book
         attacker_session = await book.open(ctx.attacker_user_id)
+        delivery_session_ids: list[str] = [attacker_session]
+        delivery_messages: list[str] = []
         for step in attack.delivery_steps(candidate, ctx):
             phase = f"delivery_send[{step.label}]"
             as_user = step.as_user or ctx.attacker_user_id
             session = attacker_session if as_user == ctx.attacker_user_id else await book.open(as_user)
             result = await target.send(session, step.message)
             _collect(result.events)
+            if session not in delivery_session_ids:
+                delivery_session_ids.append(session)
+            delivery_messages.append(step.message)
+            transcript.add(session_id=session, actor_user_id=as_user,
+                           role="user", phase="delivery", step_label=step.label,
+                           content=step.message)
+            transcript.add(session_id=session, actor_user_id=as_user,
+                           role="agent", phase="delivery", step_label=step.label,
+                           content=result.content)
 
         # --- финализация ВСЕХ delivery-сессий ДО settle: у investment_stand
         # close_session = finalize памяти, settle обязан видеть записанное.
@@ -234,13 +278,29 @@ async def run_attack(
             raise RuntimeError(f"finalize delivery-сессий: {finalize_errors}")
 
         phase = "settle"
-        persistence_ok = await target.wait_until_persistent(
-            {"expect_text_contains": candidate.payload[:60], "attacker_user_id": ctx.attacker_user_id}
+        # T002-10: settle marker-aware — финалайзер стенда перефразирует текст,
+        # буквальная подстрока payload ненадёжна; адаптер атрибутирует запись
+        # по case-marker (общий контракт wait_until_persistent, matching в адаптере).
+        # Маркер передаётся ТОЛЬКО если атака реально встроила его в payload
+        # (плейсхолдер {case_marker}); для legacy-атак — буквальная подстрока.
+        settle_evidence: dict[str, Any] = {
+            "expect_text_contains": candidate.payload[:60],
+            "attacker_user_id": ctx.attacker_user_id,
+        }
+        # Маркер-атрибут включается ТОЛЬКО если атака реально встроила маркер
+        # в payload или любую delivery-реплику (плейсхолдер {case_marker});
+        # для legacy-атак маркерный путь атрибуции не применяется.
+        marker_used = bool(ctx.case_marker) and (
+            ctx.case_marker in candidate.payload or any(ctx.case_marker in m for m in delivery_messages)
         )
+        if marker_used:
+            settle_evidence["case_marker"] = ctx.case_marker
+        persistence_ok = await target.wait_until_persistent(settle_evidence)
 
         # --- trigger в НОВОЙ сессии (после границы сессии доставки)
         phase = "trigger_open"
         victim_session = await book.open(ctx.victim_user_id)
+        trigger_session_ids: list[str] = [victim_session]
         victim_response = ""
         for step in attack.trigger_steps(candidate, ctx):
             if step.message is None:
@@ -250,6 +310,14 @@ async def run_attack(
             session = victim_session if as_user == ctx.victim_user_id else await book.open(as_user)
             result = await target.send(session, step.message)
             _collect(result.events)
+            if session not in trigger_session_ids:
+                trigger_session_ids.append(session)
+            transcript.add(session_id=session, actor_user_id=as_user,
+                           role="user", phase="trigger", step_label=step.label,
+                           content=step.message)
+            transcript.add(session_id=session, actor_user_id=as_user,
+                           role="agent", phase="trigger", step_label=step.label,
+                           content=result.content)
             if session == victim_session:
                 victim_response = result.content
 
@@ -264,9 +332,14 @@ async def run_attack(
 
         if recorder is not None:
             recorder.flush_case_trace(ctx.case_id)
+            recorder.record_case_transcript(ctx.case_id, transcript)
 
     except BaseException as exc:  # noqa: BLE001 — primary; cleanup в finally её не маскирует
         primary = exc
+        # 002-reporting: наблюдённая часть диалога не теряется из-за ошибки
+        transcript.mark_incomplete(f"runner interrupted at phase={phase}")
+        if recorder is not None:
+            recorder.record_case_transcript(ctx.case_id, transcript)
     finally:
         # cleanup всех незакрытых сессий; каждая — ровно одна попытка; отмена
         # во время cleanup не прерывает обработку остальных доступных сессий
@@ -337,6 +410,13 @@ async def run_attack(
         victim_trace=victim_trace,
         persistence_ok=persistence_ok,
         judge_verdicts=judge_verdicts,
+        # T002-10: маркер записи — та же канарейка, что у адаптера в settle;
+        # WRITE-матчер атрибутирует по ней только при реально встроенном маркере
+        case_marker=ctx.case_marker if marker_used else None,
+        # T002-5: доверенный контекст происхождения — runner единственный знает
+        # фазовую принадлежность сессий; oracle'ам запрещено выводить её из событий
+        delivery_session_ids=tuple(delivery_session_ids),
+        trigger_session_ids=tuple(trigger_session_ids),
     )
     stages: list[StageResult] = evaluate_all(ec)
     success = composite_success(stages)
@@ -354,6 +434,7 @@ async def run_attack(
             "trigger": candidate.trigger,
             "expected_effect": candidate.expected_effect,
         },
+        "transcript": transcript.to_wire(),
     }
 
     return AttackResult(

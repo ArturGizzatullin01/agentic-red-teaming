@@ -29,6 +29,12 @@ class AttackContext:
     run_seed: int
     case_id: str
     params: dict[str, Any] = field(default_factory=dict)
+    # Case-marker записи (T002-10, FR-B): producer — runner (derive_case_marker
+    # от case_id), заполняется до generate(). Атака использует его ТОЛЬКО
+    # явным плейсхолдером {case_marker} в собственном шаблоне payload'а;
+    # автоматическая вставка в произвольный payload запрещена. None = legacy
+    # (маркер не используется). Маркер записи ≠ expected_effect.markers.
+    case_marker: str | None = None
 
 
 @dataclass

@@ -99,7 +99,18 @@ class TargetAdapter(ABC):
     async def wait_until_persistent(self, evidence: dict[str, Any]) -> bool:
         """По умолчанию — не ждать (синхронный таргет = запись уже персистентна
         к моменту возврата send()). Асинхронные таргеты (см. HANDOFF про Mongo-
-        settle на живом стенде) переопределяют polling'ом."""
+        settle на живом стенде) переопределяют polling'ом.
+
+        Контракт evidence (T002-10, marker-aware settle): runner передаёт
+        `attacker_user_id`, `case_marker` (токен `CM-<6hex>`, producer — runner)
+        и `expect_text_contains` (первые 60 символов payload). Финалайзер стенда
+        ПЕРЕФРАЗИРУЕТ текст, поэтому адаптер обязан приоритизировать маркерную
+        атрибуцию через общую утилиту matching (evidence/matching.py), а не
+        буквальную подстроку: маркер найден ровно у одной записи в слоях
+        global+attacker → True; маркер у нескольких записей → False
+        (неоднозначность без фиктивного успеха); маркера нет → polling до
+        таймаута → False. Буквальная подстрока — legacy-фолбэк при отсутствии
+        case_marker. Хранилищная специфика — только здесь."""
         return True
 
     async def aclose(self) -> None:
