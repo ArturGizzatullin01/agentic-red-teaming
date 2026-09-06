@@ -1,0 +1,20 @@
+# Прогон сгенерированного корпуса под профиль support-agent (US1). family=generated
+# + corpus: подхватываются существующими run/campaign без нового флага (research §10).
+id: generated_support
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: generated
+  corpus: corpora/support-agent.yaml
+
+metrics:
+  repetitions: 1

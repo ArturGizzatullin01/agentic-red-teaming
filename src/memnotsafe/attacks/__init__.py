@@ -13,6 +13,7 @@ from memnotsafe.attacks import (  # noqa: F401
     document_regulation_graft,
     fake_shared_past,
     false_precedent,
+    generated,
     procedural_graft,
     recommendation_hijack,
     scope_escalation,

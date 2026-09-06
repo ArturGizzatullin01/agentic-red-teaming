@@ -1,0 +1,21 @@
+# Переиспользование ТОГО ЖЕ корпуса (corpora/support-agent.yaml) на втором
+# похожем агенте без повторной генерации (US1 / SC-002). Провенанс корпуса
+# остаётся виден в отчёте — прогон не под родной профиль честно помечен.
+id: generated_support_agent2
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: generated
+  corpus: corpora/support-agent.yaml
+
+metrics:
+  repetitions: 1

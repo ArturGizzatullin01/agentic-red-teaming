@@ -68,8 +68,9 @@ class Scenario:
     trigger_override: str | None = None
     oracle_overrides: dict[str, Any] = field(default_factory=dict)
     judge: JudgeSpec = field(default_factory=JudgeSpec)
-    # T002-10 (FR-B): сценарий объявляет маркерную изоляцию; кандидат без
-    # case-marker в payload — config error ДО доставки (проверяет runner).
+    # Путь к корпусу атак для family="generated" (фича 004). Аддитивно: у обычных
+    # сценариев остаётся None, поведение существующих прогонов не меняется.
+    corpus_path: Path | None = None
     require_case_marker: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -105,6 +106,7 @@ def load_scenario(path: str | Path) -> Scenario:
         trigger_override=(raw.get("trigger") or {}).get("prompt"),
         oracle_overrides=raw.get("oracle", {}) or {},
         judge=_parse_judge(raw.get("judge")),
+        corpus_path=(Path(attack["corpus"]) if attack.get("corpus") else None),
         require_case_marker=bool(raw.get("require_case_marker", False)),
         raw=raw,
     )
