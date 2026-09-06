@@ -162,13 +162,13 @@ scenarios/generated_support.yaml` даёт честный вердикт на `M
 
 ### Tests for User Story 4 ⚠️
 
-- [ ] T038 [P] [US4] Тесты провенанса в отчёте: `origin` у каждой находки, `attempts` у онлайновых, агрегат стоимости в `campaign.json`, корректный severity/ATLAS для `family=generated` (SC-007, FR-013, FR-014), в `tests/test_escalation.py`
+- [X] T038 [P] [US4] Тесты провенанса в отчёте: `origin` у каждой находки, `attempts` у онлайновых, агрегат стоимости в `campaign.json`, корректный severity/ATLAS для `family=generated` (SC-007, FR-013, FR-014), в `tests/test_escalation.py`
 
 ### Implementation for User Story 4
 
-- [ ] T039 [US4] Резолвить severity и ATLAS-маппинг по `evidence.provenance.attack_class` (а не по `family="generated"`) в `src/memnotsafe/reporting/findings.py` (FR-003, FR-013, research §2)
-- [ ] T040 [US4] Писать агрегат стоимости прогона (суммарные вызовы атакующей LLM, `budget_exhausted`) рядом с существующим `metadata` в `campaign.json` в `src/memnotsafe/core/campaign.py` (FR-014, research §12)
-- [ ] T041 [P] [US4] Показывать происхождение атаки и число попыток в отчётах: `src/memnotsafe/reporting/html_report.py`, `src/memnotsafe/reporting/json_report.py`, `src/memnotsafe/reporting/sarif.py` (зависит от T039)
+- [X] T039 [US4] Резолвить severity и ATLAS-маппинг по `evidence.provenance.attack_class` (а не по `family="generated"`) в `src/memnotsafe/reporting/findings.py` (FR-003, FR-013, research §2)
+- [X] T040 [US4] Писать агрегат стоимости прогона (суммарные вызовы атакующей LLM, `budget_exhausted`) рядом с существующим `metadata` в `campaign.json` в `src/memnotsafe/core/campaign.py` (FR-014, research §12)
+- [X] T041 [P] [US4] Показывать происхождение атаки и число попыток в отчётах: `src/memnotsafe/reporting/html_report.py`, `src/memnotsafe/reporting/json_report.py`, `src/memnotsafe/reporting/sarif.py` (зависит от T039)
 
 **Checkpoint**: все user stories независимо работоспособны
 
@@ -176,10 +176,10 @@ scenarios/generated_support.yaml` даёт честный вердикт на `M
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T042 [P] Дополнить `README.md` разделом о генерации корпуса и многоуровневой эскалации: команда `generate`, флаги `--online*`, каталоги `profiles/`/`attack_classes/`/`corpora/`, работа офлайн через `--attacker-provider stub`
-- [ ] T043 Прогнать все сценарии из `specs/004-llm-attack-generation/quickstart.md` (сценарии 1–6) и убедиться, что фактические коды возврата и артефакты совпадают с ожидаемыми
-- [ ] T044 Проверить соблюдение SC-008: `git diff main -- src/memnotsafe/core/runner.py src/memnotsafe/core/models.py src/memnotsafe/oracles/ src/memnotsafe/attacks/base.py` пуст
-- [ ] T045 Прогнать полный набор тестов `python3 -m pytest tests/ -q`: все ранее существовавшие тесты зелёные (baseline 174) плюс новые офлайн-тесты фичи
+- [X] T042 [P] Дополнить `README.md` разделом о генерации корпуса и многоуровневой эскалации: команда `generate`, флаги `--online*`, каталоги `profiles/`/`attack_classes/`/`corpora/`, работа офлайн через `--attacker-provider stub`
+- [X] T043 Прогнать все сценарии из `specs/004-llm-attack-generation/quickstart.md` (сценарии 1–6) и убедиться, что фактические коды возврата и артефакты совпадают с ожидаемыми
+- [X] T044 Проверить соблюдение SC-008: `git diff main -- src/memnotsafe/core/runner.py src/memnotsafe/core/models.py src/memnotsafe/oracles/ src/memnotsafe/attacks/base.py` пуст
+- [X] T045 Прогнать полный набор тестов `python3 -m pytest tests/ -q`: все ранее существовавшие тесты зелёные (baseline 174) плюс новые офлайн-тесты фичи
 
 ---
 

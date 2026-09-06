@@ -111,3 +111,63 @@ def test_cli_attacker_failure_exit_one_but_saves_run(tmp_path, monkeypatch):
                  "--online", "--attacker-provider", "openai", "--attacker-base-url", "http://127.0.0.1:1"])
     assert code == 1
     assert (out / "campaign.json").exists()  # результаты сохранены до выхода
+
+
+# --------------------------------------------------------------- US4 провенанс в отчёте
+
+def _corpus_scenario():
+    return Scenario(
+        id="gen", path=Path("gen.yaml"),
+        target=TargetSpec(adapter="mock", extra={"vulnerable": True}),
+        attacker=ActorConfig("1001"), victim=ActorConfig("1002"),
+        attack_family="generated", repetitions=1, corpus_path=Path("corpora/support-agent.yaml"),
+    )
+
+
+def test_findings_carry_origin_and_severity_by_attack_class(tmp_path):
+    # FR-013/FR-003: у каждой находки видно origin; severity/ATLAS резолвятся по
+    # attack_class из провенанса, а не по family="generated".
+    from memnotsafe.reporting.findings import build_findings
+
+    campaign = Campaign(_corpus_scenario(), MockTarget(vulnerable=True), tmp_path / "run")
+    result = asyncio.run(campaign.run())
+    findings = build_findings(result.results)
+
+    by_class = {f.evidence["provenance"]["attack_class"]: f for f in findings}
+    assert all(f.evidence["provenance"]["origin"] == "corpus" for f in findings)
+    # cross_user_bac резолвится в CRITICAL (а не generic MEDIUM для generated).
+    assert by_class["cross_user_bac"].severity == "CRITICAL"
+    assert by_class["cross_user_bac"].status == "SUCCESS"
+    assert by_class["scope_escalation"].severity == "HIGH"
+    # title — имя класса-источника, а не «Сгенерированная атака».
+    assert "generated" not in by_class["cross_user_bac"].title.lower()
+
+
+def test_online_finding_reports_attempts(tmp_path):
+    # SC-007: у онлайновой находки видно число потраченных попыток.
+    campaign, r = _run(online=True, attempts=5, scripted=[escalation_stub_script()])
+    assert r.evidence["provenance"]["attempts"] == 2
+    assert r.evidence["provenance"]["origin"] == "online"
+
+
+def test_campaign_json_records_attacker_cost(tmp_path):
+    # FR-014: агрегат стоимости (вызовы, исчерпание бюджета) — в campaign.json.
+    import json
+
+    out = tmp_path / "run"
+    code = main(["run", "--scenario", ESC_SCENARIO, "--output", str(out),
+                 "--online", "--online-attempts", "5", "--attacker-provider", "stub"])
+    assert code == 0
+    meta = json.load((out / "campaign.json").open())["metadata"]["attacker"]
+    assert meta["active"] is True
+    assert meta["calls_used"] == 1  # одно переписывание до успеха
+    assert meta["budget_exhausted"] is False
+
+
+def test_online_off_campaign_json_attacker_inactive(tmp_path):
+    # SC-003: без --online блок стоимости — ровно {"active": false}.
+    import json
+
+    out = tmp_path / "run"
+    main(["run", "--scenario", ESC_SCENARIO, "--output", str(out)])
+    assert json.load((out / "campaign.json").open())["metadata"]["attacker"] == {"active": False}

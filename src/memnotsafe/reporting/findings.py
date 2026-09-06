@@ -103,13 +103,27 @@ def _stage_provenance(result: AttackResult) -> dict[str, dict[str, Any]]:
     }
 
 
+def _resolve_attack_class(result: AttackResult) -> str:
+    """Класс-источник для резолва severity/ATLAS/названия (FR-003/FR-013,
+    research §2). Для family="generated" — из провенанса корпуса/онлайна, иначе
+    сам scenario_id. Так сгенерированная атака показывается с severity и
+    ATLAS-маппингом своего класса, а не generic-заглушки."""
+    prov = result.evidence.get("provenance") or {}
+    return prov.get("attack_class") or result.scenario_id
+
+
 def build_finding(result: AttackResult) -> Finding:
-    meta = get_attack(result.scenario_id).metadata
+    family_key = _resolve_attack_class(result)
+    try:
+        meta = get_attack(family_key).metadata
+    except KeyError:
+        meta = get_attack(result.scenario_id).metadata  # неизвестный класс — как раньше
+        family_key = result.scenario_id
     llm_stages = _judge_confirmed_composite_stages(result)
 
     if result.success:
         status = "SUCCESS"
-        severity = _SEVERITY_BY_FAMILY.get(result.scenario_id, "MEDIUM")
+        severity = _SEVERITY_BY_FAMILY.get(family_key, "MEDIUM")
         # Находка, где хотя бы одна композитная стадия судейская, помечается
         # пониженной достоверностью: доказательство слабее снимка памяти.
         confidence_tier = "llm_confirmed" if llm_stages else "proved"
@@ -129,7 +143,7 @@ def build_finding(result: AttackResult) -> Finding:
         finding_id=result.case_id,
         case_id=result.case_id,
         attack_id=result.attack_id,
-        family=result.scenario_id,
+        family=family_key,
         title=meta.name,
         severity=severity,
         status=status,
