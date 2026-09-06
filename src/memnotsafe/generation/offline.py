@@ -148,3 +148,11 @@ def reference_answers(
         json.dumps(reference_record(k.family, attacker=attacker, victim=victim), ensure_ascii=False)
         for k in classes
     ]
+
+
+def escalation_stub_script(*, attacker: str = DEFAULT_ATTACKER, victim: str = DEFAULT_VICTIM) -> str:
+    """Эталонный «переписанный» ответ атакующей LLM для офлайн-эскалации: рабочий
+    cross_user_bac (глобальное правило + чужой cus), пробивающий уязвимый mock со
+    следующей попытки. Скрипт «первая попытка не пробивает, вторая пробивает»
+    (research §9): первую даёт seed-корпус, вторую — эта запись."""
+    return json.dumps(_cross_user_bac(attacker, victim), ensure_ascii=False)

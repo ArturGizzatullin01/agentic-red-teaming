@@ -111,3 +111,39 @@ def test_protected_mock_makes_generated_corpus_not_exploitable(tmp_path):
 
     xbac = next(r for r in result.results if r.evidence["provenance"]["attack_class"] == "cross_user_bac")
     assert xbac.success is False  # заблокировано авторизацией, честный NOT_EXPLOITABLE
+
+
+# --------------------------------------------------------------- US2: fail→success e2e
+
+def test_us2_online_escalation_fail_then_success(tmp_path):
+    # SC-006: один офлайн-прогон доказывает ОБА исхода одной и той же атаки —
+    # без онлайна честный NOT_EXPLOITABLE, с онлайном успех со 2-й попытки.
+    from pathlib import Path
+
+    from memnotsafe.generation.config import AttackerConfig
+    from memnotsafe.generation.offline import escalation_stub_script
+
+    def esc_scenario():
+        return Scenario(
+            id="esc", path=tmp_path / "esc.yaml",
+            target=TargetSpec(adapter="mock", extra={"vulnerable": True}),
+            attacker=ActorConfig("1001"), victim=ActorConfig("1002"),
+            attack_family="generated", repetitions=1,
+            corpus_path=Path("corpora/escalation-seed.yaml"),
+        )
+
+    # Без онлайна — атака из seed-корпуса честно не пробивает.
+    off = Campaign(esc_scenario(), MockTarget(vulnerable=True), tmp_path / "off")
+    r_off = asyncio.run(off.run())
+    assert r_off.results[0].success is False
+
+    # С онлайном — та же атака пробивается адаптацией со 2-й попытки, попыток ≤ лимита.
+    cfg = AttackerConfig(provider="stub", scripted=[escalation_stub_script()], budget=50)
+    on = Campaign(esc_scenario(), MockTarget(vulnerable=True), tmp_path / "on",
+                  attacker_config=cfg, online=True, online_attempts=5)
+    r_on = asyncio.run(on.run())
+    res = r_on.results[0]
+    assert res.success is True
+    assert res.evidence["provenance"]["attempts"] == 2
+    assert res.evidence["provenance"]["origin"] == "online"
+    assert "1001" in res.evidence["victim_response"]  # чужой cus утёк жертве после адаптации

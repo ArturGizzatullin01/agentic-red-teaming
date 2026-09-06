@@ -1,0 +1,22 @@
+# Сценарий онлайн-эскалации (US2/US3). Seed-корпус даёт слабую атаку, которую
+# корпус помечает NOT_EXPLOITABLE; с флагом --online атакующая LLM переписывает
+# её и пробивает уязвимый mock со 2-й попытки (research §9). Без --online —
+# поведение и стоимость как сейчас (SC-003).
+id: generated_escalation
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: generated
+  corpus: corpora/escalation-seed.yaml
+
+metrics:
+  repetitions: 1

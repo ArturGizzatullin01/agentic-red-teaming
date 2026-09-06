@@ -111,18 +111,18 @@ scenarios/generated_support.yaml` даёт честный вердикт на `M
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T025 [P] [US2] Тесты цикла эскалации: лимит попыток не превышается, стоп на первом успехе, исчерпание бюджета → `exit 0` + `budget_exhausted` в провенансе, сбой атакующей LLM → `AttackerError` и `exit 1` с сохранением уже полученных результатов (SC-004, SC-005, FR-010, FR-011), в `tests/test_escalation.py`
-- [ ] T026 [P] [US2] Офлайн e2e US2 «fail→success» на `MockTarget` + `StubAttackerClient`, доказывающий и успех, и честный `NOT_EXPLOITABLE` (SC-006), в `tests/test_generation_offline.py`
+- [X] T025 [P] [US2] Тесты цикла эскалации: лимит попыток не превышается, стоп на первом успехе, исчерпание бюджета → `exit 0` + `budget_exhausted` в провенансе, сбой атакующей LLM → `AttackerError` и `exit 1` с сохранением уже полученных результатов (SC-004, SC-005, FR-010, FR-011), в `tests/test_escalation.py`
+- [X] T026 [P] [US2] Офлайн e2e US2 «fail→success» на `MockTarget` + `StubAttackerClient`, доказывающий и успех, и честный `NOT_EXPLOITABLE` (SC-006), в `tests/test_generation_offline.py`
 
 ### Implementation for User Story 2
 
-- [ ] T027 [US2] Добавить промпт переписывания атаки по обратной связи (ответ защищающегося + воронка стадий + прошлая запись) в `src/memnotsafe/generation/prompts.py`
-- [ ] T028 [US2] Реализовать ЧИСТУЮ функцию `rewrite(feedback, client, budget) -> CorpusRecord` (без знания о таргете и раннере; невалидный ответ модели отбраковывается) в `src/memnotsafe/generation/rewrite.py` (зависит от T027)
-- [ ] T029 [US2] Реализовать dataclass'ы `EscalationFeedback`/`EscalationOutcome` и цикл эскалации вокруг **немодифицированного** `run_attack` (тристейт воронки переносится как есть, `None` не схлопывается в `True` — Принцип IV) в `src/memnotsafe/core/escalation.py` (зависит от T028)
-- [ ] T030 [US2] Дополнять `AttackResult.evidence["provenance"]` полями `origin="online"`, `attempts`, `budget_exhausted` слоем эскалации в `src/memnotsafe/core/escalation.py` (зависит от T029)
-- [ ] T031 [US2] Вызывать цикл эскалации из `src/memnotsafe/core/campaign.py` при включённом онлайн-уровне и `success=False`, сохраняя уже полученные результаты при досрочном выходе (FR-010) (зависит от T029)
-- [ ] T032 [US2] Создать сценарий `scenarios/generated_escalation.yaml` и скриптованные ответы заглушки «первая попытка не пробивает, вторая пробивает» (research §9)
-- [ ] T033 [US2] Обеспечить разделение исходов в `src/memnotsafe/cli.py`: `AttackerError` → `exit 1` с сообщением в `stderr`; исчерпание лимита попыток/бюджета → `exit 0` + finding `NOT_EXPLOITABLE`; в обоих случаях уже собранные результаты записаны в `runs/<name>/` (FR-011, SC-005)
+- [X] T027 [US2] Добавить промпт переписывания атаки по обратной связи (ответ защищающегося + воронка стадий + прошлая запись) в `src/memnotsafe/generation/prompts.py`
+- [X] T028 [US2] Реализовать ЧИСТУЮ функцию `rewrite(feedback, client, budget) -> CorpusRecord` (без знания о таргете и раннере; невалидный ответ модели отбраковывается) в `src/memnotsafe/generation/rewrite.py` (зависит от T027)
+- [X] T029 [US2] Реализовать dataclass'ы `EscalationFeedback`/`EscalationOutcome` и цикл эскалации вокруг **немодифицированного** `run_attack` (тристейт воронки переносится как есть, `None` не схлопывается в `True` — Принцип IV) в `src/memnotsafe/core/escalation.py` (зависит от T028)
+- [X] T030 [US2] Дополнять `AttackResult.evidence["provenance"]` полями `origin="online"`, `attempts`, `budget_exhausted` слоем эскалации в `src/memnotsafe/core/escalation.py` (зависит от T029)
+- [X] T031 [US2] Вызывать цикл эскалации из `src/memnotsafe/core/campaign.py` при включённом онлайн-уровне и `success=False`, сохраняя уже полученные результаты при досрочном выходе (FR-010) (зависит от T029)
+- [X] T032 [US2] Создать сценарий `scenarios/generated_escalation.yaml` и скриптованные ответы заглушки «первая попытка не пробивает, вторая пробивает» (research §9)
+- [X] T033 [US2] Обеспечить разделение исходов в `src/memnotsafe/cli.py`: `AttackerError` → `exit 1` с сообщением в `stderr`; исчерпание лимита попыток/бюджета → `exit 0` + finding `NOT_EXPLOITABLE`; в обоих случаях уже собранные результаты записаны в `runs/<name>/` (FR-011, SC-005)
 
 **Checkpoint**: US1 и US2 работают независимо; онлайн-уровень вызываем программно
 
@@ -139,13 +139,13 @@ scenarios/generated_support.yaml` даёт честный вердикт на `M
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T034 [P] [US3] Тесты CLI-флагов: без `--online` — ноль вызовов атакующей LLM и результат идентичен прогону без фичи (SC-003); с `--online --online-attempts 1` — ровно одна попытка и `NOT_EXPLOITABLE` (SC-004), в `tests/test_escalation.py`
+- [X] T034 [P] [US3] Тесты CLI-флагов: без `--online` — ноль вызовов атакующей LLM и результат идентичен прогону без фичи (SC-003); с `--online --online-attempts 1` — ровно одна попытка и `NOT_EXPLOITABLE` (SC-004), в `tests/test_escalation.py`
 
 ### Implementation for User Story 3
 
-- [ ] T035 [US3] Добавить флаги `--online` (по умолчанию ВЫКЛ) и `--online-attempts` (по умолчанию 5) командам `run` и `campaign` в `src/memnotsafe/cli.py` по `contracts/cli-commands.md` (FR-008, FR-009)
-- [ ] T036 [US3] Вынести общий блок флагов атакующей LLM (`--attacker-provider`/`--attacker-model`/`--attacker-base-url`/`--attacker-api-key-env`/`--attacker-budget`) в переиспользуемый хелпер и подключить его к `generate`, `run` и `campaign` в `src/memnotsafe/cli.py` (зависит от T035)
-- [ ] T037 [US3] Прокинуть `AttackerConfig` и предел попыток из CLI в слой кампании/эскалации, обеспечив, что при выключенном `--online` атакующая LLM не инстанцируется вовсе, в `src/memnotsafe/cli.py` и `src/memnotsafe/core/campaign.py` (зависит от T036)
+- [X] T035 [US3] Добавить флаги `--online` (по умолчанию ВЫКЛ) и `--online-attempts` (по умолчанию 5) командам `run` и `campaign` в `src/memnotsafe/cli.py` по `contracts/cli-commands.md` (FR-008, FR-009)
+- [X] T036 [US3] Вынести общий блок флагов атакующей LLM (`--attacker-provider`/`--attacker-model`/`--attacker-base-url`/`--attacker-api-key-env`/`--attacker-budget`) в переиспользуемый хелпер и подключить его к `generate`, `run` и `campaign` в `src/memnotsafe/cli.py` (зависит от T035)
+- [X] T037 [US3] Прокинуть `AttackerConfig` и предел попыток из CLI в слой кампании/эскалации, обеспечив, что при выключенном `--online` атакующая LLM не инстанцируется вовсе, в `src/memnotsafe/cli.py` и `src/memnotsafe/core/campaign.py` (зависит от T036)
 
 **Checkpoint**: онлайн-уровень управляется из CLI; поведение по умолчанию не изменилось
 

@@ -63,6 +63,9 @@ class Campaign:
         self._budget = None
         self.attacker_calls = 0  # суммарные онлайн-вызовы за прогон (FR-014)
         self.budget_exhausted = False
+        # Сбой атакующей LLM в ходе эскалации (FR-011): фиксируется, чтобы CLI
+        # вернул exit 1, но уже полученные результаты успели сохраниться (FR-010).
+        self.attacker_error: str | None = None
 
     def _build_judge(self):
         spec = self.scenario.judge
@@ -123,6 +126,11 @@ class Campaign:
             self._persist_case(result, recorder, evidence_dir, cases_path)
             results.append(result)
             baselines.append({"case_id": result.case_id, "response": result.evidence.get("baseline_response")})
+
+            # Сбой атакующей LLM в эскалации — прекращаем прогон, но уже собранные
+            # результаты сохраняем ниже (FR-010): campaign.json запишется штатно.
+            if self.attacker_error is not None:
+                break
 
             # Ранний выход по бюджету N (FR-013): конфиг-управляемый, target-agnostic,
             # по умолчанию выключен → mock-демо и офлайн-тесты считают все N как раньше.
@@ -225,18 +233,31 @@ class Campaign:
 
         self._ensure_attacker()
         from memnotsafe.core.escalation import escalate
+        from memnotsafe.generation.errors import AttackerError
 
-        outcome = await escalate(
-            attack,
-            ctx,
-            self.target,
-            result,
-            limit=self.online_attempts,
-            client=self._attacker_client,
-            budget=self._budget,
-            run_id=run_id,
-            recorder=recorder,
-        )
+        try:
+            outcome = await escalate(
+                attack,
+                ctx,
+                self.target,
+                result,
+                limit=self.online_attempts,
+                client=self._attacker_client,
+                budget=self._budget,
+                run_id=run_id,
+                recorder=recorder,
+            )
+        except AttackerError as exc:
+            # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем
+            # ошибку (CLI вернёт exit 1), но возвращаем уже полученный результат —
+            # он и всё собранное до него сохранятся в runs/ (FR-010, SC-005).
+            self.attacker_error = str(exc)
+            self.attacker_calls = self._budget.used if self._budget else self.attacker_calls
+            prov = dict(result.evidence.get("provenance") or {})
+            prov["attacker_error"] = str(exc)
+            result.evidence["provenance"] = prov
+            return result
+
         self.attacker_calls = self._budget.used if self._budget else self.attacker_calls
         if outcome.budget_exhausted:
             self.budget_exhausted = True
