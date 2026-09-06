@@ -22,3 +22,13 @@ llamator-release/
 # Spec Kit: процесс версионируем (.specify/, specs/, .claude/skills/),
 # машинно-локальное состояние агента — нет.
 .claude/settings.local.json
+
+# Локальные задания, ответы и промежуточные ревью агентов, не документация команды.
+/.agent-work/
+/docs/integration-handoff/prompts/
+/docs/integration-handoff/README.md
+/docs/integration-handoff/glm-design-review.md
+/docs/integration-handoff/case-alignment-audit.md
+/docs/integration-handoff/team-git-workflow.md
+/specs/002-evidence-integrity/review-evidence-batch.md
+/.venv-integration/

@@ -13,6 +13,7 @@ from memnotsafe.adapters.base import Capabilities
 from memnotsafe.attacks.base import AttackContext
 from memnotsafe.core.models import AttackCandidate, StageResult
 from memnotsafe.evidence.diff import SnapshotDiff
+from memnotsafe.evidence.matching import match_candidate_record
 from memnotsafe.evidence.snapshot import SystemSnapshot
 
 
@@ -29,6 +30,13 @@ class EvaluationContext:
     all_events: list[dict[str, Any]] = field(default_factory=list)
     victim_trace: list[dict[str, Any]] | None = None
     persistence_ok: bool = False
+    # Case-marker записи (token string, например "CM-4f2a91") для маркерного
+    # пути matching. None = legacy-путь (payload-подстрока + source_user).
+    # ВРЕМЕННАЯ граница (T002-2/T002-4): producer маркера в runner и поле
+    # case_marker в AttackContext подключаются отдельной задачей (R4/T002-7);
+    # сейчас значение задаётся только явным конструированием EvaluationContext
+    # в офлайн-тестах. Не путать с expected_effect.markers (маркеры эффекта).
+    case_marker: str | None = None
 
 
 def unknown(stage: str, reason: str) -> StageResult:
@@ -36,23 +44,22 @@ def unknown(stage: str, reason: str) -> StageResult:
 
 
 def find_candidate_record(ec: EvaluationContext, *, scope: str | None = None) -> dict[str, Any] | None:
-    """Ищет запись в `after`-снимке, соответствующую payload'у этого кандидата
-    и написанную атакующим — по точному совпадению текста (детерминированный
-    mock хранит payload as-is), с fallback на подстроку."""
-    if ec.after is None:
-        return None
-    pool: list[dict[str, Any]] = []
-    if scope in (None, "global"):
-        pool.extend(ec.after.global_memory)
-    if scope in (None, "user"):
-        pool.extend(ec.after.user(ec.ctx.attacker_user_id))
-    for rec in pool:
-        if rec.get("source_user") != ec.ctx.attacker_user_id:
-            continue
-        text = rec.get("text", "")
-        if text == ec.candidate.payload or ec.candidate.payload in text or text in ec.candidate.payload:
-            return rec
-    return None
+    """Делегирует в evidence.matching.match_candidate_record и возвращает
+    выбранную запись при однозначном успехе (иначе None). Публичная сигнатура
+    и результат record|None сохранены для существующих клиентов
+    (retrieval/adoption/adapter-тесты); богатый тристейт-результат (с
+    UNKNOWN) берите напрямую из match_candidate_record — как делают
+    WRITE/PERSISTENCE. Без case_marker это legacy-семантика (подстрока
+    payload + source_user==attacker, после-снимок only)."""
+    match = match_candidate_record(
+        payload=ec.candidate.payload,
+        attacker_user_id=ec.ctx.attacker_user_id,
+        before=ec.before,
+        after=ec.after,
+        marker=ec.case_marker,
+        scope=scope,
+    )
+    return match.record if match.matched is True else None
 
 
 def events_by_type(events: list[dict[str, Any]], event_type: str) -> list[dict[str, Any]]:
