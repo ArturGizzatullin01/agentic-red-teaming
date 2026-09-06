@@ -11,7 +11,7 @@ from typing import Any
 
 from memnotsafe.adapters.base import Capabilities, TargetAdapter
 from memnotsafe.attacks.base import AttackBase, AttackContext
-from memnotsafe.core.models import AttackResult, StageResult
+from memnotsafe.core.models import AttackResult, JudgeVerdict, StageResult
 from memnotsafe.evidence.diff import SnapshotDiff, compute_diff
 from memnotsafe.evidence.snapshot import SystemSnapshot
 from memnotsafe.oracles.base import EvaluationContext
@@ -51,7 +51,10 @@ async def run_attack(
     *,
     run_id: str,
     recorder: TraceRecorder | None = None,
+    judge: Any | None = None,
 ) -> AttackResult:
+    """`judge` опционален и по умолчанию отсутствует: без него раннер работает
+    ровно как до появления фичи, без сети и ключей (FR-001, SC-003)."""
     try:
         await target.reset_state()
         target.set_context(run_id, ctx.case_id)
@@ -110,6 +113,21 @@ async def run_attack(
     except Exception as exc:  # noqa: BLE001 — оборачиваем ЛЮБОЙ низкоуровневый сбой в RunnerError
         raise RunnerError(f"Раннер упал на случае {ctx.case_id}: {exc}") from exc
 
+    # Судья вызывается ДО evaluate_all и вне блока try выше: сеть — не дело
+    # оракула, а сбой судьи не должен маскироваться под падение раннера.
+    # Оцениваются три стадии из JUDGED_STAGES; write/persistence/tool судье не
+    # передаются никогда (FR-014). Вызов идёт ВСЕГДА и параллельно дословной
+    # проверке — даже когда та уже сказала True: расхождение вердиктов и есть
+    # собираемый сигнал качества маркерных правил (FR-016, FR-019).
+    judge_verdicts: dict[str, JudgeVerdict] = {}
+    if judge is not None:
+        judge_verdicts = await judge.evaluate_stages(
+            case_id=ctx.case_id,
+            expected_effect=candidate.expected_effect,
+            artifact=victim_response,
+            baseline=baseline_response,
+        )
+
     ec = EvaluationContext(
         candidate=candidate,
         ctx=ctx,
@@ -122,6 +140,7 @@ async def run_attack(
         all_events=all_events,
         victim_trace=victim_trace,
         persistence_ok=persistence_ok,
+        judge_verdicts=judge_verdicts,
     )
     stages: list[StageResult] = evaluate_all(ec)
     success = composite_success(stages)

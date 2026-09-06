@@ -21,11 +21,27 @@ from memnotsafe.tracing.recorder import TraceRecorder
 
 
 class Campaign:
-    def __init__(self, scenario: Scenario, target: TargetAdapter, output_dir: str | Path):
+    def __init__(self, scenario: Scenario, target: TargetAdapter, output_dir: str | Path, *, judge=None):
         self.scenario = scenario
         self.target = target
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Судья конструируется здесь и живёт на кампанию, а не на случай:
+        # бюджет вызовов считается за кампанию (FR-012). При выключенном судье
+        # объект не создаётся, каталог judge/ не появляется, сеть не трогается.
+        self.judge = judge if judge is not None else self._build_judge()
+
+    def _build_judge(self):
+        spec = self.scenario.judge
+        if not spec.enabled:
+            return None
+        from memnotsafe.judge.runtime import LLMJudge
+
+        return LLMJudge(
+            spec,
+            repetitions=self.scenario.repetitions,
+            artifacts_dir=self.output_dir / "judge",
+        )
 
     async def run(self, repetitions: int | None = None) -> CampaignResult:
         repetitions = repetitions or self.scenario.repetitions
@@ -53,7 +69,9 @@ class Campaign:
                 case_id=case_id,
             )
             try:
-                result = await run_attack(attack, ctx, self.target, run_id=run_id, recorder=recorder)
+                result = await run_attack(
+                    attack, ctx, self.target, run_id=run_id, recorder=recorder, judge=self.judge
+                )
             except RunnerError:
                 raise  # раннер-ошибка — не глотаем, CLI обязан вернуть exit 1
 
@@ -87,7 +105,9 @@ class Campaign:
 
         baseline_path.write_text(json.dumps(baselines, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        aggregate = aggregate_metrics(results)
+        aggregate = aggregate_metrics(
+            results, judge_metadata=self.judge.metadata() if self.judge is not None else None
+        )
         campaign_result = CampaignResult(
             run_id=run_id,
             scenario_id=self.scenario.id,
@@ -117,7 +137,32 @@ class Campaign:
             "reset_available": run_meta.get("reset_available"),
             "evidence_channel": run_meta.get("evidence_channel"),
             "attempts": attempts,
+            # Роль судьи в прогоне. При неактивном судье — РОВНО {"active": false}:
+            # ни модели, ни рубрик, ни нулевых счётчиков, которые читались бы как
+            # «судья работал и ничего не нашёл» (FR-013).
+            "judge": self.judge.metadata() if self.judge is not None else {"active": False},
         }
+
+
+def _stage_to_dict(s) -> dict:
+    """Сериализация стадии с провенансом (contracts/report-provenance.md).
+
+    Ни одно существующее поле не переименовано и не удалено — только добавлены
+    новые. При выключенном судье `judge` и `deterministic` равны null, а
+    `verdict_source` — "deterministic": отчёт остаётся читаемым тем же кодом,
+    что читал его до фичи."""
+    return {
+        "stage": s.stage,
+        "success": s.success,
+        "reason": s.reason,
+        "evidence": s.evidence,
+        "confidence": s.confidence,
+        "verdict_source": s.verdict_source,
+        "evidence_kind": s.evidence_kind,
+        "disagreement": s.disagreement,
+        "deterministic": s.deterministic.to_dict() if s.deterministic else None,
+        "judge": s.judge.to_dict() if s.judge else None,
+    }
 
 
 def _case_summary(result: AttackResult) -> dict:
@@ -143,10 +188,7 @@ def _campaign_to_dict(cr: CampaignResult, metadata: dict | None = None) -> dict:
                 "case_id": r.case_id,
                 "attack_id": r.attack_id,
                 "success": r.success,
-                "stages": [
-                    {"stage": s.stage, "success": s.success, "reason": s.reason, "evidence": s.evidence}
-                    for s in r.stages
-                ],
+                "stages": [_stage_to_dict(s) for s in r.stages],
                 "attacker_user_id": r.attacker_user_id,
                 "victim_user_id": r.victim_user_id,
                 "evidence": r.evidence,
