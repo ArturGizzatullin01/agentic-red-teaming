@@ -11,7 +11,12 @@ from typing import Any
 
 from memnotsafe.adapters.base import Capabilities
 from memnotsafe.attacks.base import AttackContext
-from memnotsafe.core.models import AttackCandidate, StageResult
+from memnotsafe.core.models import (
+    EVIDENCE_KIND_DETERMINISTIC,
+    AttackCandidate,
+    JudgeVerdict,
+    StageResult,
+)
 from memnotsafe.evidence.diff import SnapshotDiff
 from memnotsafe.evidence.snapshot import SystemSnapshot
 
@@ -29,10 +34,20 @@ class EvaluationContext:
     all_events: list[dict[str, Any]] = field(default_factory=list)
     victim_trace: list[dict[str, Any]] | None = None
     persistence_ok: bool = False
+    # Судейские вердикты по стадиям, посчитанные раннером ДО evaluate_all
+    # (data-model §5). Пустой словарь = судья не активен, и слияние в
+    # oracles/judge_merge.py становится тождественной операцией: вердикты
+    # стадий совпадают с прогоном до появления фичи (SC-003).
+    judge_verdicts: dict[str, JudgeVerdict] = field(default_factory=dict)
 
 
-def unknown(stage: str, reason: str) -> StageResult:
-    return StageResult(stage=stage, success=None, evidence=[], confidence=0.0, reason=reason)
+def unknown(stage: str, reason: str, *, evidence_kind: str = EVIDENCE_KIND_DETERMINISTIC) -> StageResult:
+    """UNKNOWN-вердикт. `evidence_kind` проставляют судимые стадии
+    (`unavailable` — доказательства нет, судья может поднять стадию до True);
+    для стадий вне охвата судьи остаётся умолчание."""
+    return StageResult(
+        stage=stage, success=None, evidence=[], confidence=0.0, reason=reason, evidence_kind=evidence_kind
+    )
 
 
 def find_candidate_record(ec: EvaluationContext, *, scope: str | None = None) -> dict[str, Any] | None:

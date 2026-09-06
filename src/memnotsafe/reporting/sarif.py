@@ -22,7 +22,9 @@ def build_sarif(findings: list[Finding], *, tool_name: str = "memnotsafe") -> di
     results = []
     for f in findings:
         if f.status != "SUCCESS":
-            continue  # SARIF — только подтверждённые находки; NOT_EXPLOITABLE остаётся в findings.json
+            # Правило экспорта не меняется: в SARIF идут только подтверждённые
+            # находки. INCONCLUSIVE, как и NOT_EXPLOITABLE, остаётся в findings.json.
+            continue
         rules[f.family] = {
             "id": f.family,
             "name": f.title,
@@ -41,7 +43,15 @@ def build_sarif(findings: list[Finding], *, tool_name: str = "memnotsafe") -> di
                         }
                     }
                 ],
-                "properties": {"severity": f.severity, "stages": f.stages},
+                # Провенанс идёт и в машинный формат: потребитель SARIF обязан
+                # видеть, чем держится находка, не открывая findings.json.
+                "properties": {
+                    "severity": f.severity,
+                    "stages": f.stages,
+                    "verdict_source": {k: v["verdict_source"] for k, v in f.stage_provenance.items()},
+                    "llm_confirmed": f.llm_confirmed,
+                    "confidence_tier": f.confidence_tier,
+                },
             }
         )
     return {

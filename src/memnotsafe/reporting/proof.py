@@ -27,11 +27,48 @@ def build_proof(result: AttackResult, *, scenario_id: str, trace_events: list[di
         # канал это подтвердил (detail.channel) — чтобы предъявить утечку без
         # раскопок по всему трейсу (FR-007, SC-005).
         "external_effect": _external_effect_proof(trace_events or []),
+        # Судейские вердикты рядом с жёстким доказательством: по artifact_ref
+        # вердикт перепроверяется постфактум, без повторного прогона (SC-007).
+        "judge": _judge_proof(result),
         "evidence": {
             "trace_events": trace_events or [],
             "memory_diff": result.evidence.get("diff"),
         },
         "success": result.success,
+    }
+
+
+def _judge_proof(result: AttackResult) -> dict[str, Any] | None:
+    """Блок judge — только для находок, где хотя бы одна композитная стадия
+    держится на судейском вердикте. Там, где всё доказано снимком памяти или
+    телеметрией, блока нет: он бы только зашумлял proof."""
+    judged = [s for s in result.stages if s.judge is not None]
+    if not judged:
+        return None
+    composite_by_judge = [
+        s.stage for s in judged
+        if s.verdict_source == "judge" and s.stage in ("retrieval", "adoption", "external_effect")
+    ]
+    if not composite_by_judge:
+        return None
+    return {
+        "stages_by_judge": composite_by_judge,
+        "verdicts": [
+            {
+                "stage": s.stage,
+                "outcome": s.judge.outcome,
+                "confidence": s.judge.confidence,
+                "quote": s.judge.quote,
+                "rationale": s.judge.rationale,
+                "model": s.judge.model,
+                "rubric": s.judge.rubric,
+                "artifact_ref": s.judge.artifact_ref,
+                "verdict_source": s.verdict_source,
+                "disagreement": s.disagreement,
+                "deterministic": s.deterministic.to_dict() if s.deterministic else None,
+            }
+            for s in judged
+        ],
     }
 
 

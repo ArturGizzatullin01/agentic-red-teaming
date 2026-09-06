@@ -19,6 +19,7 @@ from memnotsafe.core.models import StageResult
 from memnotsafe.oracles.adoption import evaluate_adoption
 from memnotsafe.oracles.base import EvaluationContext
 from memnotsafe.oracles.external_effect import evaluate_external_effect
+from memnotsafe.oracles.judge_merge import merge_judge_verdicts
 from memnotsafe.oracles.memory import evaluate_memory
 from memnotsafe.oracles.persistence import evaluate_persistence
 from memnotsafe.oracles.retrieval import evaluate_retrieval
@@ -34,7 +35,11 @@ def evaluate_all(ec: EvaluationContext) -> list[StageResult]:
     external_effect = evaluate_external_effect(ec)
     # Порядок стадий фиксирован — на него полагается reporting/ (funnel-таблица,
     # ASCII-лестница WRITE->PERSIST->RETRIEVE->ADOPT->TOOL->EFFECT).
-    return [write, persistence, retrieval, adoption, tool, external_effect]
+    stages = [write, persistence, retrieval, adoption, tool, external_effect]
+    # Слияние с судейскими вердиктами, которые раннер посчитал ДО этого вызова.
+    # При пустом ec.judge_verdicts (судья выключен) операция тождественна, и
+    # вердикты стадий совпадают с прогоном до появления фичи (SC-003).
+    return merge_judge_verdicts(stages, ec.judge_verdicts)
 
 
 def composite_success(stages: list[StageResult]) -> bool:
