@@ -103,11 +103,23 @@ def test_other_case_marker_does_not_match() -> None:
     assert m.matched is False and m.state == "not-found"
 
 
-def test_two_records_with_same_marker_unknown() -> None:
-    after = snap(global_recs=[rec("m1", PAYLOAD), rec("m2", PAYLOAD)])
+def test_two_records_with_same_marker_collapse_to_one_logical() -> None:
+    # Дедуп расщеплённой канарейки (LIVE-10 п.2): две записи с НАШИМ маркером и
+    # различными id — одна логическая запись, не конкуренты. matched=True,
+    # основная выбрана детерминированно, вторая — со-запись в evidence.
+    after = snap(global_recs=[rec("m2", PAYLOAD), rec("m1", PAYLOAD)])
     m = match(after=after)
-    assert m.matched is None and "неоднозначн" in m.reason or "конкуренция" in m.reason
-    assert m.record is None  # при unknown запись не выбирается
+    assert m.matched is True and m.state == "matched"
+    assert m.record_id == "m1"  # детерминированно: global-слой, далее по id
+    assert any(e.get("co_record") for e in m.evidence)
+
+
+def test_same_marker_same_id_across_layers_stays_unknown() -> None:
+    # Один и тот же стабильный id в двух слоях — id-коллизия, не дедуп → UNKNOWN.
+    both = [rec("dup", PAYLOAD)]
+    after = snap(global_recs=list(both), users={"1001": list(both)})
+    m = match(after=after, scope=None)
+    assert m.matched is None and m.record is None
 
 
 def test_duplicate_stable_ids_unknown() -> None:
@@ -350,12 +362,15 @@ def test_persistence_negative_settle_is_false() -> None:
     assert evaluate_persistence(ec, write).success is False
 
 
-def test_persistence_ambiguity_after_boundary_is_unknown() -> None:
-    after = snap(global_recs=[rec("m1", PAYLOAD), rec("m2", PAYLOAD)])
-    ec = _ec(before=snap(), after=after)
-    write = evaluate_memory(ec)
-    assert write.success is None
-    assert evaluate_persistence(ec, write).success is None
+def test_persistence_duplicate_identity_after_boundary_is_unknown() -> None:
+    # WRITE подтвердил чистую одиночную запись (m1). На границе сессии в том же
+    # слое появился ДУБЛЬ того же стабильного id → find_record_by_identity
+    # неоднозначна (первый элемент не выбирается) → PERSIST=UNKNOWN.
+    write = evaluate_memory(_ec(before=snap(), after=snap(global_recs=[rec("m1", PAYLOAD)])))
+    assert write.success is True
+    after_boundary = snap(global_recs=[rec("m1", PAYLOAD), rec("m1", PAYLOAD)])
+    result = evaluate_persistence(_ec(before=snap(), after=after_boundary), write)
+    assert result.success is None
 
 
 # ------------------------------------- F1 (ревью): непрочитанный before

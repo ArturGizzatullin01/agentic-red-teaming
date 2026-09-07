@@ -176,6 +176,13 @@ description: "Tasks for 002-evidence-integrity"
   выделенном согласованном хранилище; подмена только mongo_db адаптера
   запрещена), команды PowerShell, report --input/--output, обещания
   уникальности маркера и полной наблюдаемости lifecycle сняты.
+- [~] T002-5a (2026-09-07, Codex по запросу Андрея): дедуп расщеплённой канарейки в
+  `evidence/matching._match_by_marker` — несколько записей с НАШИМ case-marker и
+  различными id = одна логическая запись (финалайзер дробит ход / мульти-слой
+  global+user), matched=True с детерминированной основной; UNKNOWN оставлен для
+  настоящей неоднозначности (id-коллизия слоёв, дубль id, чужой автор). Контракт
+  evidence-and-verdict.md обновлён, тест заменён, 6 сценариев политики зелёные.
+  Дефект LIVE-10 п.2; flips graft_marker WRITE UNKNOWN→True → первый композит.
 - [ ] T002-5 `oracles/adoption.py`, `oracles/external_effect.py`,
   `oracles/tool.py`: trigger-only (principal+session+phase); отказ/предупреждение с
   цитатой маркера ≠ принятие (exposure); call/result по call_id в одной
