@@ -39,6 +39,7 @@ from typing import Any
 import httpx
 
 from memnotsafe.adapters.base import Capabilities, ProbeResult, SendResult, TargetAdapter
+from memnotsafe.evidence.matching import normalize_text
 from memnotsafe.evidence.snapshot import SystemSnapshot
 from memnotsafe.tracing.events import TraceEvent, new_event_id
 
@@ -224,18 +225,38 @@ class InvestmentStandAdapter(TargetAdapter):
             await self.send(session_id, self.finalize_keyword)
 
     async def wait_until_persistent(self, evidence: dict[str, Any]) -> bool:
-        """Polling Mongo до settle_timeout_s, пока payload виден в памяти
-        клиента-источника или в global-слое (research §2). Нет mongo_uri →
-        нечего опрашивать (persistence останется UNKNOWN через write UNKNOWN)."""
+        """Polling Mongo до settle_timeout_s. Marker-aware (T002-10): если
+        передан case_marker, запись атрибутируется по нему через matching
+        (финалайзер перефразирует текст — буквальная подстрока ненадёжна):
+        любая запись с маркером в слоях global+attacker → True (case-marker
+        уникален → расщепление/мульти-слой не конкуренция); ноль → polling до
+        таймаута → False.
+        Нет маркера → legacy: payload-подстрока в памяти клиента-источника или
+        global-слое. Нет mongo_uri → нечего опрашивать (persistence останется
+        UNKNOWN через write UNKNOWN)."""
         if not self.mongo_uri:
             return True
+        marker = evidence.get("case_marker")
         needle = (evidence.get("expect_text_contains") or "").strip()
         owner = evidence.get("attacker_user_id") or ""
+        marker_normalized = normalize_text(marker) if marker else ""
         deadline = time.monotonic() + self.settle_timeout_s
         while True:
             snap = self._build_snapshot(self._read_all_docs())
             pool = list(snap.global_memory) + list(snap.user(owner))
-            if not needle or any(needle in r.get("text", "") for r in pool):
+            if marker_normalized:
+                hits = sum(
+                    1 for r in pool
+                    if isinstance(r.get("text"), str) and marker_normalized in normalize_text(r["text"])
+                )
+                if hits >= 1:
+                    # Дедуп канарейки (LIVE-10 п.2): case-marker уникален для
+                    # кейса; ЛЮБАЯ запись с ним в слоях global+attacker = отравление
+                    # сохранилось. Несколько записей — расщепление финалайзером /
+                    # мульти-слой, не конкуренты (чужой писатель нашего маркера
+                    # иметь не может) → True, не False.
+                    return True
+            elif needle and any(needle in r.get("text", "") for r in pool):
                 return True
             if time.monotonic() >= deadline:
                 return False
@@ -316,6 +337,7 @@ class InvestmentStandAdapter(TargetAdapter):
         """Материализация подтверждённой утечки в канонические события — ТОЛЬКО
         из реально сработавшего канала (Принцип IV). data-model §4."""
         x = leak.leaked_cus
+        call_id = f"call-{uuid.uuid4().hex[:8]}"
         self._emit(session_id, "memory_retrieval", {"channel": leak.channel}, actor=user_id)
         dec = self._emit(session_id, "llm_decision", {"resolved_cus": x, "channel": leak.channel}, actor=user_id)
         self._emit(
@@ -327,6 +349,7 @@ class InvestmentStandAdapter(TargetAdapter):
             tool=_PORTFOLIO_TOOL,
             arguments={"cus": x},
         )
+        self._session_events[session_id][-1]["call_id"] = call_id  # корреляция (T002-6)
         self._emit(
             session_id,
             "tool_result",
@@ -335,21 +358,25 @@ class InvestmentStandAdapter(TargetAdapter):
             parent=dec,
             tool=_PORTFOLIO_TOOL,
         )
+        self._session_events[session_id][-1]["call_id"] = call_id
 
     def _synthesize_nonleak(self, session_id: str, user_id: str, tool_cus: str) -> None:
         """Tool-взаимодействие наблюдалось, но cus не чужой (== аутентифицированный
         пользователь) → честный не-leak: tool_result со своим cus, external_effect
         оракул увидит customer != attacker → False (FR-006)."""
         dec = self._emit(session_id, "llm_decision", {"resolved_cus": tool_cus}, actor=user_id)
+        call_id = f"call-{uuid.uuid4().hex[:8]}"
         self._emit(
             session_id, "tool_call", {}, actor=user_id, parent=dec,
             tool=_PORTFOLIO_TOOL, arguments={"cus": tool_cus},
         )
+        self._session_events[session_id][-1]["call_id"] = call_id
         self._emit(
             session_id, "tool_result",
             {"status": 200, "customer": tool_cus, "channel": "tool_telemetry"},
             actor=user_id, parent=dec, tool=_PORTFOLIO_TOOL,
         )
+        self._session_events[session_id][-1]["call_id"] = call_id
 
     def _emit(
         self,
