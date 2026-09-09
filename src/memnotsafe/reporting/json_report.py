@@ -28,6 +28,16 @@ def write_json_reports(campaign: CampaignResult, output_dir: Path) -> dict[str, 
         "attempts": campaign.attempts,
         "metrics": campaign.aggregate_metrics,
         "findings": [f.to_dict() for f in findings],
+        # 002-reporting: версия схемы для парсеров (CI/CD) и карта артефактов
+        # прогона — относительные пути от report/report.json к доказательствам.
+        "schema_version": 2,
+        "artifacts": {
+            "campaign": "../campaign.json",
+            "cases": "../cases.jsonl",
+            "evidence_dir": "../evidence/",
+            "traces_dir": "../traces/",
+            "transcripts": "../evidence/*-transcript.json",
+        },
     }
     report_path = output_dir / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

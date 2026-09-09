@@ -368,6 +368,7 @@ def _case_summary(result: AttackResult) -> dict:
     return {
         "case_id": result.case_id,
         "attack_id": result.attack_id,
+        "family": result.family,
         "success": result.success,
         "stages": {s.stage: s.success for s in result.stages},
         "attacker_user_id": result.attacker_user_id,

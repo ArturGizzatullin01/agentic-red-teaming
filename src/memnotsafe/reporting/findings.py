@@ -1,14 +1,22 @@
 """src/memnotsafe/reporting/findings.py — превращает AttackResult в finding с severity
 и маппингом на MITRE ATLAS / OWASP ASI06. SUCCESS-находки — то, ради
 чего запускался прогон; NOT_EXPLOITABLE — тоже репортится (атака без
-эффекта — не ошибка раннера, а честный отрицательный результат)."""
+эффекта — не ошибка раннера, а честный отрицательный результат).
+
+Идентичность семейства (002): family — обязательный ключ ATTACK_REGISTRY,
+НЕ имя эксперимента (scenario_id) и НЕ эвристика из префиксов. Легаси-
+восстановление family для старых сериализаций делает читатель campaign.json
+(cli cmd_report: fallback только при attack_id ∈ ATTACK_REGISTRY) — здесь
+пустая/незарегистрированная family = диагностическая ошибка (exit 1 в CLI).
+Класс-источник для severity/ATLAS у generated-атак берётся из провенанса
+(фича 004): сгенерированная атака показывается с атрибутами своего класса."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
-from memnotsafe.attacks.base import get_attack
+from memnotsafe.attacks.base import ATTACK_REGISTRY, get_attack
 from memnotsafe.core.models import AttackResult, StageResult
 
 _SEVERITY_BY_FAMILY = {
@@ -35,6 +43,9 @@ class Finding:
     atlas_tactic: str
     owasp_asi: str
     stages: dict[str, bool | None]
+    # Что делает атака / на что нацелена (из метаданных семейства; issue #15 —
+    # в отчёте должно быть понятно «в чём вообще атака» без чтения спеков).
+    description: str = ""
     evidence: dict[str, Any] = field(default_factory=dict)
     llm_confirmed: bool = False
     confidence_tier: str | None = None
@@ -51,6 +62,7 @@ class Finding:
             "attack_id": self.attack_id,
             "family": self.family,
             "title": self.title,
+            "description": self.description,
             "severity": self.severity,
             "status": self.status,
             "attacker": self.attacker,
@@ -103,27 +115,39 @@ def _stage_provenance(result: AttackResult) -> dict[str, dict[str, Any]]:
     }
 
 
-def _resolve_attack_class(result: AttackResult) -> str:
-    """Класс-источник для резолва severity/ATLAS/названия (FR-003/FR-013,
-    research §2). Для family="generated" — из провенанса корпуса/онлайна, иначе
-    сам scenario_id. Так сгенерированная атака показывается с severity и
-    ATLAS-маппингом своего класса, а не generic-заглушки."""
+def _display_attack_class(result: AttackResult, family: str) -> str:
+    """Класс-источник для severity/ATLAS/названия (FR-003/FR-013, research §2).
+    Для family="generated" — из провенанса корпуса/онлайна, иначе сама family.
+    Незарегистрированный класс из провенанса не крашит отчёт — откатываемся
+    на family (диагностика у generated — зона кампании, не findings)."""
     prov = result.evidence.get("provenance") or {}
-    return prov.get("attack_class") or result.scenario_id
+    cls = prov.get("attack_class")
+    return cls if cls in ATTACK_REGISTRY else family
 
 
 def build_finding(result: AttackResult) -> Finding:
-    family_key = _resolve_attack_class(result)
-    try:
-        meta = get_attack(family_key).metadata
-    except KeyError:
-        meta = get_attack(result.scenario_id).metadata  # неизвестный класс — как раньше
-        family_key = result.scenario_id
+    """family — обязательная идентичность семейства (ATTACK_REGISTRY), НЕ имя
+    эксперимента (scenario_id) и НЕ вывод из префиксов имён. Отсутствующая или
+    незарегистрированная family — явная диагностическая ошибка, без
+    молчаливого default."""
+    family = (result.family or "").strip()
+    if not family:
+        raise ValueError(
+            f"case {result.case_id}: family атаки не заполнена в результате — "
+            "восстановление отчёта невозможно без сохранённой идентичности семейства"
+        )
+    if family not in ATTACK_REGISTRY:
+        raise ValueError(
+            f"case {result.case_id}: family={family!r} не зарегистрирована "
+            f"(доступные: {sorted(ATTACK_REGISTRY)}) — диагностическая ошибка отчёта"
+        )
+    display_key = _display_attack_class(result, family)
+    meta = get_attack(display_key).metadata
     llm_stages = _judge_confirmed_composite_stages(result)
 
     if result.success:
         status = "SUCCESS"
-        severity = _SEVERITY_BY_FAMILY.get(family_key, "MEDIUM")
+        severity = _SEVERITY_BY_FAMILY.get(display_key, "MEDIUM")
         # Находка, где хотя бы одна композитная стадия судейская, помечается
         # пониженной достоверностью: доказательство слабее снимка памяти.
         confidence_tier = "llm_confirmed" if llm_stages else "proved"
@@ -143,8 +167,9 @@ def build_finding(result: AttackResult) -> Finding:
         finding_id=result.case_id,
         case_id=result.case_id,
         attack_id=result.attack_id,
-        family=family_key,
+        family=family,
         title=meta.name,
+        description=meta.description,
         severity=severity,
         status=status,
         attacker=result.attacker_user_id,

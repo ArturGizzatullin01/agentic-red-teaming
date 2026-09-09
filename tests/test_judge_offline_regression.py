@@ -211,12 +211,11 @@ def test_report_rebuild_without_active_judge(tmp_path, with_summary):
     rebuilt_dir = tmp_path / "rebuilt"
     assert cli.main(["report", "--input", str(out), "--output", str(rebuilt_dir)]) == 0
     metrics = json.loads((rebuilt_dir / "metrics.json").read_text(encoding="utf-8"))
-    if with_summary:
-        assert metrics["judge"] == {"active": False}
-    else:
-        # Старый формат может не содержать блока; replay не включает судью.
-        assert not (metrics.get("judge") or {}).get("active")
-    assert metrics.get("judge_disagreement_rate") is None
+    # Ровно это и в старом формате: replay пересчитывает агрегаты сам, и без
+    # сохранённой сводки даёт честное «судьи не было», а не пустое место. Судью
+    # это не включает: доля расхождений остаётся null, а не ноль (FR-019).
+    assert metrics["judge"] == {"active": False}
+    assert metrics["judge_disagreement_rate"] is None
 
 
 def test_rebuilt_stage_objects_keep_judge_verdicts(tmp_path, capsys):

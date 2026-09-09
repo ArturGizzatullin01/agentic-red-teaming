@@ -18,6 +18,7 @@ from memnotsafe.core.runner import RunnerError
 from memnotsafe.generation.errors import AttackerError
 from memnotsafe.reporting.html_report import write_html_report
 from memnotsafe.reporting.json_report import write_json_reports
+from memnotsafe.reporting.metrics import aggregate_metrics
 from memnotsafe.reporting.sarif import write_sarif
 from memnotsafe.reporting.findings import build_findings
 from memnotsafe.tracing.recorder import read_events_jsonl
@@ -210,25 +211,37 @@ def _stage_from_dict(s: dict):
 def load_campaign(input_dir: Path):
     """Читает runs/<name>/campaign.json обратно в CampaignResult. Единственное
     место чтения этой раскладки — симметрично core/campaign.py, который её
-    единственный пишет."""
+    единственный пишет. family (002): новый формат несёт её в каждом
+    результате; legacy-формат — fallback ТОЛЬКО при однозначно проверяемой
+    идентичности (attack_id — точное вхождение в ATTACK_REGISTRY, не префиксная
+    эвристика). Иначе family остаётся пустой → findings дадут диагностическую
+    ошибку (cmd_report → exit 1)."""
+    from memnotsafe.attacks.base import ATTACK_REGISTRY
     from memnotsafe.core.models import AttackResult, CampaignResult
 
     raw = json.loads((Path(input_dir) / "campaign.json").read_text(encoding="utf-8"))
-    results = [
-        AttackResult(
-            run_id=raw["run_id"],
-            case_id=r["case_id"],
-            attack_id=r["attack_id"],
-            scenario_id=raw["scenario_id"],
-            stages=[_stage_from_dict(s) for s in r["stages"]],
-            success=r["success"],
-            metrics={},
-            evidence=r["evidence"],
-            attacker_user_id=r["attacker_user_id"],
-            victim_user_id=r["victim_user_id"],
+    results = []
+    for r in raw["results"]:
+        family = r.get("family") or ""
+        if not family:
+            legacy_attack_id = r.get("attack_id") or ""
+            if legacy_attack_id in ATTACK_REGISTRY:
+                family = legacy_attack_id
+        results.append(
+            AttackResult(
+                run_id=raw["run_id"],
+                case_id=r["case_id"],
+                attack_id=r["attack_id"],
+                scenario_id=raw["scenario_id"],
+                family=family,
+                stages=[_stage_from_dict(s) for s in r["stages"]],
+                success=r["success"],
+                metrics={},
+                evidence=r["evidence"],
+                attacker_user_id=r["attacker_user_id"],
+                victim_user_id=r["victim_user_id"],
+            )
         )
-        for r in raw["results"]
-    ]
     return CampaignResult(
         run_id=raw["run_id"], scenario_id=raw["scenario_id"], attempts=raw["attempts"],
         results=results, aggregate_metrics=raw["aggregate_metrics"],
@@ -244,9 +257,29 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     campaign = load_campaign(input_dir)
 
+    # F4: replay пересчитывает агрегаты по загруженным результатам принятой
+    # формулой, а не копирует сохранённые — старый файл мог содержать неверные
+    # метрики (например, ASR по external_effect вместо композита). Пересчёт
+    # агрегатов ≠ переоценка стадий: сохранённые verdicts НЕ переигрываются
+    # новыми oracle'ами. Готовую сводку судьи и долю расхождений переносим
+    # из campaign.json: расход вызовов не восстановить по отдельным стадиям.
+    saved_judge_summary = {
+        key: campaign.aggregate_metrics[key]
+        for key in ("judge", "judge_disagreement_rate")
+        if key in campaign.aggregate_metrics
+    }
+    campaign.aggregate_metrics = aggregate_metrics(campaign.results)
+    campaign.aggregate_metrics.update(saved_judge_summary)
+
     report_dir, html_name = _resolve_report_dir(args.output)
-    write_json_reports(campaign, report_dir)
-    findings = build_findings(campaign.results)
+    try:
+        write_json_reports(campaign, report_dir)
+        findings = build_findings(campaign.results)
+    except ValueError as exc:
+        # диагностическая ошибка отчёта (семейство не восстановимо) — не краш,
+        # а управляемый отказ с сообщением (принцип VII: контрактная ошибка → exit 1)
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 1
     write_sarif(findings, report_dir / "findings.sarif")
     events = read_events_jsonl(input_dir / "events.jsonl")
     by_case: dict[str, list[dict]] = {}
@@ -254,6 +287,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         by_case.setdefault(e.get("case_id", ""), []).append(e)
     html_path = write_html_report(campaign, report_dir / html_name, by_case)
     _print_summary(campaign, html_path)
+    print("Replay: агрегаты пересчитаны по сохранённым результатам; стадии не переоценивались.")
     return 0
 
 
