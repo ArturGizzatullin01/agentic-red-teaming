@@ -16,8 +16,8 @@ from memnotsafe.core.models import AttackCandidate
 class DirectPoisoning(AttackBase):
     metadata = AttackMetadata(
         id="direct_poisoning",
-        name="Прямое отравление памяти (explicit command insertion)",
-        description="Атакующий напрямую командует агенту запомнить ложный факт, который позже влияет на ответ той же личности.",
+        name="Direct memory poisoning (explicit command insertion)",
+        description=(             "The attacker directly commands the agent to remember a false fact that later influences the same identity's responses."         ),
         family="direct_poisoning",
         mpbench_class="explicit_command_insertion",
         signal_strength="strong",

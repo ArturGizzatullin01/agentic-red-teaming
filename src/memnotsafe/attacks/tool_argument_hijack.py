@@ -16,8 +16,8 @@ from memnotsafe.core.models import AttackCandidate
 class ToolArgumentHijack(AttackBase):
     metadata = AttackMetadata(
         id="tool_argument_hijack",
-        name="Tool argument hijack через память",
-        description="Легитимный вызов инструмента получает атакующим-навязанный аргумент (промокод) из отравленной памяти.",
+        name="Tool argument hijack via memory",
+        description=(             "A legitimate tool call receives an attacker-imposed argument (promo code) from poisoned memory."         ),
         family="tool_argument_hijack",
         mpbench_class="explicit_command_insertion",
         signal_strength="strong",
