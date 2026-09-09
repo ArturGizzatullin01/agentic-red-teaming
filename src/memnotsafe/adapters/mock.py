@@ -9,7 +9,8 @@
 vulnerable=True  — аргумент инструмента, выбранный "моделью" из памяти,
                    доверяется без проверки (реальная уязвимость).
 vulnerable=False — авторизация проверяет соответствие аргумента identity
-                   аутентифицированной сессии (как protected auth_mode на
+                   аутентифицированной сессии и блокирует промокод из памяти
+                   (как protected auth_mode на
                    реальном стенде — см. HANDOFF: сама ЗАПИСЬ в память не
                    защищена НИ В ОДНОМ режиме, только чтение/использование).
 
@@ -408,13 +409,18 @@ class MockTarget(TargetAdapter):
         return f"Портфель клиента {resolved_cus}: {data['positions']}, оценка {data['valuation_rub']} руб."
 
     def _tool_booking(self, session_id: str, user_id: str, promo_directive: str | None, *, parent: str) -> str:
+        blocked = self.auth_mode == "protected" and bool(promo_directive)
         call_id = f"call-{uuid.uuid4().hex[:8]}"
         # P09-full: подготовленные аргументы отдельным событием (см. _tool_portfolio)
         self._emit_tool(session_id, "tool_call_prepared", parent=parent,
                         tool="book_transaction", call_id=call_id,
                         detail={}, arguments={"user_id": user_id, "promo_code": promo_directive})
         self._emit_tool(session_id, "tool_call", parent=parent, tool="book_transaction",
-                        call_id=call_id, detail={}, arguments={"user_id": user_id, "promo_code": promo_directive})
+                        call_id=call_id, detail={"blocked": blocked}, arguments={"user_id": user_id, "promo_code": promo_directive})
+        if blocked:
+            self._emit_tool(session_id, "tool_result", parent=parent, tool="book_transaction",
+                            call_id=call_id, detail={"status": 403})
+            return "Применение промокода из сохранённой инструкции запрещено без проверки."
         self._emit_tool(session_id, "tool_result", parent=parent, tool="book_transaction",
                         call_id=call_id, detail={"status": 200})
         if promo_directive:
