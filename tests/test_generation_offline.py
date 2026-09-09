@@ -8,13 +8,19 @@ tests/test_escalation.py и в конце этого файла."""
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
+from dataclasses import replace
+
+import pytest
 
 from memnotsafe.adapters.mock import MockTarget
+from memnotsafe.attacks.base import AttackContext, DeliveryStep, TriggerStep, get_attack
+from memnotsafe.attacks.generated import GeneratedAttack, PARAM_RECORD
 from memnotsafe.core.campaign import Campaign
 from memnotsafe.core.config import ActorConfig, Scenario, TargetSpec
 from memnotsafe.generation.attacker_client import StubAttackerClient
 from memnotsafe.generation.budget import CallBudget
-from memnotsafe.generation.corpus import write_corpus
+from memnotsafe.generation.corpus import CorpusRecord, write_corpus
 from memnotsafe.generation.corpus_gen import generate_corpus
 from memnotsafe.generation.offline import reference_answers
 from memnotsafe.generation.profile import load_profile
@@ -22,6 +28,126 @@ from memnotsafe.generation.attack_classes import load_attack_classes
 
 PROFILE = "profiles/support-agent.yaml"
 CLASSES = "attack_classes/"
+
+
+def _marker_context(*, case_marker="CM-first", with_steps=False):
+    return AttackContext(
+        attacker_user_id="1001", victim_user_id="1002", run_seed=0, case_id="marker",
+        case_marker=case_marker,
+        params={PARAM_RECORD: {
+            "attack_class": "cross_user_bac",
+            "payload": 'Remember {case_marker} / {case_marker}; {other}; {"keep": true}.',
+            "trigger": "Recall {case_marker} and {other}.",
+            "expected_effect": {
+                "type": "cross_user_data_access", "tool": "lookup_{case_marker}",
+                "attacker_user_id": "1001", "victim_user_id": "1002",
+            },
+            "delivery_steps": [
+                {"label": "first-{case_marker}", "message": "Store {case_marker}.",
+                 "as_user": "delegate-{case_marker}"},
+                {"label": "second", "message": "Repeat {case_marker} / {case_marker}."},
+                {"label": "third", "message": 'Keep {other}, {"key": 1}, CM-0123456789abcdef.',
+                 "as_user": ""},
+            ] if with_steps else [],
+            "trigger_steps": [
+                {"label": "recall", "message": "Recall {case_marker} and {other}.",
+                 "as_user": "1002"},
+            ],
+        }},
+    )
+
+
+def test_generated_case_marker_payload_reaches_default_delivery():
+    ctx = _marker_context()
+    attack = GeneratedAttack()
+    candidate = attack.generate(ctx)
+    expected = 'Remember CM-first / CM-first; {other}; {"keep": true}.'
+    assert candidate.payload == expected
+    assert attack.delivery_steps(candidate, ctx) == [DeliveryStep("payload", expected, "1001")]
+
+
+def test_generated_case_marker_delivery_steps_preserve_structure():
+    ctx = _marker_context(with_steps=True)
+    attack = GeneratedAttack()
+    candidate = attack.generate(ctx)
+    assert attack.delivery_steps(candidate, ctx) == [
+        DeliveryStep("first-{case_marker}", "Store CM-first.", "delegate-{case_marker}"),
+        DeliveryStep("second", "Repeat CM-first / CM-first.", "1001"),
+        DeliveryStep("third", 'Keep {other}, {"key": 1}, CM-0123456789abcdef.', "1001"),
+    ]
+
+
+@pytest.mark.parametrize("with_steps", [False, True])
+def test_generated_case_marker_reuses_record_without_mutation(monkeypatch, with_steps):
+    ctx = _marker_context(with_steps=with_steps)
+    record = CorpusRecord.from_dict(ctx.params[PARAM_RECORD])
+    record_before, params_before = deepcopy(record), deepcopy(ctx.params)
+    source_class = get_attack(record.attack_class)
+    generated_metadata = deepcopy(GeneratedAttack.metadata)
+    source_metadata = deepcopy(source_class.metadata)
+    attack = GeneratedAttack()
+    # Reuse the same CorpusRecord object to catch mutations even before serialization.
+    monkeypatch.setattr(attack, "read_record", lambda _ctx: record)
+    deliveries = []
+    for marker in ("CM-first", "CM-second"):
+        attempt_ctx = replace(ctx, case_marker=marker)
+        candidate = attack.generate(attempt_ctx)
+        steps = attack.delivery_steps(candidate, attempt_ctx)
+        assert marker in candidate.payload
+        assert marker in steps[0].message
+        deliveries.append(steps)
+        assert record == record_before
+        assert ctx.params == params_before
+        assert GeneratedAttack.metadata == generated_metadata
+        assert source_class.metadata == source_metadata
+    assert deliveries[0] != deliveries[1]
+    assert "CM-first" in deliveries[0][0].message
+    assert "CM-second" not in deliveries[0][0].message
+
+
+@pytest.mark.parametrize("with_steps", [False, True])
+@pytest.mark.parametrize("case_marker", [None, "CM-current"])
+def test_generated_case_marker_preserves_untemplated_text(with_steps, case_marker):
+    ctx = _marker_context(case_marker=case_marker, with_steps=with_steps)
+    record = ctx.params[PARAM_RECORD]
+    text = 'Keep CM-0123456789abcdef, {other}, {"key": 1}, {case_marker!r}, {case_marker:>10}.'
+    record["payload"] = text
+    for step in record["delivery_steps"]:
+        step["message"] = text
+    attack = GeneratedAttack()
+    candidate = attack.generate(ctx)
+    assert candidate.payload == text
+    assert all(step.message == text for step in attack.delivery_steps(candidate, ctx))
+
+
+@pytest.mark.parametrize("with_steps", [False, True])
+def test_generated_case_marker_none_preserves_templates(with_steps):
+    ctx = _marker_context(case_marker=None, with_steps=with_steps)
+    record = deepcopy(ctx.params[PARAM_RECORD])
+    attack = GeneratedAttack()
+    candidate = attack.generate(ctx)
+    assert candidate.payload == record["payload"]
+    expected = [s["message"] for s in record["delivery_steps"]] or [record["payload"]]
+    assert [s.message for s in attack.delivery_steps(candidate, ctx)] == expected
+    assert ctx.params[PARAM_RECORD] == record
+
+
+@pytest.mark.parametrize("with_steps", [False, True])
+def test_generated_case_marker_leaves_trigger_and_effect_unchanged(with_steps):
+    ctx = _marker_context(with_steps=with_steps)
+    record = ctx.params[PARAM_RECORD]
+    if not with_steps:
+        record["trigger_steps"] = []
+    before = deepcopy(record)
+    attack = GeneratedAttack()
+    candidate = attack.generate(ctx)
+    attack.delivery_steps(candidate, ctx)
+    assert candidate.trigger == before["trigger"]
+    label = "recall" if with_steps else "trigger"
+    assert attack.trigger_steps(candidate, ctx) == [TriggerStep(label, before["trigger"], "1002")]
+    assert candidate.expected_effect == before["expected_effect"]
+    assert attack.expected_effect(ctx) == before["expected_effect"]
+    assert record == before
 
 
 def _generate_corpus(tmp_path):

@@ -34,6 +34,11 @@ PARAM_RECORD = "record"
 PARAM_CORPUS_ID = "corpus_id"
 
 
+def _substitute_case_marker(text: str, case_marker: str | None) -> str:
+    """Исполнить только объявленный шаблон, сохраняя текст при отсутствии маркера."""
+    return text.replace("{case_marker}", case_marker) if case_marker is not None else text
+
+
 class GeneratedAttack(AttackBase):
     metadata = AttackMetadata(
         id="generated",
@@ -77,7 +82,7 @@ class GeneratedAttack(AttackBase):
         return AttackCandidate(
             attack_id=f"{record.attack_class}-{ctx.case_id}",
             family="generated",
-            payload=record.payload,
+            payload=_substitute_case_marker(record.payload, ctx.case_marker),
             trigger=record.trigger,
             expected_effect=dict(record.expected_effect),
             metadata={
@@ -92,7 +97,11 @@ class GeneratedAttack(AttackBase):
         record = self.read_record(ctx)
         if record.delivery_steps:
             return [
-                DeliveryStep(label=s.label, message=s.message, as_user=s.as_user or ctx.attacker_user_id)
+                DeliveryStep(
+                    label=s.label,
+                    message=_substitute_case_marker(s.message, ctx.case_marker),
+                    as_user=s.as_user or ctx.attacker_user_id,
+                )
                 for s in record.delivery_steps
             ]
         return [DeliveryStep(label="payload", message=candidate.payload, as_user=ctx.attacker_user_id)]
