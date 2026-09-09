@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 import memnotsafe.cli as cli
 from memnotsafe.adapters.mock import MockTarget
 from memnotsafe.core.campaign import Campaign
@@ -150,19 +152,37 @@ def test_judged_run_serializes_full_stage_provenance(tmp_path):
             assert s.get("judge") is None  # FR-014
 
 
-def test_report_rebuild_is_identical_in_provenance(tmp_path, capsys):
+@pytest.mark.parametrize("client", [None, UnavailableClient()], ids=["confirmed", "unavailable"])
+def test_report_rebuild_is_identical_in_provenance(tmp_path, capsys, monkeypatch, client):
     """Пересобранный `memnotsafe report` отчёт обязан совпасть с исходным по
     verdict_source, evidence_kind, судейскому вердикту и disagreement."""
     from memnotsafe.reporting.findings import build_findings
 
-    result, out = _run_with_judge(tmp_path)
+    result, out = _run_with_judge(tmp_path, client=client)
     original = json.loads((out / "campaign.json").read_text(encoding="utf-8"))
     original_findings = [f.to_dict() for f in build_findings(result.results)]
 
+    def no_live_calls(*_args, **_kwargs):
+        raise AssertionError("report must reuse saved judge results")
+
+    monkeypatch.setattr(cli, "build_adapter", no_live_calls)
+    monkeypatch.setattr(LLMJudge, "evaluate_stages", no_live_calls)
+
     rebuilt_dir = tmp_path / "rebuilt"
     code = cli.main(["report", "--input", str(out), "--output", str(rebuilt_dir)])
-    capsys.readouterr()
+    output = capsys.readouterr().out
     assert code == 0
+
+    expected_metrics = original["aggregate_metrics"]
+    rebuilt_metrics = json.loads((rebuilt_dir / "metrics.json").read_text(encoding="utf-8"))
+    rebuilt_report = json.loads((rebuilt_dir / "report.json").read_text(encoding="utf-8"))
+    for metrics in (rebuilt_metrics, rebuilt_report["metrics"]):
+        assert metrics["judge"] == expected_metrics["judge"]
+        assert metrics["judge_disagreement_rate"] == expected_metrics["judge_disagreement_rate"]
+    summary = expected_metrics["judge"]
+    assert summary["active"] is True
+    assert f"model={summary['model']}  calls={summary['calls_used']}/{summary['calls_limit']}" in output
+    assert json.loads((out / "campaign.json").read_text(encoding="utf-8")) == original
 
     rebuilt_findings = json.loads((rebuilt_dir / "findings.json").read_text(encoding="utf-8"))
 
@@ -175,6 +195,28 @@ def test_report_rebuild_is_identical_in_provenance(tmp_path, capsys):
     for case in original["results"]:
         for s in case["stages"]:
             assert s["verdict_source"] in ("deterministic", "judge")
+
+
+@pytest.mark.parametrize("with_summary", [True, False], ids=["inactive", "legacy"])
+def test_report_rebuild_without_active_judge(tmp_path, with_summary):
+    out = tmp_path / "run"
+    asyncio.run(Campaign(_scenario(tmp_path), MockTarget(vulnerable=True), out).run())
+    if not with_summary:
+        campaign_path = out / "campaign.json"
+        saved = json.loads(campaign_path.read_text(encoding="utf-8"))
+        saved["aggregate_metrics"].pop("judge")
+        saved["aggregate_metrics"].pop("judge_disagreement_rate")
+        campaign_path.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+
+    rebuilt_dir = tmp_path / "rebuilt"
+    assert cli.main(["report", "--input", str(out), "--output", str(rebuilt_dir)]) == 0
+    metrics = json.loads((rebuilt_dir / "metrics.json").read_text(encoding="utf-8"))
+    if with_summary:
+        assert metrics["judge"] == {"active": False}
+    else:
+        # Старый формат может не содержать блока; replay не включает судью.
+        assert not (metrics.get("judge") or {}).get("active")
+    assert metrics.get("judge_disagreement_rate") is None
 
 
 def test_rebuilt_stage_objects_keep_judge_verdicts(tmp_path, capsys):
