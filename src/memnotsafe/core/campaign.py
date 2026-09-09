@@ -248,6 +248,9 @@ class Campaign:
                 budget=self._budget,
                 run_id=run_id,
                 recorder=recorder,
+                # тот же судья, что судил первую попытку: иначе вердикты попыток
+                # одного случая несопоставимы (см. докстринг core/escalation.py)
+                judge=self.judge,
             )
         except AttackerError as exc:
             # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем
