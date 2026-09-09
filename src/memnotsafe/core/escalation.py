@@ -8,6 +8,20 @@
 Тристейт воронки прошлой попытки переносится в обратную связь КАК ЕСТЬ — `None`
 не схлопывается в `True` (Принцип IV). Стоимость и число попыток пишутся в
 `AttackResult.evidence["provenance"]` (research §12): раннер и модели не трогаются.
+
+Два свойства принадлежат ПРОГОНУ и ПОПЫТКЕ, а не копии базового контекста:
+
+* **Судья** — свойство прогона. Если начальную попытку судили, повторы обязаны
+  судиться ТЕМ ЖЕ судьёй: иначе успех/провал внутри одного случая меряются
+  разными линейками, а `verdict_source` попыток несопоставим. Поэтому `judge`
+  передаётся в `escalate` и дальше в каждый `run_attack` как есть (набор
+  судимых стадий не меняется, FR-014).
+* **Case-маркер** — свойство ПОПЫТКИ: он производный от `case_id`, а у повтора
+  `case_id` новый. `run_attack` проставляет маркер в контекст НА МЕСТЕ, поэтому
+  `replace(base_ctx, ...)` унёс бы в повтор маркер прошлой попытки — чужую
+  канарейку, по которой WRITE-матчер атрибутировал бы записи не того случая
+  (T002-10, FR-B). Маркер повтора гасится в None: производителем остаётся
+  раннер, он выведет его из нового `case_id`.
 """
 
 from __future__ import annotations
@@ -88,10 +102,15 @@ async def escalate(
     budget: CallBudget,
     run_id: str,
     recorder: TraceRecorder | None = None,
+    judge: Any | None = None,
 ) -> EscalationOutcome:
     """Цикл: пока не успех, не исчерпан лимит попыток и не исчерпан бюджет —
     переписываем атаку по обратной связи и пробуем снова. Стоп на первом успехе
-    (SC-004). Начальный (корпусный) прогон считается попыткой №1."""
+    (SC-004). Начальный (корпусный) прогон считается попыткой №1.
+
+    `judge` — тот же судья, которым вызывающий слой судил начальную попытку;
+    по умолчанию его нет, и тогда повторы судятся ровно как раньше (офлайн,
+    без сети и ключей)."""
     from memnotsafe.attacks.generated import GeneratedAttack
 
     corpus_id = (base_ctx.params or {}).get("corpus_id")
@@ -128,8 +147,10 @@ async def escalate(
             base_ctx,
             case_id=new_case_id(new_record.attack_class, attempts),
             params={"record": new_record.to_dict(), "corpus_id": corpus_id},
+            # маркер прошлой попытки в новый case_id не переезжает (см. докстринг)
+            case_marker=None,
         )
-        last = await run_attack(gen, new_ctx, target, run_id=run_id, recorder=recorder)
+        last = await run_attack(gen, new_ctx, target, run_id=run_id, recorder=recorder, judge=judge)
         if last.success:
             annotated = _annotate(last, attempts=attempts, budget_exhausted=budget.exhausted, adapted=True, corpus_id=corpus_id)
             return EscalationOutcome(annotated, attempts=attempts, succeeded=True, budget_exhausted=budget.exhausted)
