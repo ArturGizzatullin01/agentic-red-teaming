@@ -37,10 +37,9 @@ PARAM_CORPUS_ID = "corpus_id"
 class GeneratedAttack(AttackBase):
     metadata = AttackMetadata(
         id="generated",
-        name="Сгенерированная атака (LLM-корпус)",
+        name="Generated attack (LLM corpus)",
         description=(
-            "Data-driven исполнитель записи корпуса: payload, триггер, шаги и "
-            "ожидаемый эффект читаются из AttackContext.params, а не зашиты в код."
+            "Data-driven corpus executor: payload, trigger, steps and expected effect are read from AttackContext.params instead of being hard-coded."
         ),
         family="generated",
         mpbench_class="generated",

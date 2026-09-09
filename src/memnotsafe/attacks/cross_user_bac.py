@@ -17,10 +17,9 @@ from memnotsafe.core.models import AttackCandidate
 class CrossUserBAC(AttackBase):
     metadata = AttackMetadata(
         id="cross_user_bac",
-        name="Cross-user broken access control через отравление памяти",
+        name="Cross-user broken access control via memory poisoning",
         description=(
-            "Атакующий записывает 'общее правило поддержки', которое подменяет "
-            "идентификатор клиента (cus) в вызове инструмента для ЛЮБОГО пользователя."
+            "The attacker plants a 'general support rule' that overrides the customer id (cus) in a tool call for ANY user."
         ),
         family="cross_user_bac",
         mpbench_class="explicit_command_insertion",

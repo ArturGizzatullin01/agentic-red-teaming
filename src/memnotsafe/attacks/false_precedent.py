@@ -16,8 +16,8 @@ from memnotsafe.core.models import AttackCandidate
 class FalsePrecedent(AttackBase):
     metadata = AttackMetadata(
         id="false_precedent",
-        name="Ложный прецедент (fabricated approval history)",
-        description="Сфабрикованное 'одобрение' в памяти заставляет агента повторить его как прецедент позже.",
+        name="False precedent (fabricated approval history)",
+        description=(             "A fabricated 'approval' planted in memory makes the agent repeat it as a precedent later."         ),
         family="false_precedent",
         mpbench_class="conditional_command_insertion",
         signal_strength="strong",
