@@ -119,3 +119,13 @@ Attack, поэтому узкая проверка не требует ново�
 `response_reflects_adoption`; отсутствие поля и пустой список остаются допустимыми.
 Неизвестные типы, а также tool/cross-user эффекты без текстовых маркеров или
 `call_id` не отклоняются: их прежняя семантика UNKNOWN сохраняется (IV, VII).
+
+## Дельта плана: FIX-12 (T002-4b)
+
+RETRIEVE использует стабильную идентичность, уже доказанную общим matcher'ом:
+`RecordMatch.record_id`. Oracle не читает raw `record["id"]` и не повторяет
+правила storage-alias (`id`, `mem_id`, `fact_id`, `memory_id`). После надёжной
+атрибуции один и тот же `record_id` проверяется в `memory_refs`; полная трасса
+без него даёт False. Если matcher не доказал идентичность, `None` не участвует
+в поиске и стадия остаётся UNKNOWN (IV). Matcher, Adapter, Judge и формула
+composite не меняются.

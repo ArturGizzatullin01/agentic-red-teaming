@@ -176,6 +176,19 @@ description: "Tasks for 002-evidence-integrity"
   выделенном согласованном хранилище; подмена только mongo_db адаптера
   запрещена), команды PowerShell, report --input/--output, обещания
   уникальности маркера и полной наблюдаемости lifecycle сняты.
+- [x] T002-4b (2026-09-10, Codex / FIX-12): RETRIEVE ищет в `memory_refs`
+  доказанный `RecordMatch.record_id`, не перечитывая raw `record["id"]` и не
+  повторяя storage-alias matcher'а. **Given** запись с `id`, `mem_id`, `fact_id`
+  или `memory_id`, **When** matcher однозначно доказывает её идентичность и trace
+  содержит этот id, **Then** RETRIEVE=True; **Given** доказанный id отсутствует
+  в полной trace, **Then** RETRIEVE=False; **Given** стабильный id не доказан,
+  **Then** `None` не ищется в `memory_refs` и RETRIEVE=UNKNOWN. Файлы:
+  `oracles/retrieval.py`, `tests/test_evidence_integrity.py`. RED `-k fix_12` —
+  5 failed, 1 passed; GREEN `test_evidence_integrity.py test_evidence_matching.py`
+  — 166 passed; обязательный регресс — 9 passed; полный suite — 445 passed.
+  Constitution Check: I — изменение только в Oracle; III — правила полей не
+  перенесены из matcher'а; IV — UNKNOWN и наблюдаемый False сохранены; V —
+  composite не менялся.
 - [~] T002-5a (2026-09-07, Codex по запросу Андрея): дедуп расщеплённой канарейки в
   `evidence/matching._match_by_marker` — несколько записей с НАШИМ case-marker и
   различными id = одна логическая запись (финалайзер дробит ход / мульти-слой
