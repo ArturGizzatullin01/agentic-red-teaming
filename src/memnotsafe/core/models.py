@@ -41,6 +41,21 @@ class AttackCandidate:
     expected_effect: dict[str, Any]
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Отклонить пустые маркеры известного текстового эффекта на входе."""
+        if self.expected_effect.get("type") != "response_reflects_adoption":
+            return
+
+        for field_name in ("markers", "adoption_markers", "refusal_markers"):
+            markers = self.expected_effect.get(field_name)
+            if not isinstance(markers, list):
+                continue
+            for index, marker in enumerate(markers):
+                if isinstance(marker, str) and marker == "":
+                    raise ValueError(
+                        f"expected_effect.{field_name}[{index}] must not be an empty string"
+                    )
+
 
 # Тристейт: True = подтверждено, False = опровергнуто, None = UNKNOWN (telemetry недоступна).
 StageVerdict = bool | None

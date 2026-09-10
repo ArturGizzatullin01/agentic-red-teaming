@@ -239,6 +239,27 @@ description: "Tasks for 002-evidence-integrity"
   НЕ выполнено и T002-8 не закрывает: install-only echo, отказ-с-цитатой,
   несвязанные call/result, чужой principal (это T002-5), truth-table/wire
   round-trip (T002-9).
+- [x] T002-8a (FIX-11): валидация пустых элементов effect-маркеров на границе
+  `AttackCandidate`. **Given** известный текстовый `expected_effect` с `""` в
+  `markers`, `adoption_markers` или `refusal_markers`, **When** Attack создаёт
+  кандидата, **Then** создание завершается `ValueError`, а `run_attack` сообщает
+  configuration/runner error до первого `target.send`; **Given** поле отсутствует
+  или равно `[]`, валидный legacy-маркер, неизвестный `type`, tool/cross-user
+  effect без маркеров и `call_id`, **When** создаётся кандидат, **Then** вход
+  остаётся допустимым, а отсутствующая evidence-схема по-прежнему даёт UNKNOWN.
+  Файлы: `src/memnotsafe/core/models.py`, `tests/test_evidence_integrity.py`.
+  Проверки: `pytest tests/test_evidence_integrity.py -q`, затем
+  `pytest tests/test_e2e_cross_user.py tests/test_all_attacks.py -q` и полный
+  `pytest tests/ -q`. Constitution Check: I — меняется только входной контракт
+  Attack, Oracle/Adapter/Runner не меняются; IV — UNKNOWN не схлопывается; VII —
+  плохая конфигурация остаётся runner error (exit 1), штатный miss — exit 0;
+  VIII — проверка остаётся в существующем dataclass без миграции `ExpectedEffect`.
+  Выполнено 2026-09-10: адресный RED — 4 failed / 7 passed (три списка приняли
+  пустую строку, runner дошёл дальше создания кандидата); после фикса
+  `tests/test_evidence_integrity.py -q` → 99 passed; обязательный регресс
+  `tests/test_e2e_cross_user.py tests/test_all_attacks.py -q` → 9 passed;
+  полный offline suite `tests/ -q` → 439 passed. Все команды выполнены заданным
+  `reporter-venv/Scripts/python.exe` с `PYTHONPATH=src`.
 - [ ] T002-9 Тест неизменности `oracles/composite.py` (truth-table fixture);
   round-trip StageResult→JSON→report (True/False/None, R1); полный baseline
   `python -m pytest tests/ -q` зелёный; review этапа.
