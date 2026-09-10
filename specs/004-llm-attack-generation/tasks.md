@@ -167,6 +167,30 @@ scenarios/generated_support.yaml` даёт честный вердикт на `M
 ### Implementation for User Story 4
 
 - [X] T039 [US4] Резолвить severity и ATLAS-маппинг по `evidence.provenance.attack_class` (а не по `family="generated"`) в `src/memnotsafe/reporting/findings.py` (FR-003, FR-013, research §2)
+- [X] T039a [US4] FIX-08: писать `family` результата в `results[]` файла `campaign.json`
+      (`src/memnotsafe/core/campaign.py::_campaign_to_dict`). T039 научил отчёт различать семью и
+      класс-источник, но до wire семья не доезжала: писал её только `_case_summary` в
+      `cases.jsonl` (аудит B1/H13)
+  - **Given** корпусный прогон `family=generated`, где `attack_id` случая — имя класса-источника
+    (`cross_user_bac`, `direct_poisoning`) и сам по себе валидный ключ `ATTACK_REGISTRY`
+  - **When** `campaign.json` прочитан обратно через `cli.load_campaign`
+  - **Then** семья остаётся `generated`, а не подменяется классом-источником: legacy-fallback по
+    `attack_id` на таком файле давал рукописную атаку вместо корпусной (FR-003, FR-013)
+  - **And** `family` и `evidence.provenance.attack_class` остаются независимыми: у рукописной
+    атаки совпадают, у корпусной расходятся, и round-trip не сводит одно к другому
+  - **And** аддитивность доказана: тристейт стадий, судейский провенанс, расхождение и композит
+    переживают запись и чтение без изменений; legacy без ключа читается прежним правилом, а
+    неоднозначный legacy по-прежнему не получает выдуманной семьи
+  - Файлы: `src/memnotsafe/core/campaign.py`, `tests/test_reporting_replay.py`
+  - Проверки (`.agent-work/reporter-venv`, `PYTHONPATH=src`): RED — 3 из 5 новых тестов красные до
+    правки; `tests/test_reporting_replay.py tests/test_judge_offline_regression.py` → 29 passed;
+    `tests/test_e2e_cross_user.py tests/test_all_attacks.py` → 9 passed; `tests/` → 445 passed
+  - Constitution Check: роль не расширена — меняется только сериализация, методы исполнения
+    `Campaign` не тронуты (принцип I); поле аддитивное, существующие не переименованы, читатель и
+    его legacy-fallback не менялись (принцип VIII); тристейт стадий сохраняется как был (принцип IV)
+  - Остаётся открытым: `scenario_id` в результате прогона по-прежнему пишется как
+    `attack.metadata.family` (`core/runner.py`), поэтому у корпусного случая он равен `generated`,
+    а не имени эксперимента — это отдельный вопрос идентичности, вне FIX-08
 - [X] T040 [US4] Писать агрегат стоимости прогона (суммарные вызовы атакующей LLM, `budget_exhausted`) рядом с существующим `metadata` в `campaign.json` в `src/memnotsafe/core/campaign.py` (FR-014, research §12)
 - [X] T041 [P] [US4] Показывать происхождение атаки и число попыток в отчётах: `src/memnotsafe/reporting/html_report.py`, `src/memnotsafe/reporting/json_report.py`, `src/memnotsafe/reporting/sarif.py` (зависит от T039)
 

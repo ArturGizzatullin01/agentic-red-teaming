@@ -150,3 +150,23 @@ I–III и SC-008. Директории данных (`profiles/`, `attack_class
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
 | —         | —          | —                                   |
+
+## Дельта плана: FIX-08 (T039a)
+
+Узкая правка сериализации в [core/campaign.py](../../src/memnotsafe/core/campaign.py). Файл-аналог
+— `_case_summary` в этом же модуле: он уже пишет `family` рядом с `attack_id` в `cases.jsonl`.
+`_campaign_to_dict` этого не делал, хотя читает тот же `AttackResult`.
+
+Что меняется: в каждый элемент `results[]` файла `campaign.json` добавляется ключ `family` со
+значением `result.family`. Больше ничего — ни переименований, ни удалений.
+
+Почему это не косметика: у случая `family=generated` поле `attack_id` — имя класса-источника
+(`GeneratedAttack.resolve_metadata` подменяет метадату экземпляра метадатой класса из корпусной
+записи), и оно само по себе валидный ключ `ATTACK_REGISTRY`. Пока `family` не было в файле,
+legacy-fallback читателя срабатывал молча и выдавал рукописную семью там, где работал корпус, —
+отчёт приписывал сгенерированную атаку рукописному паку.
+
+Что НЕ меняется: `scenario_id` и `attack_id`, читатель
+[cli.load_campaign](../../src/memnotsafe/cli.py) вместе с его legacy-fallback,
+[findings.py](../../src/memnotsafe/reporting/findings.py), схема JSON-отчёта и методы исполнения
+`Campaign`.
