@@ -448,4 +448,5 @@ async def run_attack(
         evidence=evidence,
         attacker_user_id=ctx.attacker_user_id,
         victim_user_id=ctx.victim_user_id,
+        family=attack.metadata.family,
     )

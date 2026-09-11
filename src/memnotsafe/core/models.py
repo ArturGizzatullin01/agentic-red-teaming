@@ -205,6 +205,10 @@ class AttackResult:
     evidence: dict[str, Any]
     attacker_user_id: str = ""
     victim_user_id: str = ""
+    # Идентичность семейства атаки (ATTACK_REGISTRY ключ). Отдельное поле с
+    # 2026-09-06: scenario_id — имя ЭКСПЕРИМЕНТА (не взаимозаменяемы с family;
+    # replay-дефект отчёта см. tasks 002). "" у старых сериализаций.
+    family: str = ""
 
     def stage(self, name: str) -> StageResult | None:
         for s in self.stages:
