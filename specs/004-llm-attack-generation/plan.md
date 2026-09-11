@@ -143,6 +143,27 @@ tests/
 I–III и SC-008. Директории данных (`profiles/`, `attack_classes/`, `corpora/`) версионируются как
 входы, зеркаля роль `scenarios/`.
 
+## FIX-06 — Явный шаблон case-marker в GeneratedAttack
+
+Дата: 2026-09-10. Ветка: `fix/generated-delivery-case-marker`, база: `05ac75ba` (FIX-02).
+Норма: [spec.md](spec.md), FR-003/FR-005; [схема корпуса](contracts/corpus.schema.md).
+Файл для узкой правки: [generated.py](../../src/memnotsafe/attacks/generated.py), задача T011.
+
+- Подставлять только буквальный `{case_marker}` в `payload` и `delivery_steps.message`,
+  если `ctx.case_marker is not None`; использовать замену подстроки, без форматирования текста.
+- Создавать результат без изменения `CorpusRecord`, `ctx.params` и метаданных класса.
+  Сохранить `label`, `as_user` с существующим fallback, число и порядок шагов.
+- Не добавлять маркер в текст без шаблона; не заменять старые CM-токены и другие скобки.
+  При `case_marker=None` оставить текст как есть; `trigger` и `expected_effect` не подставлять.
+- Проверить обе ветки доставки и переиспользование одной записи с двумя маркерами в
+  [test_generation_offline.py](../../tests/test_generation_offline.py): сначала RED, затем GREEN.
+  После фикса выполнить обязательный регресс `test_e2e_cross_user.py test_all_attacks.py`.
+
+Constitution Check: I–II соблюдены — меняется только роль Attack, ядро запрещено к правке;
+IV–V/VII не затронуты; проверки офлайн (VI), существующие dataclass сохраняются (VIII).
+`rewrite`, схема и корпус на диске, Runner и Adapter вне этой ветки. Обязательность маркера
+остаётся задачей Runner (FIX-07). Фактические проверки и acceptance — в [tasks.md](tasks.md).
+
 ## Complexity Tracking
 
 > Нарушений Constitution Check нет — таблица пуста.

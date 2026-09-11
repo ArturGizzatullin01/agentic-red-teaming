@@ -278,6 +278,24 @@ Task: "Описания классов в attack_classes/*.yaml"
 
 ---
 
+## FIX-06 — Исполнение объявленного шаблона case-marker
+
+Дата: 2026-09-10. Ветка: `fix/generated-delivery-case-marker`, база: `05ac75ba` (FIX-02).
+Дельта T011 по FR-003/FR-005: [план](plan.md#fix-06--явный-шаблон-case-marker-в-generatedattack).
+
+- [ ] T011-FIX06-RED Получить адресный RED на текущем `GeneratedAttack` в
+  `tests/test_generation_offline.py`; при отсутствии RED остановиться.
+- [ ] T011-FIX06 Подставить только `{case_marker}` в payload и сообщения delivery при заданном
+  `ctx.case_marker`. Проверить разные доставки одной записи с двумя маркерами; сохранить запись,
+  params, метаданные класса, label/as_user, число и порядок шагов.
+- [ ] T011-FIX06-GREEN Подтвердить сохранение текста без шаблона, старых CM-токенов, других скобок,
+  trigger/trigger_steps и expected_effect; `case_marker=None` оставляет шаблон без новой канарейки.
+  Выполнить адресный набор и обязательный регресс; результат передать Hermes для приёмки.
+
+Исходный обязательный регресс: `test_e2e_cross_user.py test_all_attacks.py -q` → 9 passed.
+Все проверки этой ветки используют только переданный `reporter-venv/Scripts/python.exe`
+с `PYTHONPATH=src`; точные команды и финальный результат будут записаны в блок FIX-06 в LOG.
+
 ## Notes
 
 - Правки ядра запрещены — см. раздел «Baseline и запреты» выше (SC-008)
