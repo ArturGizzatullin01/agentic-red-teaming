@@ -34,7 +34,12 @@ Yana, 2026-09-07):
   именно БУКВЫ «ASR», цифры у всех плиток одинаковые, в числе только процент
   без знаменателя (ревью владельца 2026-09-07: «долго листать вниз», затем
   «в 3 столбца»);
-- все недоверенные тексты экранируются; судья не подключён — блок «judge inactive».
+- все недоверенные тексты экранируются; судейские сведения показываются
+  ФАКТИЧЕСКИЕ: источник вердикта, модель, рубрика, уверенность, цитата и оба
+  вердикта при расхождении (003 FR-007/FR-008/FR-013,
+  specs/003-llm-judge-oracle/contracts/report-provenance.md, раздел
+  `report.html`); судьи не было — так и написано, «Judge inactive», и ни
+  модель, ни рубрика при этом не выдумываются.
 
 Reporter не реконструирует несуществующие сообщения; Reporter не оценивает успех.
 """
@@ -45,7 +50,7 @@ import html
 import json
 from pathlib import Path
 
-from memnotsafe.core.models import AttackResult, CampaignResult
+from memnotsafe.core.models import AttackResult, CampaignResult, StageResult
 from memnotsafe.reporting.findings import Finding, build_findings
 from memnotsafe.tracing.causal_graph import build_causal_chain, flatten_linear
 
@@ -91,12 +96,158 @@ def _stage_dot(v: bool | None) -> str:
     return f'<span class="dot" style="color:{color}">{glyph}</span>'
 
 
-def _ladder(stages: dict[str, bool | None]) -> str:
-    parts = [
-        f'<span class="stage-chip">{_STAGE_LABEL[s]} {_stage_dot(stages.get(s))}</span>'
-        for s in _STAGE_ORDER
-    ]
+# Бейдж источника вердикта: `D` — доказано оракулом, `J` — сказал судья.
+_SRC_J = '<span class="src-j" title="verdict source: LLM judge, not hard evidence">J</span>'
+_SRC_D = '<span class="src-d" title="verdict source: deterministic oracle">D</span>'
+
+
+def _ladder(stages: list[StageResult]) -> str:
+    """Лестница остаётся точечной и бессловесной (дизайн-контракт выше). Бейдж
+    источника ставится ТОЛЬКО у стадии, вердикт которой поставил судья: у
+    детерминированной стадии он не несёт информации — источник по умолчанию
+    именно такой, — а шесть букв «D» в каждой карточке ломают договорённость о
+    лестнице без слов. Полный источник каждой стадии (`D`/`J` и природа
+    доказательства) виден в таблице «Stages & reasons»."""
+    by_stage = {s.stage: s for s in stages}
+    parts = []
+    for name in _STAGE_ORDER:
+        st = by_stage.get(name)
+        badge = _SRC_J if st is not None and st.verdict_source == "judge" else ""
+        parts.append(
+            f'<span class="stage-chip">{_STAGE_LABEL[name]} '
+            f'{_stage_dot(st.success if st is not None else None)}{badge}</span>'
+        )
     return '<span class="arr"> → </span>'.join(parts)
+
+
+# ---------------------------------------------------------------- Judge (003)
+#
+# Всё ниже читает УЖЕ СОХРАНЁННЫЕ вердикты (StageResult.judge / .deterministic и
+# aggregate_metrics['judge']) и ничего не пересчитывает: Reporter не оценивает
+# успех (принцип I). Пустое поле не заменяется значением по умолчанию —
+# «модель не записана» и «модель такая-то» это разные факты.
+
+# Что означает исход судьи. «Судью не звали» и «судья не ответил» — разные
+# факты, и ни один из них не читается как «эффекта нет» (FR-020, принцип IV).
+_JUDGE_OUTCOME_NOTE = {
+    "confirmed": "the judge confirmed this stage",
+    "refuted": "the judge stated the effect is absent",
+    "unknown": "the judge answered, but the answer did not pass validation",
+    "unavailable": "the judge gave no answer (call failed or the budget ran out)",
+    "skipped": "the judge was not called — there was nothing to evaluate",
+}
+# Уверенность осмысленна только там, где судья действительно вынес суждение.
+_JUDGE_ANSWERED = ("confirmed", "refuted", "unknown")
+
+
+def _verdict_word(v: bool | None) -> str:
+    return {True: "confirmed", False: "not confirmed"}.get(v, "insufficient data")
+
+
+def _stage_source_cell(s: StageResult) -> str:
+    badge = _SRC_J if s.verdict_source == "judge" else _SRC_D
+    return f'{badge} {_esc(s.verdict_source)} · <code>{_esc(s.evidence_kind)}</code>'
+
+
+def _judge_fields(v) -> str:
+    """Строка фактов вердикта: только то, что реально записано."""
+    bits = []
+    if v.model:
+        bits.append(f"model <code>{_esc(v.model)}</code>")
+    if v.rubric:
+        bits.append(f"rubric <code>{_esc(v.rubric)}</code>")
+    if v.outcome in _JUDGE_ANSWERED:
+        bits.append(f"confidence <b>{v.confidence:.2f}</b>")
+    if v.created_at:
+        bits.append(f"at {_esc(v.created_at)}")
+    if v.artifact_ref:
+        bits.append(f"artifact <code>{_esc(v.artifact_ref)}</code>")
+    return " · ".join(bits)
+
+
+def _judge_stage_html(s: StageResult) -> str:
+    v = s.judge
+    label = _STAGE_LABEL.get(s.stage, s.stage)
+    parts = [
+        f'<div class="j-head"><b>{_esc(label)}</b> — judge: '
+        f'<span class="j-outcome j-{_esc(v.outcome)}">{_esc(v.outcome)}</span>'
+        f'<span class="muted"> · {_esc(_JUDGE_OUTCOME_NOTE.get(v.outcome, ""))}</span></div>'
+    ]
+    fields = _judge_fields(v)
+    if fields:
+        parts.append(f'<p class="muted j-fields">{fields}</p>')
+    if v.error:
+        parts.append(f'<p class="muted">recorded reason: <code>{_esc(v.error)}</code></p>')
+    if v.rationale:
+        parts.append(f'<p class="j-rationale">{_esc(v.rationale)}</p>')
+    if v.quote:
+        # цитата приходит из враждебного источника — экранируется как любой
+        # текст таргета и никогда не вставляется как разметка
+        parts.append(f'<blockquote class="j-quote">{_esc(v.quote)}</blockquote>')
+    if s.disagreement and s.deterministic is not None:
+        d = s.deterministic
+        parts.append(
+            '<div class="j-disagree"><b>Verdicts disagree</b> — neither side is dropped silently:'
+            f'<ul><li>deterministic (<code>{_esc(d.evidence_kind)}</code>): '
+            f'<b>{_verdict_word(d.success)}</b> — {_esc(d.reason)}</li>'
+            f'<li>judge: <b>{_esc(v.outcome)}</b> — '
+            f'{_esc(v.rationale or "no rationale recorded")}</li></ul>'
+            f'the stage verdict was taken from <b>{_esc(s.verdict_source)}</b> '
+            f'(<code>{_esc(s.evidence_kind)}</code>)</div>'
+        )
+    return '<div class="j-stage">' + "\n".join(parts) + "</div>"
+
+
+def _judge_block(f: Finding, result: AttackResult, judge_meta: dict) -> str:
+    """Судейский блок КОНКРЕТНОГО случая. Активность судьи в кампании сама по
+    себе ничего не говорит об этом случае: если по нему нет ни одного вердикта,
+    так и пишем, а модель кампании ему не приписываем."""
+    judged = [s for s in result.stages if s.judge is not None]
+    if not judged:
+        body = (
+            '<p class="muted">Judge active in this run, but this case was '
+            "<b>not evaluated by the judge</b> — every verdict here is deterministic. "
+            "Run-level judge activity is not evidence about this case.</p>"
+            if judge_meta.get("active") else
+            '<p class="muted">Judge inactive — verdicts come from deterministic oracles only.</p>'
+        )
+        return f'<section class="judge-block">{body}</section>'
+    head = ('<p class="muted">Judge verdicts recorded for this case: '
+            f"{len(judged)} of {len(result.stages)} stages.</p>")
+    if f.confidence_tier == "llm_confirmed":
+        head += ('<p class="warn">A composite stage of this finding rests on the LLM judge, '
+                 "not on a memory snapshot or telemetry — confidence is lower "
+                 f'(<code>{_esc(f.confidence_tier)}</code>).</p>')
+    return ('<section class="judge-block">' + head
+            + "\n".join(_judge_stage_html(s) for s in judged) + "</section>")
+
+
+def _judge_summary_html(m: dict) -> str:
+    """Сводка судьи по прогону: бюджет и доля расхождений (FR-012/FR-019).
+    Отсутствие блока читается так же, как `{"active": false}`: судьи не было."""
+    j = m.get("judge") or {}
+    if not j.get("active"):
+        return ('<p class="muted judge-summary">Judge inactive — every verdict in this run '
+                "comes from deterministic oracles.</p>")
+    bits = []
+    if j.get("model"):
+        bits.append(f'model <code>{_esc(j["model"])}</code>')
+    if j.get("calls_limit") is not None:
+        bits.append(f'calls <b>{_esc(j.get("calls_used"))}/{_esc(j["calls_limit"])}</b>')
+    counted = [(k, j[k]) for k in ("stages_judged", "confirmed", "refuted", "unknown",
+                                   "unavailable", "skipped", "disagreements")
+               if j.get(k) is not None]
+    if counted:
+        bits.append(" / ".join(f"{_esc(k)} {_esc(n)}" for k, n in counted))
+    rate = m.get("judge_disagreement_rate")
+    # null ≠ 0: ноль означал бы «судья работал и расхождений не нашёл»
+    bits.append(f"disagreement rate <b>{rate * 100:.0f}%</b>" if rate is not None
+                else "disagreement rate <b>n/a</b>")
+    if j.get("budget_exhausted"):
+        bits.append('<b class="warn-inline">budget exhausted</b>')
+    if j.get("failures"):
+        bits.append(f'failed calls <b>{_esc(j["failures"])}</b>')
+    return '<p class="muted judge-summary">Judge active · ' + " · ".join(bits) + "</p>"
 
 
 def _funnel_chips(funnel: dict) -> str:
@@ -251,15 +402,21 @@ def _chat_summary_line(result: AttackResult) -> str:
     return "legacy fragments (full dialogue was not recorded)"
 
 
-def _case_article(f: Finding, result: AttackResult, events: list[dict], run_dir_rel: str) -> str:
+def _case_article(f: Finding, result: AttackResult, events: list[dict], run_dir_rel: str,
+                  judge_meta: dict | None = None) -> str:
     status_class = "success" if f.status == "SUCCESS" else "not-exploitable"
     status_text = _STATUS_TEXT.get(f.status, f.status)
-    stages = {s.stage: s.success for s in result.stages}
     stage_rows = "\n".join(
         f"<tr><td>{_STAGE_LABEL[s.stage]}</td><td>{_stage_dot(s.success)}</td>"
-        f"<td>{_esc(s.reason)}</td></tr>"
+        f"<td>{_esc(s.reason)}</td><td>{_stage_source_cell(s)}</td></tr>"
         for s in result.stages
     )
+    # Плашка ставится по тиру достоверности находки (FR-015): она про то, на чём
+    # держится ПОДТВЕРЖДЁННАЯ находка, а не про наличие судейских стадий вообще.
+    llm_title = ("A composite stage of this finding is confirmed by the LLM judge, not by a "
+                 "memory snapshot or telemetry — treat it as weaker evidence")
+    llm_badge = (f'<span class="badge llm-conf" title="{_esc(llm_title)}">LLM-CONFIRMED</span>'
+                 if f.confidence_tier == "llm_confirmed" else "")
     effect = (result.evidence.get("candidate") or {}).get("expected_effect") or {}
     effect_txt = json.dumps(effect, ensure_ascii=False) if effect else "not recorded"
     sev_title = ("Severity of a CONFIRMED compromise (by attack family); "
@@ -271,7 +428,7 @@ def _case_article(f: Finding, result: AttackResult, events: list[dict], run_dir_
   <header>
     <h3>{_esc(f.title)}
       <span class="badge sev-{f.severity.lower()}" title="{_esc(sev_title)}">sev: {_esc(f.severity)}</span>
-      <span class="badge status-{f.status.lower().replace('_','-')}" title="{_esc(status_title)}">{_esc(status_text)}</span></h3>
+      <span class="badge status-{f.status.lower().replace('_','-')}" title="{_esc(status_title)}">{_esc(status_text)}</span>{llm_badge}</h3>
     <div class="meta">
       <p class="muted">family <code>{_esc(f.family)}</code> · attack_id <code>{_esc(f.attack_id)}</code> ·
          case <code>{_esc(f.case_id)}</code> · requests from user <code>{_esc(f.attacker)}</code> →
@@ -283,16 +440,15 @@ def _case_article(f: Finding, result: AttackResult, events: list[dict], run_dir_
       {_origin_line(f)}
     </div>
   </header>
-  <div class="ladder">{_ladder(stages)}</div>
+  <div class="ladder">{_ladder(result.stages)}</div>
   <details>
     <summary>Dialogue &amp; phases · {_esc(_chat_summary_line(result))}</summary>
     {_transcript_html(result)}
   </details>
   <details>
     <summary>Stages &amp; reasons</summary>
-    <table><tr><th>Stage</th><th>Verdict</th><th>Reason</th></tr>{stage_rows}</table>
-    <p class="judge-block">Judge inactive — verdicts come from deterministic oracles only;
-       LLM-judge evaluation arrives with the judge feature.</p>
+    <table><tr><th>Stage</th><th>Verdict</th><th>Reason</th><th>Source</th></tr>{stage_rows}</table>
+    {_judge_block(f, result, judge_meta or {})}
   </details>
   <details>
     <summary>Causal trace</summary>
@@ -381,7 +537,28 @@ article h3{font-size:15px;margin:0 0 4px}
 .msg-agent{background:rgba(127,127,127,.06);border-left:3px solid var(--border)}
 .msg-head{font-size:12px;color:var(--muted);margin-bottom:6px;overflow-wrap:anywhere}
 .msg-body{white-space:pre-wrap;font-size:16px;line-height:1.55}
-.judge-block{font-size:13px;color:var(--muted);margin-top:8px}
+.judge-block{font-size:13px;color:var(--muted);margin-top:8px;display:block}
+.judge-summary{text-align:center;margin:10px 0 0}
+.warn-inline{color:var(--unk)}
+.src-j{display:inline-block;font-size:10px;font-weight:700;color:#1a1200;background:var(--med);
+       border-radius:3px;padding:0 3px;margin-left:3px;vertical-align:top}
+.src-d{display:inline-block;font-size:10px;font-weight:700;color:var(--muted);
+       border:1px solid var(--border);border-radius:3px;padding:0 3px}
+.badge.llm-conf{background:var(--med);color:#1a1200}
+.j-stage{border-top:1px dashed var(--border);padding-top:8px;margin-top:8px}
+.j-head{color:var(--text);font-size:13px}
+.j-outcome{font-weight:700}
+.j-confirmed{color:var(--fail)}
+.j-refuted{color:var(--ok)}
+.j-unknown,.j-unavailable,.j-skipped{color:var(--unk)}
+.j-fields{margin:4px 0 0;overflow-wrap:anywhere}
+.j-rationale{color:var(--text);font-size:13px;margin:6px 0 0}
+.j-quote{margin:6px 0 0;padding:6px 10px;border-left:3px solid var(--accent);
+         background:rgba(127,127,127,.06);color:var(--text);font-size:13px;
+         white-space:pre-wrap;overflow-wrap:anywhere}
+.j-disagree{margin-top:8px;border:1px solid var(--unk);border-radius:8px;padding:6px 10px;
+            color:var(--text);font-size:13px}
+.j-disagree ul{margin:4px 0 0 16px;padding:0}
 .causal-chain{font-size:13px;margin:8px 0 0 18px}
 .causal-chain code{background:rgba(127,127,127,.15);padding:1px 5px;border-radius:4px}
 .artifacts{font-size:13px;margin:10px 0 0}
@@ -457,7 +634,8 @@ def render_html(campaign: CampaignResult, run_events_by_case: dict[str, list[dic
     columns_html = "\n".join(
         '<div class="fcol">\n'
         + "\n".join(
-            _case_article(f, by_case[f.case_id], run_events_by_case.get(f.case_id, []), run_dir_rel)
+            _case_article(f, by_case[f.case_id], run_events_by_case.get(f.case_id, []),
+                          run_dir_rel, m.get("judge") or {})
             for f in buckets[i]
         )
         + "\n</div>"
@@ -480,6 +658,7 @@ def render_html(campaign: CampaignResult, run_events_by_case: dict[str, list[dic
   </div>
   <h2>Stage funnel</h2>
   {_funnel_chips(m['funnel'])}
+  {_judge_summary_html(m)}
   {_legend_html()}
 
   <h2>Attacks ({len(findings)})</h2>
