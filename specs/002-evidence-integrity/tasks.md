@@ -202,6 +202,21 @@ description: "Tasks for 002-evidence-integrity"
   IV — потери тристейта нет, направление изменения только `True|False → UNKNOWN`;
   V — `oracles/composite.py` не менялся. Не закрывает T002-5: корреляция call/result по
   `call_id` (FIX-02) и отказ-с-цитатой (FIX-03) остаются открытыми.
+- [x] T002-5c (2026-09-10, Claude Opus 5 / FIX-02): корреляция tool call/result по
+  `(session_id, call_id)` в `oracles/base.py::correlate_tool_events` и её применение в
+  инструментальных EFFECT и TOOL. **Given** захваченный вызов заблокирован (403), а 200 вернул
+  соседний честный вызов, **When** EFFECT оценивается, **Then** стадия False, а не True;
+  **Given** вызов без связанного по `call_id` результата (или результат без вызова, дубль
+  `call_id` в сессии, событие без `call_id`), **When** EFFECT/TOOL оцениваются, **Then** UNKNOWN
+  с причиной; **Given** один `call_id` в двух разных сессиях, **When** строятся пары, **Then**
+  они не соединяются. Файлы: `oracles/base.py`, `oracles/tool.py`, `oracles/external_effect.py`,
+  `tests/test_evidence_integrity.py`. Проверки: `pytest tests/test_evidence_integrity.py
+  tests/test_all_attacks.py -q`, затем `pytest tests/test_e2e_cross_user.py
+  tests/test_all_attacks.py -q` и полный `pytest tests/ -q`. Constitution Check: I — правило
+  живёт в Oracle, `call_id` в адаптерах не придумывался (mock и investment_stand ставят его
+  сами); III — сопоставление идёт по общим полям события, без знания о таргете; IV — направление
+  изменения только `True|False → UNKNOWN`; V — `oracles/composite.py` не менялся, TOOL остаётся
+  диагностикой вне формулы. Не закрывает T002-5: отказ-с-цитатой (FIX-03) остаётся открытым.
 - [ ] T002-6 `adapters/investment_stand.py` (+ `adapters/mock.py` при нужде):
   привязка к полям хранилища (ownerless, коллекции) остаётся здесь; используют
   matching, не дублируют нормализацию.
