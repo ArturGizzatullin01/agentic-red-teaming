@@ -377,6 +377,12 @@ def _case_summary(result: AttackResult) -> dict:
 
 
 def _campaign_to_dict(cr: CampaignResult, metadata: dict | None = None) -> dict:
+    """Сериализация кампании. `family` (002, FR-003/FR-013) пишется РЯДОМ с
+    `attack_id`, а не вместо него: у сгенерированного случая `attack_id` — имя
+    класса-источника и сам по себе валидный ключ ATTACK_REGISTRY, так что
+    восстановить по нему семью нельзя — прочитается рукописная атака вместо
+    корпусной. Поле аддитивное: ни одно существующее не переименовано, старые
+    файлы читаются прежним fallback'ом читателя (cli.load_campaign)."""
     return {
         "run_id": cr.run_id,
         "scenario_id": cr.scenario_id,
@@ -387,6 +393,7 @@ def _campaign_to_dict(cr: CampaignResult, metadata: dict | None = None) -> dict:
             {
                 "case_id": r.case_id,
                 "attack_id": r.attack_id,
+                "family": r.family,
                 "success": r.success,
                 "stages": [_stage_to_dict(s) for s in r.stages],
                 "attacker_user_id": r.attacker_user_id,

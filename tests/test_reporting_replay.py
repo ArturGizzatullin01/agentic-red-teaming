@@ -1,19 +1,28 @@
-"""tests/test_reporting_replay.py — этапы 2–3 пакета post-smoke:
+"""tests/test_reporting_replay.py — этапы 2–3 пакета post-smoke и FIX-08:
 (1) восстановление отчёта по family (scenario_id ≠ family, legacy-формат);
-(2) честная end_to_end_asr (числитель — composite success, не external_effect).
+(2) честная end_to_end_asr (числитель — composite success, не external_effect);
+(3) family доезжает до campaign.json настоящим writer'ом, а не фикстурой.
 
-Фикстуры — campaign.json минимальной формы (см. core/campaign._campaign_to_dict),
-без сети и без адаптеров: replay обязан работать на сохранённых артефактах.
+Фикстуры этапов 2–3 — campaign.json минимальной формы (см.
+core/campaign._campaign_to_dict), без сети и без адаптеров: replay обязан
+работать на сохранённых артефактах. Раздел FIX-08 наоборот запускает настоящую
+кампанию на офлайновом mock — проверяется как раз writer.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
+from memnotsafe.adapters.mock import MockTarget
+from memnotsafe.core.campaign import Campaign
+from memnotsafe.core.config import ActorConfig, JudgeSpec, Scenario, TargetSpec
 from memnotsafe.core.models import AttackResult, StageResult
+from memnotsafe.judge.client import JudgeCallResult
+from memnotsafe.judge.runtime import LLMJudge
 from memnotsafe.reporting.findings import build_finding
 from memnotsafe.reporting.metrics import aggregate_metrics
 
@@ -258,3 +267,154 @@ def test_f4_replay_recomputes_wrong_saved_aggregate(monkeypatch, tmp_path, capsy
     assert m["end_to_end_asr"] == 0.0 and m["successful"] == 0  # пересчитано, не скопировано
     assert (d / "campaign.json").read_text(encoding="utf-8") == raw_before  # вход не изменён
     assert "пересчитаны" in capsys.readouterr().out
+
+
+# ------------------------------------- FIX-08: реальный writer → load_campaign
+#
+# Здесь фикстур campaign.json нет: файл пишет штатный Campaign на офлайновом
+# mock. Дописать family в артефакт руками означало бы проверить сам тест —
+# дыра была именно в writer'е.
+
+
+class _ConfirmingJudge:
+    """Судья-заглушка: всегда подтверждает и цитирует дословно. Без сети."""
+
+    async def complete(self, system: str, user: str) -> JudgeCallResult:
+        inside = user.split(">>>\n", 1)[1].split("\n<<<END", 1)[0]
+        body = {
+            "outcome": "confirmed", "confidence": 0.83,
+            "rationale": "ответ отражает отравленный факт", "quote": inside[:40] or "пусто",
+        }
+        return JudgeCallResult(ok=True, content=json.dumps(body, ensure_ascii=False),
+                               status=200, raw={"stub": True})
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _real_run(tmp_path: Path, *, family: str, corpus_path: str | None = None,
+              judged: bool = False, out_name: str = "run"):
+    """Настоящий прогон кампании на mock: campaign.json пишет core/campaign.py.
+
+    `scenario.id` намеренно не равен family — семья обязана доехать сама, а не
+    через имя эксперимента."""
+    judge_spec = JudgeSpec(enabled=True, model="stub-judge", min_confidence=0.7) if judged \
+        else JudgeSpec()
+    scenario = Scenario(
+        id=f"{family}_smoke", path=tmp_path / f"{family}.yaml",
+        target=TargetSpec(adapter="mock"),
+        attacker=ActorConfig(user_id="1001"), victim=ActorConfig(user_id="1002"),
+        attack_family=family, repetitions=1, corpus_path=corpus_path, judge=judge_spec,
+    )
+    out = tmp_path / out_name
+    judge = LLMJudge(scenario.judge, client=_ConfirmingJudge(), repetitions=1,
+                     artifacts_dir=out / "judge") if judged else None
+    result = asyncio.run(Campaign(scenario, MockTarget(vulnerable=True), out, judge=judge).run())
+    return result, out
+
+
+def _wire(out: Path) -> dict:
+    return json.loads((out / "campaign.json").read_text(encoding="utf-8"))
+
+
+def _corpus(tmp_path: Path):
+    """Корпус из офлайновой заглушки атакующей LLM — тот же путь, что в US1."""
+    from memnotsafe.generation.attack_classes import load_attack_classes
+    from memnotsafe.generation.attacker_client import StubAttackerClient
+    from memnotsafe.generation.budget import CallBudget
+    from memnotsafe.generation.corpus import write_corpus
+    from memnotsafe.generation.corpus_gen import generate_corpus
+    from memnotsafe.generation.offline import reference_answers
+    from memnotsafe.generation.profile import load_profile
+
+    classes = load_attack_classes("attack_classes/")
+    corpus = asyncio.run(generate_corpus(
+        load_profile("profiles/support-agent.yaml"), classes,
+        StubAttackerClient(reference_answers(classes)), CallBudget(50),
+        provider="stub", model=None,
+    ))
+    return write_corpus(corpus, tmp_path / "support-agent.yaml")
+
+
+def test_writer_records_family_in_campaign_json(tmp_path) -> None:
+    """Дыра FIX-08: writer знал family, но в wire её не клал."""
+    result, out = _real_run(tmp_path, family="direct_poisoning")
+    assert result.results[0].family == "direct_poisoning"           # в памяти была
+    assert _wire(out)["results"][0]["family"] == "direct_poisoning"  # и в файле
+
+
+def test_generated_run_keeps_family_generated_not_source_class(tmp_path) -> None:
+    """У корпусного случая attack_id — имя КЛАССА-ИСТОЧНИКА, и оно само по себе
+    зарегистрировано в ATTACK_REGISTRY. Пока family нет в wire, legacy-fallback
+    читателя выдаёт рукописную семью там, где работал корпус."""
+    from memnotsafe.attacks.base import ATTACK_REGISTRY
+    from memnotsafe.cli import load_campaign
+
+    _result, out = _real_run(tmp_path, family="generated", corpus_path=_corpus(tmp_path))
+    wire = _wire(out)["results"]
+    assert wire, "корпусный прогон не дал ни одного случая"
+    assert {r["family"] for r in wire} == {"generated"}
+    # именно это делает fallback опасным: attack_id — валидный ключ реестра
+    assert any(r["attack_id"] in ATTACK_REGISTRY and r["attack_id"] != "generated" for r in wire)
+    assert {r.family for r in load_campaign(out).results} == {"generated"}
+
+
+def test_family_and_provenance_attack_class_stay_independent(tmp_path) -> None:
+    """family — идентичность семьи, provenance.attack_class — происхождение
+    нагрузки. У рукописной атаки они совпадают, у корпусной расходятся, и
+    round-trip не сводит одно к другому."""
+    from memnotsafe.cli import load_campaign
+
+    _plain, plain_out = _real_run(tmp_path, family="direct_poisoning", out_name="plain")
+    plain = load_campaign(plain_out).results[0]
+    assert plain.family == "direct_poisoning"
+    assert plain.evidence["provenance"] == {
+        "origin": "handwritten", "attack_class": "direct_poisoning",
+    }
+
+    _gen, gen_out = _real_run(tmp_path, family="generated", corpus_path=_corpus(tmp_path),
+                              out_name="gen")
+    for r in load_campaign(gen_out).results:
+        assert r.family == "generated"
+        prov = r.evidence["provenance"]
+        assert prov["origin"] == "corpus"
+        assert prov["attack_class"] != "generated"  # класс-источник, не семья
+
+
+def test_round_trip_keeps_tristate_stages_judge_provenance_and_composite(tmp_path) -> None:
+    """Аддитивное поле не должно сдвинуть соседей: тристейт стадий, судейский
+    провенанс, расхождение и композит переживают запись и чтение."""
+    from memnotsafe.cli import load_campaign
+
+    result, out = _real_run(tmp_path, family="direct_poisoning", judged=True)
+    before, after = result.results[0], load_campaign(out).results[0]
+
+    assert {s.success for s in before.stages} == {True, False, None}  # все три состояния
+    assert any(s.disagreement for s in before.stages)                 # и реальное расхождение
+    assert [(s.stage, s.success) for s in after.stages] == \
+           [(s.stage, s.success) for s in before.stages]
+    assert [(s.verdict_source, s.evidence_kind, s.disagreement) for s in after.stages] == \
+           [(s.verdict_source, s.evidence_kind, s.disagreement) for s in before.stages]
+    assert [s.judge.to_dict() if s.judge else None for s in after.stages] == \
+           [s.judge.to_dict() if s.judge else None for s in before.stages]
+    assert after.success is before.success is False
+    assert after.family == before.family == "direct_poisoning"
+
+
+def test_legacy_wire_without_family_still_reads_by_the_old_rule(tmp_path) -> None:
+    """Legacy — это ровно сегодняшний файл без нового ключа. Точное вхождение
+    attack_id в реестр разрешается по-прежнему, неоднозначный — нет: выдуманной
+    семьи читатель не выдаёт."""
+    from memnotsafe.cli import load_campaign
+
+    _result, out = _real_run(tmp_path, family="direct_poisoning")
+    camp = _wire(out)
+    for r in camp["results"]:
+        r.pop("family", None)  # снимаем ровно то, что добавил FIX-08
+    path = out / "campaign.json"
+    path.write_text(json.dumps(camp, ensure_ascii=False), encoding="utf-8")
+    assert load_campaign(out).results[0].family == "direct_poisoning"
+
+    camp["results"][0]["attack_id"] = "direct_poisoning-CASE-001"  # неоднозначный legacy
+    path.write_text(json.dumps(camp, ensure_ascii=False), encoding="utf-8")
+    assert load_campaign(out).results[0].family == ""
