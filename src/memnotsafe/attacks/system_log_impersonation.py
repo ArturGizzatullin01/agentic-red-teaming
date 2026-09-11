@@ -50,7 +50,7 @@ class SystemLogImpersonation(AttackBase):
         candidate = AttackCandidate(
             attack_id=f"{self.metadata.id}-{ctx.case_id}",
             family=self.metadata.family,
-            payload=self._DELIVERY[0],
+            payload=payload,
             trigger=self._TRIGGER,
             expected_effect=self.expected_effect(ctx),
         )

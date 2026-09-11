@@ -22,3 +22,22 @@ lifecycle не тронуты; registry уникален; исторически
    матчинг ищет первую, а в память попадает вторая (та же семантика, что consent).
 3. cross_topic global: «ко всем клиентам банка» покрыт в GLOBAL_CUES mock'а.
 4. tool_echo natural/natural2 — blocked-by-tool-loop (не переносились).
+
+## FIX-05 — case-marker в кандидате system_log_impersonation
+
+Норма: [spec.md](spec.md), FR-1/FR-2; роль — только Attack.
+Файл-аналог: существующие `generate` и `delivery_steps` в
+`src/memnotsafe/attacks/system_log_impersonation.py`.
+Передать вычисленный `payload` в `AttackCandidate`: объявленный вариант
+`case_marker_in_payload` добавляет `sync-id` с маркером из контекста.
+Producer маркера остаётся Runner; подстановка остаётся явной в шаблоне Attack.
+Обе реплики и их порядок без флага сохраняются, шаблон не мутируется.
+
+До исправления — адресный RED в `tests/test_005_port_batch.py`; затем проверка
+всего этого файла и обязательный регресс
+`tests/test_e2e_cross_user.py tests/test_all_attacks.py -q` на предоставленном Python.
+Config-gate проверяется прямым `run_attack(require_case_marker=True)` на MockTarget;
+успех атаки не является условием прохождения gate.
+
+Constitution Check: I–II — core, GeneratedAttack, Oracle и Adapter не меняются;
+VI — только offline mock. Live YAML, зависимости и другие семьи вне FIX-05.
