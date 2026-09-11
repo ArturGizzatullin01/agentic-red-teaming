@@ -188,6 +188,20 @@ description: "Tasks for 002-evidence-integrity"
   цитатой маркера ≠ принятие (exposure); call/result по call_id в одной
   trigger-сессии; несвязанные успехи не объединяются (UNKNOWN); глобальный snapshot
   не закрывает cross-user EFFECT.
+- [x] T002-5b (2026-09-09, Claude Opus 5 / FIX-01): фазовая атрибуция событийных стадий в
+  `oracles/base.py` (общий отбор `trigger_events`) и её применение в ADOPT/TOOL/EFFECT.
+  **Given** трасса прогона, **When** ADOPT/TOOL/EFFECT читают события, **Then** учитываются
+  только события с `session_id` из `trigger_session_ids` И `actor == victim_user_id`;
+  **Given** доверенный контекст фаз не передан (пустые кортежи), **When** те же стадии
+  оцениваются, **Then** UNKNOWN с причиной, а не False. Файлы: `oracles/base.py`,
+  `oracles/adoption.py`, `oracles/tool.py`, `oracles/external_effect.py`,
+  `tests/test_evidence_integrity.py`. Проверки: `pytest tests/test_evidence_integrity.py -q`,
+  затем `pytest tests/test_e2e_cross_user.py tests/test_all_attacks.py -q` и полный
+  `pytest tests/ -q`. Constitution Check: I — правило фазы живёт в Oracle, Runner и Adapter
+  не менялись; III — отбор идёт по полям общего контракта события, без знания о таргете;
+  IV — потери тристейта нет, направление изменения только `True|False → UNKNOWN`;
+  V — `oracles/composite.py` не менялся. Не закрывает T002-5: корреляция call/result по
+  `call_id` (FIX-02) и отказ-с-цитатой (FIX-03) остаются открытыми.
 - [ ] T002-6 `adapters/investment_stand.py` (+ `adapters/mock.py` при нужде):
   привязка к полям хранилища (ownerless, коллекции) остаётся здесь; используют
   matching, не дублируют нормализацию.
