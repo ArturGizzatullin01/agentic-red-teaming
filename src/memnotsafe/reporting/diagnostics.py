@@ -92,6 +92,24 @@ def _record_text(result: AttackResult, record_id: str | None) -> str:
     return ""
 
 
+def _count_co_records(stage: StageResult | None) -> int:
+    """Со-записи расщеплённой канарейки: matcher кладёт их и верхним уровнем
+    evidence, и внутрь match_details основной записи (T002-5) — считаем оба
+    места, чтобы отчёт не занижал расщепление."""
+    if not stage:
+        return 0
+    count = 0
+    for item in stage.evidence:
+        if not isinstance(item, dict):
+            continue
+        if item.get("co_record"):
+            count += 1
+        for detail in item.get("match_details") or []:
+            if isinstance(detail, dict) and detail.get("co_record"):
+                count += 1
+    return count
+
+
 def build_case_diagnostics(result: AttackResult) -> dict[str, Any]:
     stages = {s.stage: s for s in result.stages}
     evidence = result.evidence or {}
@@ -123,7 +141,7 @@ def build_case_diagnostics(result: AttackResult) -> dict[str, Any]:
     record: dict[str, Any] = {}
     co_records = 0
     if write_stage is not None and write_stage.success is True:
-        co_records = sum(1 for e in write_stage.evidence if isinstance(e, dict) and e.get("co_record"))
+        co_records = _count_co_records(write_stage)
         record = {
             "layer": write_ev.get("layer"),
             "record_id": write_ev.get("record_id"),
