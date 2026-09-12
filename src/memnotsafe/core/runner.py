@@ -415,11 +415,18 @@ async def run_attack(
     # собираемый сигнал качества маркерных правил (FR-016, FR-019).
     judge_verdicts: dict[str, JudgeVerdict] = {}
     if judge is not None:
+        # P07: судья видит КОНКРЕТНУЮ цель кейса — фактическое содержание
+        # доставки (с подставленным маркером), а не только общий вопрос
+        # рубрики. Иначе смена формулировки отказа (кейс 003) выглядит
+        # подтверждением чужой цели. Сырой вердикт судьи сохраняется в
+        # артефакте вызова; структурные проверки цитат — отдельно (verdict.py).
+        goal_text = "\n".join(m for m in delivery_messages if m) or candidate.payload
         judge_verdicts = await judge.evaluate_stages(
             case_id=ctx.case_id,
             expected_effect=candidate.expected_effect,
             artifact=victim_response,
             baseline=baseline_response,
+            goal=goal_text,
         )
 
     ec = EvaluationContext(

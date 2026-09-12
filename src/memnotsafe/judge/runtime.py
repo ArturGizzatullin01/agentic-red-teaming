@@ -77,6 +77,9 @@ class LLMJudge:
         self.budget = JudgeBudget(limit=spec.resolve_max_calls(repetitions))
         self.artifacts_dir = Path(artifacts_dir) if artifacts_dir else None
         self.rubrics_used: set[str] = set()
+        # P07: судья хотя бы раз получил конкретную цель кейса (не только
+        # общий вопрос рубрики) — признак метода оценки в metadata отчёта
+        self.goal_anchored = False
         self.failures = 0
         self.outcome_counts: dict[str, int] = {}
 
@@ -89,10 +92,15 @@ class LLMJudge:
         expected_effect: dict[str, Any],
         artifact: str,
         baseline: str,
+        goal: str = "",
     ) -> dict[str, JudgeVerdict]:
         """Три вердикта на случай. `write`, `persistence` и `tool` сюда не
         попадают по построению: JUDGED_STAGES — единственный список стадий,
-        которые судья вообще видит (FR-014)."""
+        которые судья вообще видит (FR-014).
+
+        `goal` — конкретная цель кейса (P07): фактическое содержание доставки,
+        которое отравленная запись должна была внедрить. Пустая строка даёт
+        поведение ровно прежнего вида (без цели в промпте)."""
         verdicts: dict[str, JudgeVerdict] = {}
         for stage in JUDGED_STAGES:
             verdict = await self.evaluate(
@@ -101,6 +109,7 @@ class LLMJudge:
                 expected_effect=expected_effect,
                 artifact=artifact,
                 baseline=baseline,
+                goal=goal,
             )
             if verdict is not None:
                 verdicts[stage] = verdict
@@ -114,12 +123,15 @@ class LLMJudge:
         expected_effect: dict[str, Any],
         artifact: str,
         baseline: str,
+        goal: str = "",
     ) -> JudgeVerdict | None:
         rubric = find_rubric(stage, expected_effect.get("type"))
         if rubric is None:
             return None  # звать судью не с чем: рубрики на эту пару нет
 
         self.rubrics_used.add(rubric.identifier)
+        if goal.strip():
+            self.goal_anchored = True
         artifact_ref = f"judge/{case_id}-{stage}.json"
 
         # Пустой артефакт: оценивать нечего, вызов не делается, бюджет цел.
@@ -143,7 +155,7 @@ class LLMJudge:
         return self._record(
             await self._call_with_retries(
                 stage=stage, case_id=case_id, rubric=rubric, artifact=artifact,
-                baseline=baseline, artifact_ref=artifact_ref,
+                baseline=baseline, artifact_ref=artifact_ref, goal=goal,
             )
         )
 
@@ -155,6 +167,7 @@ class LLMJudge:
             "active": True,
             "model": self._model,
             "rubrics": sorted(self.rubrics_used),
+            "goal_anchored": self.goal_anchored,
             "min_confidence": self.spec.min_confidence,
             "calls_used": self.budget.used,
             "calls_limit": self.budget.limit,
@@ -181,10 +194,11 @@ class LLMJudge:
         artifact: str,
         baseline: str,
         artifact_ref: str,
+        goal: str = "",
     ) -> JudgeVerdict:
         prompt = build_prompt(
             stage=stage, rubric=rubric, artifact=artifact, baseline=baseline,
-            max_artifact_chars=self.spec.max_artifact_chars,
+            max_artifact_chars=self.spec.max_artifact_chars, goal=goal,
         )
         attempts: list[dict[str, Any]] = []
         last_raw: dict[str, Any] | None = None
