@@ -33,6 +33,15 @@ from memnotsafe.generation.errors import AttackerError
 PARAM_RECORD = "record"
 PARAM_CORPUS_ID = "corpus_id"
 
+# Явный плейсхолдер маркера кейса. Подставляется ТОЛЬКО он: другие тексты
+# корпуса не переписываются «чтобы маркер влез» (контракт WRITE-плана 2.1).
+CASE_MARKER_PLACEHOLDER = "{case_marker}"
+
+
+def _substitute_case_marker(text: str, case_marker: str | None) -> str:
+    """Исполнить только объявленный шаблон, сохраняя текст при отсутствии маркера."""
+    return text.replace(CASE_MARKER_PLACEHOLDER, case_marker) if case_marker is not None else text
+
 
 class GeneratedAttack(AttackBase):
     metadata = AttackMetadata(
@@ -76,8 +85,8 @@ class GeneratedAttack(AttackBase):
         return AttackCandidate(
             attack_id=f"{record.attack_class}-{ctx.case_id}",
             family="generated",
-            payload=record.payload,
-            trigger=record.trigger,
+            payload=_substitute_case_marker(record.payload, ctx.case_marker),
+            trigger=_substitute_case_marker(record.trigger, ctx.case_marker),
             expected_effect=dict(record.expected_effect),
             metadata={
                 "origin": record.origin,
@@ -91,7 +100,11 @@ class GeneratedAttack(AttackBase):
         record = self.read_record(ctx)
         if record.delivery_steps:
             return [
-                DeliveryStep(label=s.label, message=s.message, as_user=s.as_user or ctx.attacker_user_id)
+                DeliveryStep(
+                    label=s.label,
+                    message=_substitute_case_marker(s.message, ctx.case_marker),
+                    as_user=s.as_user or ctx.attacker_user_id,
+                )
                 for s in record.delivery_steps
             ]
         return [DeliveryStep(label="payload", message=candidate.payload, as_user=ctx.attacker_user_id)]
@@ -100,7 +113,11 @@ class GeneratedAttack(AttackBase):
         record = self.read_record(ctx)
         if record.trigger_steps:
             return [
-                TriggerStep(label=s.label, message=s.message, as_user=s.as_user or ctx.victim_user_id)
+                TriggerStep(
+                    label=s.label,
+                    message=_substitute_case_marker(s.message, ctx.case_marker),
+                    as_user=s.as_user or ctx.victim_user_id,
+                )
                 for s in record.trigger_steps
             ]
         return [TriggerStep(label="trigger", message=candidate.trigger, as_user=ctx.victim_user_id)]

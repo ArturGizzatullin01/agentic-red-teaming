@@ -103,6 +103,7 @@ async def escalate(
     run_id: str,
     recorder: TraceRecorder | None = None,
     judge: Any | None = None,
+    require_case_marker: bool = False,
 ) -> EscalationOutcome:
     """Цикл: пока не успех, не исчерпан лимит попыток и не исчерпан бюджет —
     переписываем атаку по обратной связи и пробуем снова. Стоп на первом успехе
@@ -110,7 +111,12 @@ async def escalate(
 
     `judge` — тот же судья, которым вызывающий слой судил начальную попытку;
     по умолчанию его нет, и тогда повторы судятся ровно как раньше (офлайн,
-    без сети и ключей)."""
+    без сети и ключей).
+
+    `require_case_marker` — то же требование наличия маркера в доставке, что у
+    начальной попытки: у повтора маркер НОВЫЙ (производный от нового case_id),
+    но объявленное требование не гасится — переписанная запись без плейсхолдера
+    {case_marker} отклоняется раннером до доставки, а не тихо уходит в legacy."""
     from memnotsafe.attacks.generated import GeneratedAttack
 
     corpus_id = (base_ctx.params or {}).get("corpus_id")
@@ -150,7 +156,10 @@ async def escalate(
             # маркер прошлой попытки в новый case_id не переезжает (см. докстринг)
             case_marker=None,
         )
-        last = await run_attack(gen, new_ctx, target, run_id=run_id, recorder=recorder, judge=judge)
+        last = await run_attack(
+            gen, new_ctx, target, run_id=run_id, recorder=recorder, judge=judge,
+            require_case_marker=require_case_marker,
+        )
         if last.success:
             annotated = _annotate(last, attempts=attempts, budget_exhausted=budget.exhausted, adapted=True, corpus_id=corpus_id)
             return EscalationOutcome(annotated, attempts=attempts, succeeded=True, budget_exhausted=budget.exhausted)

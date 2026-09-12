@@ -208,6 +208,11 @@ class Campaign:
                     run_seed=attempt,
                     case_id=case_id,
                     params={PARAM_RECORD: record.to_dict(), PARAM_CORPUS_ID: corpus_id},
+                    # Маркер, заявленный записью, едет в контекст ДО раннера:
+                    # None → раннер выведет CM-<6hex> из case_id (плейсхолдер
+                    # {case_marker} подставит GeneratedAttack). Раннер требует
+                    # фактического присутствия заявленного маркера в доставке.
+                    case_marker=record.case_marker,
                 )
                 provenance = {
                     "origin": ORIGIN_CORPUS,
@@ -251,6 +256,10 @@ class Campaign:
                 # тот же судья, что судил первую попытку: иначе вердикты попыток
                 # одного случая несопоставимы (см. докстринг core/escalation.py)
                 judge=self.judge,
+                # и то же требование маркера: повтор получает НОВЫЙ маркер
+                # (case_id новый), но наличие его в доставке проверяется так же
+                # строго, как у первой попытки (единый план P04)
+                require_case_marker=self.scenario.require_case_marker,
             )
         except AttackerError as exc:
             # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем

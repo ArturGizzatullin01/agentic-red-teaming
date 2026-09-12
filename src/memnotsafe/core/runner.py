@@ -204,25 +204,33 @@ async def run_attack(
 
         # T002-10 (FR-B): producer маркера — runner; заполняется ДО generate(),
         # чтобы атака могла подставить его ЯВНЫМ плейсхолдером {case_marker}.
+        # Маркер, заявленный ДО раннера (записью корпуса через кампанию), —
+        # НЕ перезаписывается: он стабильный токен из тестовых данных записи.
+        declared_marker = ctx.case_marker
         if ctx.case_marker is None:
             ctx.case_marker = derive_case_marker(ctx.case_id)
 
         candidate = attack.generate(ctx)
 
-        if require_case_marker:
+        if require_case_marker or declared_marker is not None:
             # маркер может жить в payload ИЛИ в любой delivery-реплике
             # (двухходовая consent-атака записывает второй ход) — та же
-            # политика, что у settle-доказательства ниже
+            # политика, что у settle-доказательства ниже. Требование
+            # включают и сценарий (require_case_marker), и сама запись,
+            # заявившая маркер: токен, не дошедший до доставки, дал бы
+            # тихий фолбэк на legacy-needle (первые 60 символов payload),
+            # который финалайзер стенда перефразированием не находит.
             delivery_texts = [s.message for s in attack.delivery_steps(candidate, ctx)]
             marker_placed = any(ctx.case_marker in t for t in delivery_texts if t)
             if not marker_placed:
                 # кандидат без маркера при объявленной маркерной изоляции —
                 # config error ДО доставки (FR-B), exit 1 на уровне CLI
+                source = "сценарий" if declared_marker is None else "запись корпуса"
                 raise RunnerError(
-                    f"config error на случае {ctx.case_id}: scenario требует case-marker "
+                    f"config error на случае {ctx.case_id}: {source} требует case-marker "
                     f"({ctx.case_marker}), но ни payload, ни delivery-реплики его "
                     "не содержат — подстановка возможна только через явный "
-                    "плейсхолдер {case_marker}"
+                    "плейсхолдер {case_marker} или буквальный токен в данных"
                 )
 
         # --- baseline: та же политика владения/ошибок, что и основной поток

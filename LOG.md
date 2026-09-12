@@ -1,9 +1,17 @@
-﻿---
+---
 type: log
 project: memnotsafe
 ---
 
 # LOG — memnotsafe
+
+### 2026-09-12 — glm — P04 write-marker-snapshots (смена GLM-WRITE-MARATHON)
+
+- задача: провести маркер через корпус → GeneratedAttack → доставку → settle → оценку (WRITE-план 2.1, приёмка аудита 3.2)
+- сделано: `_substitute_case_marker` в `attacks/generated.py` (подстановка ТОЛЬКО плейсхолдера `{case_marker}` в payload, trigger и сообщения delivery/trigger шагов; перенос локальной дельты fix/generated-delivery-case-marker 67444a5 + расширение на trigger по ТЗ); `CorpusRecord.case_marker` с roundtrip и браком пустого значения в `generation/corpus.py`; кампания передаёт маркер записи в `AttackContext.case_marker` ДО раннера и прокидывает `scenario.require_case_marker` в эскалацию; `escalate(..., require_case_marker)` — повтор получает новый маркер, требование наличия сохраняется; раннер включает проверку «маркер в фактической доставке» и по заявленному записью маркеру, заявленный маркер не перезаписывается derive_case_marker, отказ ДО доставки (RunnerError)
+- файлы: `src/memnotsafe/attacks/generated.py`, `src/memnotsafe/generation/corpus.py`, `src/memnotsafe/core/campaign.py`, `src/memnotsafe/core/escalation.py`, `src/memnotsafe/core/runner.py`, `tests/test_write_marker_p04.py` (новый)
+- проверки: `python -m pytest tests/test_write_marker_p04.py -q` → 10 passed; затронутые пачки `test_generation_offline test_runner_lifecycle test_escalation test_profile_and_corpus test_campaign_and_reports` → 56 passed; matching.py не тронут
+- ограничения: settle `expect_text_contains` = payload[:60] остаётся legacy-фолбэком (маркерный путь приоритетен) — исходы settle разводятся в P05; expected_effect плейсхолдерами не переписывается (цель эффекта неизменна)
 
 ### 2026-09-10 — Codex — FIX-05 rebase onto FIX-03
 
