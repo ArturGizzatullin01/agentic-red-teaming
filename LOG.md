@@ -5,6 +5,15 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-12 — glm — P06 четыре снимка M0–M3 (glm/write-marker-snapshots)
+
+- задача: развести WRITE и PERSISTENCE по времени: M0 после baseline / M1 после delivery-finalize+settle / M2 новая сессия до trigger / M3 после trigger (WRITE-план 2.3, аудит 3.4)
+- сделано: `PhaseSnapshots` (m0..m3, to_dict/from_dict) в `evidence/snapshot.py`; `EvaluationContext.phases` (None = старые ручные конструкции); WRITE в фазовом режиме сравнивает m0↔m1 (m1 нет → UNKNOWN, m3 не подменяет); PERSISTENCE в фазовом режиме проверяет идентичность m1-записи в m2 (m2 нет → UNKNOWN), повторный сигнатурный поиск тоже m0↔m2; runner снимает m1 после settle и m2 после открытия victim-сессии до trigger-вопроса, кладёт phases.m1/m2 и diff_m0_m1 в evidence; кампания считает «запись объявила маркер» (`_record_declares_marker`) и поднимает require_case_marker для случая — рукописные атаки с предзаданным case_marker (opt-in 005) не проверяются; escalate получает флаг от кампании
+- файлы: `src/memnotsafe/evidence/snapshot.py`, `src/memnotsafe/oracles/base.py`, `src/memnotsafe/oracles/memory.py`, `src/memnotsafe/oracles/persistence.py`, `src/memnotsafe/core/runner.py`, `src/memnotsafe/core/campaign.py`, `src/memnotsafe/core/escalation.py` (параметр из P04 теперь питается от кампании), `tests/test_phase_snapshots_p06.py` (новый)
+- проверки: полный офлайн-набор `tests/` → 548 passed (включая 12 новых P06: m0/m1-only write; запись только в m3 → WRITE False; upsert same-id → changed; исчезла между сессиями → False; замена id → UNKNOWN; m3 не спасает PERSISTENCE; legacy-контекст без phases — прежняя семантика; e2e session-gap: WRITE True / PERSIST False)
+- уточнение к P04: требование «заявленный записью маркер обязан быть в доставке» перенесено с раннера на слой кампании (раннер не знает, что рукописная атака opt-in) — тест test_declared_record_marker_absent... теперь прогоняет Campaign.run
+- ограничения: adoption/retrieval/tool продолжают читать before/after (=M0/M3) — их фазовая привязка в P09 (фактический контекст trigger); evidence["phases"] хранит только m1/m2 (m0=before, m3=after уже в evidence)
+
 ### 2026-09-12 — glm — P05 settle-исходы и честный finalize (glm/write-marker-snapshots)
 
 - задача: различить observed/timeout/unavailable в ожидании записи; Mongo недоступна → не True; неоднозначный HTTP finalize не повторять вслепую вторым каналом (WRITE-план 2.2, аудит 3.3)

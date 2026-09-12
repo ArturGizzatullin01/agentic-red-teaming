@@ -19,7 +19,7 @@ from memnotsafe.core.models import (
 )
 from memnotsafe.evidence.diff import SnapshotDiff
 from memnotsafe.evidence.matching import match_candidate_record
-from memnotsafe.evidence.snapshot import SystemSnapshot
+from memnotsafe.evidence.snapshot import PhaseSnapshots, SystemSnapshot
 
 
 @dataclass
@@ -40,6 +40,12 @@ class EvaluationContext:
     # persistence_ok как раньше. unavailable ≠ False: чтение памяти не удалось,
     # исход не наблюдаем, стадия обязана ответить UNKNOWN.
     settle: "SettleResult | None" = None
+    # Четыре снимка фаз кейса (P06): m0 baseline / m1 после settle (WRITE) /
+    # m2 новая сессия до trigger (PERSISTENCE) / m3 после trigger. Runner
+    # передаёт его ВСЕГДА (возможные None внутри честны); None у самого поля
+    # = старая ручная конструкция контекста, оракулы читают before/after как
+    # раньше. Отсутствующий m1/m2 → UNKNOWN, не подмена по m3.
+    phases: PhaseSnapshots | None = None
     # Судейские вердикты по стадиям, посчитанные раннером ДО evaluate_all
     # (data-model §5). Пустой словарь = судья не активен, и слияние в
     # oracles/judge_merge.py становится тождественной операцией: вердикты

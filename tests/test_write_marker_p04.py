@@ -166,14 +166,35 @@ def test_required_marker_absent_refuses_before_target():
     assert target.sends == 0
 
 
-def test_declared_record_marker_absent_refuses_even_without_scenario_flag():
-    target = SendSpy()
-    attack = GeneratedAttack()
+def test_declared_record_marker_absent_refuses_even_without_scenario_flag(tmp_path: Path):
     # запись заявила маркер, но в текстах его нет и плейсхолдера нет →
-    # тихий фолбэк на legacy-needle недопустим: отказ до доставки
-    with pytest.raises(RunnerError, match="запись корпуса"):
-        _run(attack, _ctx(_record(case_marker="NO-SUCH-TOKEN", payload="Запомни без маркера.")), target)
+    # тихий фолбэк на legacy-needle недопустим: кампания поднимает
+    # требование, раннер отказывает ДО доставки
+    target = SendSpy()
+    corpus_path = write_corpus(_corpus_with(tmp_path, _record(
+        case_marker="NO-SUCH-TOKEN", payload="Запомни без маркера.",
+    )), tmp_path / "corpus-bad.yaml")
+    scenario = Scenario(
+        id="marker-missing", path=tmp_path / "s.yaml",
+        target=TargetSpec(), attacker=ActorConfig("1001"), victim=ActorConfig("1002"),
+        attack_family="generated", corpus_path=corpus_path,
+    )
+    campaign = Campaign(scenario, target, tmp_path / "out")
+    with pytest.raises(RunnerError, match="case-marker"):
+        asyncio.run(campaign.run(1))
     assert target.sends == 0
+
+
+def _corpus_with(tmp_path: Path, record: CorpusRecord):
+    from memnotsafe.generation.corpus import Corpus, CorpusProvenance
+
+    return Corpus(
+        provenance=CorpusProvenance(
+            profile_id="p", profile_sha256="0" * 64, attack_classes=["direct_poisoning"],
+            generator_model="stub", generator_provider="stub", tool_version="0", created_at="now",
+        ),
+        records=[record],
+    )
 
 
 def test_declared_marker_in_delivery_step_reaches_settle_evidence():

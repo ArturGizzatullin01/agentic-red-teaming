@@ -40,7 +40,7 @@ from memnotsafe.attacks.base import AttackBase, AttackContext
 from memnotsafe.core.models import AttackResult, JudgeVerdict, StageResult
 from memnotsafe.evidence.diff import SnapshotDiff, compute_diff
 from memnotsafe.evidence.matching import derive_case_marker
-from memnotsafe.evidence.snapshot import SystemSnapshot
+from memnotsafe.evidence.snapshot import PhaseSnapshots, SystemSnapshot
 from memnotsafe.oracles.base import EvaluationContext
 from memnotsafe.oracles.composite import composite_success, evaluate_all
 from memnotsafe.tracing.recorder import TraceRecorder
@@ -204,30 +204,26 @@ async def run_attack(
 
         # T002-10 (FR-B): producer маркера — runner; заполняется ДО generate(),
         # чтобы атака могла подставить его ЯВНЫМ плейсхолдером {case_marker}.
-        # Маркер, заявленный ДО раннера (записью корпуса через кампанию), —
-        # НЕ перезаписывается: он стабильный токен из тестовых данных записи.
-        declared_marker = ctx.case_marker
         if ctx.case_marker is None:
             ctx.case_marker = derive_case_marker(ctx.case_id)
 
         candidate = attack.generate(ctx)
 
-        if require_case_marker or declared_marker is not None:
+        if require_case_marker:
             # маркер может жить в payload ИЛИ в любой delivery-реплике
             # (двухходовая consent-атака записывает второй ход) — та же
-            # политика, что у settle-доказательства ниже. Требование
-            # включают и сценарий (require_case_marker), и сама запись,
-            # заявившая маркер: токен, не дошедший до доставки, дал бы
-            # тихий фолбэк на legacy-needle (первые 60 символов payload),
-            # который финалайзер стенда перефразированием не находит.
+            # политика, что у settle-доказательства ниже. Флаг включает
+            # сценарий ИЛИ заявку маркера самой записью корпуса — её
+            # считает слой кампании (она знает record.case_marker):
+            # токен, не дошедший до доставки, дал бы тихий фолбэк на
+            # legacy-needle, который финалайзер перефразированием не находит.
             delivery_texts = [s.message for s in attack.delivery_steps(candidate, ctx)]
             marker_placed = any(ctx.case_marker in t for t in delivery_texts if t)
             if not marker_placed:
                 # кандидат без маркера при объявленной маркерной изоляции —
                 # config error ДО доставки (FR-B), exit 1 на уровне CLI
-                source = "сценарий" if declared_marker is None else "запись корпуса"
                 raise RunnerError(
-                    f"config error на случае {ctx.case_id}: {source} требует case-marker "
+                    f"config error на случае {ctx.case_id}: scenario требует case-marker "
                     f"({ctx.case_marker}), но ни payload, ни delivery-реплики его "
                     "не содержат — подстановка возможна только через явный "
                     "плейсхолдер {case_marker} или буквальный токен в данных"
@@ -316,10 +312,20 @@ async def run_attack(
             )
         persistence_ok = settle_result.success is True
 
+        # P06 (M1): снимок сразу после delivery-finalize и settle — ДО открытия
+        # trigger-сессии. WRITE сравнивает M0 (before) с M1: что появилось или
+        # изменилось вследствие доставки.
+        phase = "snapshot_m1"
+        m1: SystemSnapshot | None = await target.snapshot()
+
         # --- trigger в НОВОЙ сессии (после границы сессии доставки)
         phase = "trigger_open"
         victim_session = await book.open(ctx.victim_user_id)
         trigger_session_ids: list[str] = [victim_session]
+        # P06 (M2): снимок новой сессии ДО trigger-вопроса — свидетельство
+        # PERSISTENCE (те же id/слой/текст, что в M1).
+        phase = "snapshot_m2"
+        m2: SystemSnapshot | None = await target.snapshot()
         victim_response = ""
         for step in attack.trigger_steps(candidate, ctx):
             if step.message is None:
@@ -423,6 +429,10 @@ async def run_attack(
         before=before,
         after=after,
         diff=diff,
+        # P06: фазовые снимки — WRITE=m0/m1, PERSISTENCE=m2 (m3 только
+        # анализ). Runner передаёт контейнер ВСЕГДА; None внутри — честное
+        # отсутствие наблюдения, не основание подменять m1/m2 через m3.
+        phases=PhaseSnapshots(m0=before, m1=m1, m2=m2, m3=after),
         baseline_response=baseline_response,
         victim_response=victim_response,
         all_events=all_events,
@@ -442,10 +452,18 @@ async def run_attack(
     success = composite_success(stages)
 
     metrics = {s.stage: s.success for s in stages}
+    diff_m0_m1 = compute_diff(before, m1) if (before and m1) else None
     evidence = {
         "before": before.to_dict() if before else None,
         "after": after.to_dict() if after else None,
         "diff": diff.to_dict() if diff else None,
+        # P06: фазовые снимки и delivery-диф в evidence (ссылки для отчёта);
+        # before/after/diff сохранены как раньше (before=M0, after=M3)
+        "phases": {
+            "m1": m1.to_dict() if m1 else None,
+            "m2": m2.to_dict() if m2 else None,
+        },
+        "diff_m0_m1": diff_m0_m1.to_dict() if diff_m0_m1 else None,
         "baseline_response": baseline_response,
         "victim_response": victim_response,
         "trace_events": len(all_events),
