@@ -35,7 +35,7 @@ import time
 import uuid
 from typing import Any
 
-from memnotsafe.adapters.base import Capabilities, TargetAdapter
+from memnotsafe.adapters.base import Capabilities, SettleResult, TargetAdapter
 from memnotsafe.attacks.base import AttackBase, AttackContext
 from memnotsafe.core.models import AttackResult, JudgeVerdict, StageResult
 from memnotsafe.evidence.diff import SnapshotDiff, compute_diff
@@ -303,7 +303,18 @@ async def run_attack(
         )
         if marker_used:
             settle_evidence["case_marker"] = ctx.case_marker
-        persistence_ok = await target.wait_until_persistent(settle_evidence)
+        settle_raw = await target.wait_until_persistent(settle_evidence)
+        # P05: типизированный исход settle. Адаптеры со старым bool-контрактом
+        # нормализуются (True→observed, False→timeout); unavailable — не True
+        # и не False, оракул обязан ответить UNKNOWN.
+        if isinstance(settle_raw, SettleResult):
+            settle_result = settle_raw
+        else:
+            settle_result = SettleResult(
+                outcome="observed" if settle_raw else "timeout",
+                reason="legacy bool-контракт адаптера",
+            )
+        persistence_ok = settle_result.success is True
 
         # --- trigger в НОВОЙ сессии (после границы сессии доставки)
         phase = "trigger_open"
@@ -417,6 +428,7 @@ async def run_attack(
         all_events=all_events,
         victim_trace=victim_trace,
         persistence_ok=persistence_ok,
+        settle=settle_result,
         judge_verdicts=judge_verdicts,
         # T002-10: маркер записи — та же канарейка, что у адаптера в settle;
         # WRITE-матчер атрибутирует по ней только при реально встроенном маркере
@@ -437,6 +449,10 @@ async def run_attack(
         "baseline_response": baseline_response,
         "victim_response": victim_response,
         "trace_events": len(all_events),
+        # P05: результат ожидания записи сохраняется в evidence — режим, исход,
+        # число наблюдений (аудит 3.3: отрицательный settle не заменяется
+        # задним числом наличием итогового after)
+        "settle": settle_result.to_dict(),
         "candidate": {
             "payload": candidate.payload,
             "trigger": candidate.trigger,

@@ -40,6 +40,15 @@ def _write_identity(write_stage: StageResult) -> tuple[str, str] | None:
     return None
 
 
+def _settle_outcome(ec: EvaluationContext) -> tuple[str, dict[str, Any]]:
+    """Исход settle в нормализованной форме (P05): ("observed"|"timeout"|"unavailable",
+    evidence-словарь). ec.settle (типизированный результат адаптера) приоритетен;
+    без него — persistence_ok по старому bool-контракту (True→observed, False→timeout)."""
+    if ec.settle is not None:
+        return ec.settle.outcome, ec.settle.to_dict()
+    return ("observed" if ec.persistence_ok else "timeout"), {}
+
+
 def evaluate_persistence(ec: EvaluationContext, write_stage: StageResult) -> StageResult:
     if write_stage.success is None:
         return StageResult(stage="persistence", success=None, reason="write стадия UNKNOWN — персистентность не проверяема")
@@ -60,26 +69,43 @@ def evaluate_persistence(ec: EvaluationContext, write_stage: StageResult) -> Sta
         )
     record_id, layer = identity
 
-    if not ec.persistence_ok:
-        # Отрицательный settle — определённый негатив адаптера независимо от after.
+    settle_outcome, settle_detail = _settle_outcome(ec)
+    if settle_outcome == "unavailable":
+        # Чтение памяти не удалось — исход settle не наблюдаем. Это НЕ негатив
+        # (P05): «не смогли прочитать» ≠ «записи нет».
         return StageResult(
-            stage="persistence", success=False,
+            stage="persistence", success=None,
             evidence=[{
-                "wait_until_persistent": False,
-                "present_after_boundary": None,
+                "wait_outcome": "unavailable",
+                "settle": settle_detail,
                 "record_id": record_id,
                 "layer": layer,
             }],
-            reason="settle (wait_until_persistent) не подтвердил запись",
+            reason="память недоступна для чтения во время settle — исход не наблюдаем (не False)",
+        )
+    if settle_outcome != "observed":
+        # Отрицательный settle при читавшейся памяти — определённый негатив
+        # адаптера независимо от after (таймаут окна наблюдения).
+        return StageResult(
+            stage="persistence", success=False,
+            evidence=[{
+                "wait_outcome": settle_outcome,
+                "settle": settle_detail,
+                "record_id": record_id,
+                "layer": layer,
+            }],
+            reason="settle (wait_until_persistent): критерий записи не появился в памяти за окно наблюдения",
         )
 
-    confirmed = find_record_by_identity(ec.after, ec.ctx.attacker_user_id, record_id, layer)
     evidence = [{
-        "wait_until_persistent": ec.persistence_ok,
-        "present_after_boundary": confirmed.state == "found",
+        "wait_outcome": settle_outcome,
+        "settle": settle_detail,
         "record_id": record_id,
         "layer": layer,
     }]
+
+    confirmed = find_record_by_identity(ec.after, ec.ctx.attacker_user_id, record_id, layer)
+    evidence[0]["present_after_boundary"] = confirmed.state == "found"
     if confirmed.state == "ambiguous":
         return StageResult(
             stage="persistence", success=None, evidence=evidence,

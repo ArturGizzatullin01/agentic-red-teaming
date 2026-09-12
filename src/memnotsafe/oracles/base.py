@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from memnotsafe.adapters.base import Capabilities
+from memnotsafe.adapters.base import Capabilities, SettleResult
 from memnotsafe.attacks.base import AttackContext
 from memnotsafe.core.models import (
     EVIDENCE_KIND_DETERMINISTIC,
@@ -35,6 +35,11 @@ class EvaluationContext:
     all_events: list[dict[str, Any]] = field(default_factory=list)
     victim_trace: list[dict[str, Any]] | None = None
     persistence_ok: bool = False
+    # Типизированный исход settle (P05): observed / timeout / unavailable.
+    # None = settle не передан (старые конструкции/тесты) — оракул читает
+    # persistence_ok как раньше. unavailable ≠ False: чтение памяти не удалось,
+    # исход не наблюдаем, стадия обязана ответить UNKNOWN.
+    settle: "SettleResult | None" = None
     # Судейские вердикты по стадиям, посчитанные раннером ДО evaluate_all
     # (data-model §5). Пустой словарь = судья не активен, и слияние в
     # oracles/judge_merge.py становится тождественной операцией: вердикты
@@ -46,8 +51,7 @@ class EvaluationContext:
     # case_marker в AttackContext подключаются отдельной задачей (R4/T002-7);
     # сейчас значение задаётся только явным конструированием EvaluationContext
     # в офлайн-тестах. Не путать с expected_effect.markers (маркеры эффекта).
-    case_marker: str | None = None
-    # Доверенный контекст происхождения (T002-5): runner — единственный, кто
+    case_marker: str | None = None    # Доверенный контекст происхождения (T002-5): runner — единственный, кто
     # знает, какая сессия в какой фазе создавалась; эти поля передают это
     # знание oracle'ам явно (не задним числом по событиям). Событие
     # trigger-фазы правильного principal'а = session_id ∈ trigger_session_ids

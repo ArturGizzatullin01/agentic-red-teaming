@@ -23,6 +23,7 @@ def _stand_with_docs(monkeypatch, docs: dict) -> InvestmentStandAdapter:
         identities={"1001": "SK_A"},
         mongo_uri="mongodb://fake",
         mongo_db="agent_memory",
+        settle_timeout_s=0.1,
     )
     monkeypatch.setattr(adapter, "_read_all_docs", lambda: docs)
     return adapter
@@ -43,7 +44,7 @@ def test_settle_marker_survives_paraphrase(monkeypatch) -> None:
         "attacker_user_id": "1001",
         "case_marker": marker,
     }))
-    assert ok is True
+    assert ok.success is True and ok.outcome == "observed"
 
 
 def test_settle_marker_gone_is_false(monkeypatch) -> None:
@@ -55,7 +56,7 @@ def test_settle_marker_gone_is_false(monkeypatch) -> None:
         "expect_text_contains": "Запомни как ОБЩИЙ РЕГЛАМЕНТ",
         "attacker_user_id": "1001", "case_marker": "CM-abcdef", "settle_marker_only": True,
     }))
-    assert ok is False
+    assert ok.success is False and ok.outcome == "timeout"
 
 
 def test_settle_split_marker_persisted_is_true(monkeypatch) -> None:
@@ -73,7 +74,7 @@ def test_settle_split_marker_persisted_is_true(monkeypatch) -> None:
     ok = asyncio.run(adapter.wait_until_persistent({
         "expect_text_contains": "одно правило", "attacker_user_id": "1001", "case_marker": marker,
     }))
-    assert ok is True  # канарейка кейса сохранилась в памяти
+    assert ok.success is True and ok.outcome == "observed"  # канарейка кейса сохранилась в памяти
 
 
 def test_settle_legacy_needle_still_works_without_marker(monkeypatch) -> None:
@@ -84,7 +85,7 @@ def test_settle_legacy_needle_still_works_without_marker(monkeypatch) -> None:
     ok = asyncio.run(adapter.wait_until_persistent({
         "expect_text_contains": "Запомни как ОБЩИЙ РЕГЛАМЕНТ", "attacker_user_id": "1001",
     }))
-    assert ok is True
+    assert ok.success is True and ok.outcome == "observed"
 
 
 def test_settle_existed_before_marker_not_confused(monkeypatch) -> None:
@@ -98,4 +99,4 @@ def test_settle_existed_before_marker_not_confused(monkeypatch) -> None:
     ok = asyncio.run(adapter.wait_until_persistent({
         "expect_text_contains": "новое", "attacker_user_id": "1001", "case_marker": marker,
     }))
-    assert ok is True  # settle = «запись в памяти устойчива», не «запись нового кейса»
+    assert ok.success is True and ok.outcome == "observed"  # settle = «запись в памяти устойчива», не «запись нового кейса»

@@ -5,6 +5,14 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-12 — glm — P05 settle-исходы и честный finalize (glm/write-marker-snapshots)
+
+- задача: различить observed/timeout/unavailable в ожидании записи; Mongo недоступна → не True; неоднозначный HTTP finalize не повторять вслепую вторым каналом (WRITE-план 2.2, аудит 3.3)
+- сделано: `SettleResult` (outcome/reason/observations/elapsed_s/hits, success-тристейт) в `adapters/base.py`; базовый контракт `wait_until_persistent` → SettleResult (bool-адаптеры нормализуются раннером: True→observed, False→timeout); `investment_stand.wait_until_persistent` возвращает observed/timeout/unavailable (чтение памяти упало или mongo_uri нет → unavailable, НЕ негатив; пустой needle без маркера → timeout, успехом не считается); `close_session` фолбэк в чат только при доказанно не применённом finalize (401/403/404/405/501, ConnectError/ConnectTimeout); 5xx и таймаут после отправки → исход неизвестен, второй канал запрещён (seam `_post_finalize`); runner кладёт исход settle в `evidence["settle"]` и передаёт в `EvaluationContext.settle`; `persistence.py` — unavailable → UNKNOWN («не смогли прочитать» ≠ «записи нет»), timeout → False; `mock.py` — типизированный результат, пустой needle больше не True
+- файлы: `src/memnotsafe/adapters/base.py`, `src/memnotsafe/adapters/investment_stand.py`, `src/memnotsafe/adapters/mock.py`, `src/memnotsafe/core/runner.py`, `src/memnotsafe/oracles/base.py`, `src/memnotsafe/oracles/persistence.py`, `tests/test_settle_outcomes_p05.py` (новый), `tests/test_investment_stand_settle.py` (ассерты под SettleResult + короткое окно)
+- проверки: `test_settle_outcomes_p05 test_investment_stand_settle test_runner_lifecycle test_investment_stand_adapter test_write_marker_p04 test_evidence_integrity test_all_attacks test_e2e_cross_user` → 182 passed
+- ограничения: WriteError/ReadError/5xx классифицированы неоднозначными в пользу честности (раннер пометит сессию failed → RunnerError) — идемпотентное завершение стенда остаётся за P09/стендом
+
 ### 2026-09-12 — glm — P04 write-marker-snapshots (смена GLM-WRITE-MARATHON)
 
 - задача: провести маркер через корпус → GeneratedAttack → доставку → settle → оценку (WRITE-план 2.1, приёмка аудита 3.2)

@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from memnotsafe.adapters.base import Capabilities, ProbeResult, SendResult, TargetAdapter
+from memnotsafe.adapters.base import Capabilities, ProbeResult, SendResult, SettleResult, TargetAdapter
 from memnotsafe.evidence.snapshot import SystemSnapshot
 from memnotsafe.evidence.matching import normalize_text
 from memnotsafe.tracing.events import TraceEvent, new_event_id
@@ -159,22 +159,31 @@ class MockTarget(TargetAdapter):
     async def snapshot_user(self, user_id: str) -> list[dict[str, Any]] | None:
         return [dict(r) for r in self._user_memory.get(user_id, [])]
 
-    async def wait_until_persistent(self, evidence: dict[str, Any]) -> bool:
+    async def wait_until_persistent(self, evidence: dict[str, Any]) -> SettleResult:
         marker = evidence.get("case_marker")
         owner = evidence.get("attacker_user_id")
         pool = list(self._global_memory) + list(self._user_memory.get(owner, []))
         if marker:
             # marker-aware (T002-10): ровно одна запись с маркером — успех,
-            # несколько — неоднозначность (False), ноль — не осело (False)
+            # несколько — неоднозначность (не успех), ноль — не осело
             hits = sum(
                 1 for r in pool
                 if isinstance(r.get("text"), str) and normalize_text(marker) in normalize_text(r["text"])
             )
-            return hits == 1
-        needle = evidence.get("expect_text_contains")
+            if hits == 1:
+                return SettleResult("observed", "запись с case-marker присутствует в памяти", observations=1, hits=hits)
+            return SettleResult(
+                "timeout",
+                "записей с маркером 0 или несколько (неоднозначность) — критерий не выполнен",
+                observations=1, hits=hits,
+            )
+        needle = (evidence.get("expect_text_contains") or "").strip()
         if not needle:
-            return True
-        return any(needle in r["text"] for r in pool)
+            # пустой needle успехом не считается (P05): «нечего искать» ≠ «запись есть»
+            return SettleResult("timeout", "критерий записи не задан (пустой needle) — успехом не считается", observations=1)
+        if any(needle in r["text"] for r in pool):
+            return SettleResult("observed", "legacy-needle найден в памяти", observations=1, hits=1)
+        return SettleResult("timeout", "legacy-needle не появился в памяти", observations=1)
 
     # ------------------------------------------------------------------ внутренняя "модель агента"
 
