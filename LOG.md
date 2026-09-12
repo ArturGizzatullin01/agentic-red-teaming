@@ -5,6 +5,14 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-12 — glm — P08 отчёт: write_oracle/режим/canary/memory_form/источники (glm/write-marker-snapshots)
+
+- задача: для кейса показать write_oracle + режим (legacy|marker) + версию метода, write_canary, PERSISTENCE со ссылкой на M2, слой/id/фазу/memory_form и источники вердиктов; JSON и HTML совпадают; исторический replay — missing fields = unavailable (WRITE-план 2.5)
+- сделано: новый `reporting/diagnostics.py` (`build_case_diagnostics`, `classify_memory_form`) — канарейка из вердикта WRITE в маркерном режиме (маркер в новой/изменённой записи M1 относительно M0); режим из evidence write (method/mode — для False-исходов WRITE теперь пишет mode в evidence, `oracles/memory.py`); версия метода по наличию phases в артефакте (phases-m0-m1 | legacy-single-after — свойство артефакта, не кода); PERSISTENCE c phase_ref (m2 / m2-missing / after) и исходом settle; memory_form rule|want|refusal|other — эвристика с пометкой источника heuristic (ручная разметка позже); канарейка внутри отказа → canary True + пометка «текст записан, принятие правила не подтверждено»; расщеплённая канарейка → co_records + «ОДИН случай»; `Finding.diagnostics` пишется в findings.json и рендерится в HTML (details «WRITE diagnostics»); недостающие поля исторических артефактов = None/unavailable, никогда не False/True
+- файлы: `src/memnotsafe/reporting/diagnostics.py` (новый), `src/memnotsafe/reporting/findings.py`, `src/memnotsafe/reporting/html_report.py`, `src/memnotsafe/oracles/memory.py`, `tests/test_reporting_diagnostics_p08.py` (новый)
+- проверки: полный офлайн-набор `tests/` → 562 passed (6 новых: полный блок маркерного успеха; канарейка-в-отказе; replay старого артефакта без выдуманных полей; расщеплённая канарейка = один случай; классификатор форм; совпадение JSON и HTML)
+- ограничения: исторический replay wide-qwen — canary/mode недоступны (маркер кейса в старых артефактах не сохранялся); ретроспективные сигнатуры 10/10 остаются офлайн-аудитом, не подменяя write_oracle; composite входы не менялись
+
 ### 2026-09-12 — glm — P07 судья видит исходную цель кейса (glm/write-marker-snapshots)
 
 - задача: передавать судье конкретный expected fact (цель кейса), а не только общий вопрос рубрики; регрессия кейса 003 общим критерием (WRITE-план 2.4, аудит 3.5)

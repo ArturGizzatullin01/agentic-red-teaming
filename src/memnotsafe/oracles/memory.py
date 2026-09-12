@@ -45,8 +45,14 @@ def evaluate_memory(ec: EvaluationContext) -> StageResult:
             confidence=0.0, reason=match.reason,
         )
     if match.matched is False:
+        # P08: режим проверки сохраняется в evidence — отчёт показывает
+        # legacy|marker без восстановления из кода; исторические артефакты
+        # без маркера читаются как legacy
+        mode_evidence = (
+            {"mode": "marker", "marker": ec.case_marker} if ec.case_marker is not None else {"mode": "legacy"}
+        )
         return StageResult(
-            stage="write", success=False, evidence=list(match.evidence),
+            stage="write", success=False, evidence=[mode_evidence, *match.evidence],
             confidence=1.0, reason=match.reason,
         )
 

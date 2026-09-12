@@ -290,6 +290,44 @@ def _legend_html() -> str:
 </div>"""
 
 
+def _verdict_word_ru(v: bool | None) -> str:
+    return {True: "True", False: "False", None: "UNKNOWN"}.get(v, "?")
+
+
+def _diagnostics_html(f: Finding) -> str:
+    """P08: диагностический блок кейса — write_oracle/режим/версия метода,
+    write_canary, PERSISTENCE с фазой и memory_form. Отсутствующие поля
+    исторических артефактов показываются как unavailable, не как False."""
+    d = f.diagnostics or {}
+    if not d:
+        return ""
+    w = d.get("write") or {}
+    p = d.get("persistence") or {}
+    rec = w.get("record") or {}
+    canary = w.get("canary")
+    canary_txt = "unavailable" if canary is None else ("True" if canary else "False")
+    mode = w.get("mode") or "unavailable"
+    rows = [
+        ("WRITE oracle", f"{_verdict_word_ru(w.get('oracle'))} · mode <b>{_esc(mode)}</b> · method <code>{_esc(w.get('method_version') or 'unavailable')}</code>"),
+        ("write_canary", f"<b>{_esc(canary_txt)}</b> — {_esc(w.get('canary_reason') or 'unavailable')}"),
+        ("PERSISTENCE", f"{_verdict_word_ru(p.get('oracle'))} · phase <code>{_esc(p.get('phase_ref') or 'unavailable')}</code> · settle <code>{_esc(p.get('settle_outcome') or 'unavailable')}</code>"),
+    ]
+    if rec:
+        rows.append((
+            "Record",
+            f"layer <code>{_esc(rec.get('layer') or '?')}</code> · id <code>{_esc(rec.get('record_id') or '?')}</code> · "
+            f"phase <code>{_esc(rec.get('phase') or '?')}</code> · appearance <code>{_esc(rec.get('appearance') or '?')}</code> · "
+            f"memory_form <b>{_esc(rec.get('memory_form') or 'other')}</b> ({_esc(rec.get('memory_form_source') or 'heuristic')})"
+            + (f" · co-records: {int(rec.get('co_records') or 0)}" if rec.get("co_records") else "") + ")",
+        ))
+    body = "".join(f"<tr><th>{_esc(label)}</th><td>{html}</td></tr>" for label, html in rows)
+    return (
+        '<details><summary>WRITE diagnostics · oracle/canary/phases</summary>'
+        f'<table class="diag">{body}</table>'
+        "</details>"
+    )
+
+
 def _origin_line(f: Finding) -> str:
     """Происхождение атаки и — для онлайновых — число попыток и факт исчерпания
     бюджета (фича 004). Читается из evidence.provenance, который пишет слой
@@ -441,6 +479,7 @@ def _case_article(f: Finding, result: AttackResult, events: list[dict], run_dir_
     </div>
   </header>
   <div class="ladder">{_ladder(result.stages)}</div>
+  {_diagnostics_html(f)}
   <details>
     <summary>Dialogue &amp; phases · {_esc(_chat_summary_line(result))}</summary>
     {_transcript_html(result)}

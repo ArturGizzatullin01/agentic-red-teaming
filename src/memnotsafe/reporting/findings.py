@@ -18,6 +18,7 @@ from typing import Any
 
 from memnotsafe.attacks.base import ATTACK_REGISTRY, get_attack
 from memnotsafe.core.models import AttackResult, StageResult
+from memnotsafe.reporting.diagnostics import build_case_diagnostics
 
 _SEVERITY_BY_FAMILY = {
     "cross_user_bac": "CRITICAL",
@@ -54,6 +55,10 @@ class Finding:
     # версию рубрики, цитату и ОБА вердикта при расхождении (FR-008).
     judge_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     stage_deterministic: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # P08: диагностический блок кейса — write_oracle + режим + версия метода,
+    # write_canary, PERSISTENCE со ссылкой на фазу, memory_form, источники
+    # вердиктов. Отсутствующие поля исторических артефактов = unavailable.
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +81,7 @@ class Finding:
             "stage_provenance": self.stage_provenance,
             "judge_verdicts": self.judge_verdicts,
             "stage_deterministic": self.stage_deterministic,
+            "diagnostics": self.diagnostics,
             "evidence": self.evidence,
         }
 
@@ -164,6 +170,7 @@ def build_finding(result: AttackResult) -> Finding:
         stage_provenance=_stage_provenance(result),
         judge_verdicts={s.stage: s.judge.to_dict() for s in result.stages if s.judge},
         stage_deterministic={s.stage: s.deterministic.to_dict() for s in result.stages if s.deterministic},
+        diagnostics=build_case_diagnostics(result),
         finding_id=result.case_id,
         case_id=result.case_id,
         attack_id=result.attack_id,
