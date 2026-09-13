@@ -30,8 +30,16 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from memnotsafe.attacks.base import AttackBase, AttackContext
+from memnotsafe.core.attempt import (
+    OUTCOME_REWRITE_ACCEPTED,
+    OUTCOME_REWRITE_REJECTED,
+    OUTCOME_TRANSPORT_ERROR,
+    outcome_of_result,
+    sessions_from_transcript,
+)
+from memnotsafe.core.goal_contract import goal_digest_or_none
 from memnotsafe.core.models import AttackResult, StageVerdict
-from memnotsafe.core.runner import new_case_id, run_attack
+from memnotsafe.core.runner import RunnerError, new_case_id, run_attack
 from memnotsafe.generation.attacker_client import AttackerClient
 from memnotsafe.generation.budget import CallBudget
 from memnotsafe.generation.corpus import ORIGIN_CORPUS, ORIGIN_ONLINE, CorpusRecord
@@ -104,6 +112,7 @@ async def escalate(
     recorder: TraceRecorder | None = None,
     judge: Any | None = None,
     require_case_marker: bool = False,
+    history: Any | None = None,
 ) -> EscalationOutcome:
     """Цикл: пока не успех, не исчерпан лимит попыток и не исчерпан бюджет —
     переписываем атаку по обратной связи и пробуем снова. Стоп на первом успехе
@@ -127,6 +136,9 @@ async def escalate(
 
     previous = _initial_record(base_ctx, initial_result)
     adapted = False
+    # P10b: candidate lineage — первый кандидат = начальный case_id; каждый
+    # принятый rewrite = новый кандидат с parent_candidate_id (case_id общий).
+    previous_candidate_id = base_ctx.case_id
 
     while attempts < limit:
         if budget.exhausted:
@@ -145,7 +157,17 @@ async def escalate(
         attempts += 1
         adapted = True
         if new_record is None:
-            continue  # невалидный ответ модели → отбраковка тратит попытку (FR-012)
+            # невалидный ответ модели → отбраковка тратит попытку (FR-012);
+            # отклонённый кандидат НЕ доходит до target и попадает в историю
+            if history is not None:
+                history.record(
+                    case_id=base_ctx.case_id,
+                    candidate_id=previous_candidate_id,
+                    outcome=OUTCOME_REWRITE_REJECTED,
+                    attempt_no=0,
+                    goal_digest=goal_digest_or_none(previous.expected_effect),
+                )
+            continue
 
         previous = new_record
         gen = GeneratedAttack()  # свежий исполнитель переписанной записи
@@ -156,10 +178,48 @@ async def escalate(
             # маркер прошлой попытки в новый case_id не переезжает (см. докстринг)
             case_marker=None,
         )
-        last = await run_attack(
-            gen, new_ctx, target, run_id=run_id, recorder=recorder, judge=judge,
-            require_case_marker=require_case_marker,
-        )
+        parent_candidate_id = previous_candidate_id
+        if history is not None:
+            history.record(
+                case_id=base_ctx.case_id,
+                candidate_id=new_ctx.case_id,
+                parent_candidate_id=parent_candidate_id,
+                outcome=OUTCOME_REWRITE_ACCEPTED,
+                attempt_no=0,
+                goal_digest=goal_digest_or_none(new_record.expected_effect),
+            )
+        previous_candidate_id = new_ctx.case_id
+        try:
+            last = await run_attack(
+                gen, new_ctx, target, run_id=run_id, recorder=recorder, judge=judge,
+                require_case_marker=require_case_marker,
+            )
+        except RunnerError as exc:
+            # Транспортный сбой повтора: в историю (candidate тот же — retry не
+            # новый кандидат), затем НЕ глотаем — exit-контракт CLI.
+            if history is not None:
+                history.record(
+                    case_id=base_ctx.case_id,
+                    candidate_id=new_ctx.case_id,
+                    parent_candidate_id=parent_candidate_id,
+                    outcome=OUTCOME_TRANSPORT_ERROR,
+                    attempt_no=attempts,
+                    case_marker=new_ctx.case_marker,
+                    seed=new_ctx.run_seed,
+                    error=str(exc),
+                )
+            raise
+        if history is not None:
+            history.record(
+                case_id=base_ctx.case_id,
+                candidate_id=new_ctx.case_id,
+                parent_candidate_id=parent_candidate_id,
+                outcome=outcome_of_result(last),
+                attempt_no=attempts,
+                case_marker=last.evidence.get("case_marker") or new_ctx.case_marker,
+                goal_digest=goal_digest_or_none((last.evidence.get("candidate") or {}).get("expected_effect")),
+                session_ids=sessions_from_transcript(last.evidence.get("transcript")),
+            )
         if last.success:
             annotated = _annotate(last, attempts=attempts, budget_exhausted=budget.exhausted, adapted=True, corpus_id=corpus_id)
             return EscalationOutcome(annotated, attempts=attempts, succeeded=True, budget_exhausted=budget.exhausted)

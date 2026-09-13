@@ -155,3 +155,13 @@ class GoalContract:
             required_evidence=tuple(data.get("required_evidence") or ()),
             bindings=tuple((data.get("bindings") or {}).items()),
         )
+
+
+def goal_digest_or_none(effect: dict | None) -> str | None:
+    """Digest цели или None, если цель не определена/не входит в авторитетный
+    набор (рукописная нестандартная). None — честное «digest нет»,
+    не выдуманный хеш."""
+    try:
+        return GoalContract.from_effect(effect or {}).digest()
+    except ValueError:
+        return None

@@ -20,7 +20,17 @@ from pathlib import Path
 
 from memnotsafe.adapters.base import TargetAdapter
 from memnotsafe.attacks.base import AttackBase, AttackContext, get_attack
+from memnotsafe.core.attempt import (
+    OUTCOME_ABORTED,
+    OUTCOME_BUDGET_EXHAUSTED,
+    OUTCOME_REGISTERED,
+    OUTCOME_TRANSPORT_ERROR,
+    AttemptHistory,
+    outcome_of_result,
+    sessions_from_transcript,
+)
 from memnotsafe.core.config import Scenario
+from memnotsafe.core.goal_contract import goal_digest_or_none
 from memnotsafe.core.models import AttackResult, CampaignResult
 from memnotsafe.core.runner import RunnerError, new_case_id, new_run_id, run_attack
 from memnotsafe.reporting.metrics import aggregate_metrics
@@ -114,6 +124,13 @@ class Campaign:
         self.experiment_id = spec.experiment_id
         write_experiment(self.output_dir, spec)
 
+        # P10b (фича 007): полная история попыток — кандидаты, rewrite,
+        # транспортные ошибки, бюджетные стопы. Метрики не меняются (см.
+        # докстринг core/attempt.py о связи с ASR).
+        history = AttemptHistory(
+            self.output_dir / "attempts.jsonl", experiment_id=self.experiment_id, run_id=run_id
+        )
+
         recorder = TraceRecorder(
             events_path=self.output_dir / "events.jsonl",
             traces_dir=self.output_dir / "traces",
@@ -133,13 +150,46 @@ class Campaign:
             # у них предзаданный case_marker не обязан быть в тексте (opt-in
             # 005, test_system_log_case_marker_is_opt_in).
             require_marker = self.scenario.require_case_marker or self._record_declares_marker(ctx)
+            # История: кандидат зарегистрирован до обращения к target.
+            history.record(
+                case_id=ctx.case_id,
+                candidate_id=ctx.case_id,
+                outcome=OUTCOME_REGISTERED,
+                attempt_no=0,
+                case_marker=ctx.case_marker,
+                goal_digest=goal_digest_or_none(attack.expected_effect(ctx)),
+                seed=ctx.run_seed,
+            )
             try:
                 result = await run_attack(
                     attack, ctx, self.target, run_id=run_id, recorder=recorder, judge=self.judge,
                     require_case_marker=require_marker,
                 )
-            except RunnerError:
+            except RunnerError as exc:
+                # Транспортный сбой target: в историю как transport_error
+                # (повтор той же попытки не создаёт нового кандидата), затем
+                # НЕ глотаем — CLI обязан вернуть exit 1 (exit-контракт).
+                history.record(
+                    case_id=ctx.case_id,
+                    candidate_id=ctx.case_id,
+                    outcome=OUTCOME_TRANSPORT_ERROR,
+                    attempt_no=1,
+                    case_marker=ctx.case_marker,
+                    seed=ctx.run_seed,
+                    error=str(exc),
+                )
                 raise  # раннер-ошибка — не глотаем, CLI обязан вернуть exit 1
+
+            history.record(
+                case_id=ctx.case_id,
+                candidate_id=ctx.case_id,
+                outcome=outcome_of_result(result),
+                attempt_no=1,
+                case_marker=result.evidence.get("case_marker") or ctx.case_marker,
+                goal_digest=goal_digest_or_none((result.evidence.get("candidate") or {}).get("expected_effect")),
+                seed=ctx.run_seed,
+                session_ids=sessions_from_transcript(result.evidence.get("transcript")),
+            )
 
             # Провенанс происхождения — слоем кампании, а не раннером (research §12).
             result.evidence["provenance"] = dict(provenance)
@@ -148,7 +198,17 @@ class Campaign:
             # выключенном онлайн-уровне возвращает result как есть (SC-003).
             result = await self._maybe_escalate(
                 attack, ctx, result, run_id=run_id, recorder=recorder, require_case_marker=require_marker,
+                history=history,
             )
+
+            if (result.evidence.get("provenance") or {}).get("budget_exhausted"):
+                # Штатный стоп по бюджету атакующей LLM — в историю (не в ASR).
+                history.record(
+                    case_id=ctx.case_id,
+                    candidate_id=result.case_id,
+                    outcome=OUTCOME_BUDGET_EXHAUSTED,
+                    attempt_no=0,
+                )
 
             self._persist_case(result, recorder, evidence_dir, cases_path)
             results.append(result)
@@ -264,6 +324,7 @@ class Campaign:
         run_id: str,
         recorder: TraceRecorder,
         require_case_marker: bool = False,
+        history: AttemptHistory | None = None,
     ) -> AttackResult:
         """Онлайн-уровень (US2/US3). Реализация цикла — в core/escalation.py; здесь
         только точка вызова при `--online` и `success=False`. При выключенном
@@ -293,6 +354,7 @@ class Campaign:
                 # (case_id новый), но наличие его в доставке проверяется так же
                 # строго, как у первой попытки (единый план P04)
                 require_case_marker=require_case_marker,
+                history=history,
             )
         except AttackerError as exc:
             # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем
@@ -303,6 +365,14 @@ class Campaign:
             prov = dict(result.evidence.get("provenance") or {})
             prov["attacker_error"] = str(exc)
             result.evidence["provenance"] = prov
+            if history is not None:
+                history.record(
+                    case_id=ctx.case_id,
+                    candidate_id=result.case_id,
+                    outcome=OUTCOME_ABORTED,
+                    attempt_no=0,
+                    error=str(exc),
+                )
             return result
 
         self.attacker_calls = self._budget.used if self._budget else self.attacker_calls
@@ -351,7 +421,6 @@ class Campaign:
         поверх существующих артефактов. Слоты без телеметрии честно получают
         unavailable (не «доказанное отсутствие»); сбой записи пакета не роняет
         прогон — пакет это доказательственная надстройка, а не канал вердикта."""
-        from memnotsafe.core.goal_contract import GoalContract
         from memnotsafe.evidence.bundle import write_bundle
 
         ev = result.evidence
@@ -359,10 +428,8 @@ class Campaign:
         candidate = ev.get("candidate") or {}
         tool_events = [e for e in recorder.case_events(result.case_id) if e.get("tool")]
         trace_file = self.output_dir / "traces" / f"{result.case_id}.json"
-        try:
-            goal_digest = GoalContract.from_effect(candidate.get("expected_effect") or {}).digest()
-        except ValueError:
-            goal_digest = None  # рукописная/нестандартная цель: digest не выдумываем
+        # рукописная/нестандартная цель → None: digest не выдумываем
+        goal_digest = goal_digest_or_none(candidate.get("expected_effect"))
         try:
             write_bundle(
                 self.output_dir / "bundles" / result.case_id,
