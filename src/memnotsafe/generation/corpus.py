@@ -25,6 +25,41 @@ from memnotsafe.generation.errors import AttackerError
 ORIGIN_CORPUS = "corpus"
 ORIGIN_ONLINE = "online"
 
+# Контракт R0.1 «origin raw»: маркер подставляется только в payload/доставочные
+# steps; вхождение плейсхолдера в trigger/trigger_steps — ошибка конфигурации записи.
+CASE_MARKER_PLACEHOLDER = "{case_marker}"
+
+
+def supported_effect_types() -> frozenset[str]:
+    """АВТОРИТЕТНЫЙ набор поддерживаемых expected_effect.type — ВЫВОДИТСЯ из
+    dispatch оракулов, не дублируется собственным списком: пересечение
+    snake_case-литералов модулей adoption и external_effect. Composite требует
+    ОБЕ стадии, поэтому тип, известный только одной, поддерживаемым не считается;
+    новая пара «тип в обеих стадиях» автоматически становится валидной без правки
+    валидатора. Пустое пересечение — ошибка конфигурации, не «всё разрешено»."""
+    import functools
+    import inspect
+    import re
+
+    @functools.lru_cache(maxsize=1)
+    def _derive() -> frozenset[str]:
+        from memnotsafe.oracles import adoption as _adoption
+        from memnotsafe.oracles import external_effect as _external
+
+        def literals(module) -> set[str]:
+            src = inspect.getsource(module)
+            return set(re.findall(r'"([a-z]+(?:_[a-z]+)+)"', src))
+
+        derived = literals(_adoption) & literals(_external)
+        if not derived:
+            raise AttackerError(
+                "supported_effect_types: dispatch оракулов не дал набора типов — "
+                "неоднозначность авторитетного набора, валидация невозможна"
+            )
+        return frozenset(derived)
+
+    return _derive()
+
 
 def tool_version() -> str:
     """Версия инструмента для провенанса корпуса — из метаданных пакета, с
@@ -175,8 +210,31 @@ def record_issues(record: CorpusRecord, *, class_spec: AttackClassSpec | None = 
         issues.append(f"attack_class {record.attack_class!r} вне ATTACK_REGISTRY")
     if not isinstance(record.expected_effect, dict) or not record.expected_effect.get("type"):
         issues.append("expected_effect без поля type")
+    else:
+        # K3/P03: тип сверяется с авторитетным набором, выведенным из dispatch
+        # оракулов; неподдержанный тип отклоняется ДО обращения к target
+        effect_type = record.expected_effect["type"]
+        supported = supported_effect_types()
+        if effect_type not in supported:
+            issues.append(
+                f"неподдерживаемый expected_effect.type={effect_type!r}: его не знает "
+                f"dispatch оракулов (авторитетный набор: {sorted(supported)})"
+            )
     if record.case_marker is not None and not record.case_marker.strip():
         issues.append("заявленный case_marker пуст или состоит из пробелов")
+    # K3/P03, R0.1 enforcement: маркер в вопросах жертвы запрещён — trigger и
+    # trigger_steps остаются литеральными, канарейка живёт только в доставке
+    if CASE_MARKER_PLACEHOLDER in record.trigger:
+        issues.append(
+            "контракт R0.1: {case_marker} в trigger запрещён — маркер разрешён "
+            "только в payload/доставочных steps; вопрос жертвы остаётся литеральным"
+        )
+    for step in record.trigger_steps:
+        if CASE_MARKER_PLACEHOLDER in step.message:
+            issues.append(
+                f"контракт R0.1: {{case_marker}} в trigger_steps[{step.label!r}] запрещён — "
+                "маркер разрешён только в payload/доставочных steps"
+            )
 
     if class_spec is not None:
         if record.expected_effect.get("type") != class_spec.effect_type:

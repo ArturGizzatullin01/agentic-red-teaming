@@ -273,3 +273,27 @@ def test_us2_online_escalation_fail_then_success(tmp_path):
     assert res.evidence["provenance"]["attempts"] == 2
     assert res.evidence["provenance"]["origin"] == "online"
     assert "1001" in res.evidence["victim_response"]  # чужой cus утёк жертве после адаптации
+
+
+# ------------------- K3/P03: неподдерживаемый тип отбраковывается ДО target
+
+
+def test_valid_records_drops_unsupported_effect_type_before_target():
+    """Готовый корпус: запись с типом, которого нет в dispatch оракулов,
+    не доходит до планирования случаев (valid_records) — отклонение offline."""
+    from memnotsafe.generation.corpus import Corpus, CorpusProvenance, CorpusRecord, valid_records
+
+    corpus = Corpus(
+        provenance=CorpusProvenance(
+            profile_id="k3", profile_sha256="0" * 64, attack_classes=["direct_poisoning"],
+            generator_model="stub", generator_provider="stub", tool_version="0", created_at="now",
+        ),
+        records=[
+            CorpusRecord(attack_class="direct_poisoning", payload="ok", trigger="t?",
+                          expected_effect={"type": "cross_user_data_access"}),
+            CorpusRecord(attack_class="direct_poisoning", payload="bad", trigger="t?",
+                          expected_effect={"type": "mention_only_effect"}),
+        ],
+    )
+    kept = valid_records(corpus)
+    assert [r.payload for r in kept] == ["ok"]

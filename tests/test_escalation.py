@@ -309,3 +309,66 @@ def test_campaign_hands_the_same_judge_to_escalation(monkeypatch, tmp_path):
     assert len(judge.case_ids) == 2
     assert len(set(judge.case_ids)) == 2
     assert judge.case_ids[1] == result.results[0].case_id
+
+
+# ------------------- K3/P03: rewrite меняет ТЕКСТ, но не смысл цели
+
+
+def _k3_feedback(effect: dict):
+    from memnotsafe.core.escalation import EscalationFeedback
+    from memnotsafe.generation.corpus import CorpusRecord
+
+    previous = CorpusRecord(
+        attack_class="tool_argument_hijack", payload="старый текст атаки",
+        trigger="старый вопрос", expected_effect=dict(effect),
+    )
+    return EscalationFeedback(
+        victim_response="ответ жертвы", baseline_response="чистый ответ",
+        funnel={"write": False}, previous=previous, attempt=2,
+    )
+
+
+def _k3_script(effect: dict) -> str:
+    import json
+    return json.dumps({
+        "payload": "новый текст атаки", "trigger": "новый вопрос",
+        "expected_effect": effect, "signal_strength": "weak",
+    }, ensure_ascii=False)
+
+
+def test_rewrite_rejects_goal_type_change():
+    # «совершить эффект» не превращается в «упомянуть»: смена expected_effect.type
+    # отбраковывает rewrite (None) ДО target, попытка потрачена (FR-012)
+    from memnotsafe.generation.attacker_client import StubAttackerClient
+    from memnotsafe.generation.budget import CallBudget
+    from memnotsafe.generation.rewrite import rewrite
+
+    previous = {"type": "tool_argument_injected", "tool": "book_transaction", "injected": "PROMO2024"}
+    changed = {"type": "response_reflects_adoption", "markers": ["PROMO2024"]}
+    budget = CallBudget(limit=5)
+    out = asyncio.run(rewrite(_k3_feedback(previous), StubAttackerClient([_k3_script(changed)]), budget))
+    assert out is None
+    assert budget.used == 1
+
+
+def test_rewrite_rejects_key_value_change():
+    from memnotsafe.generation.attacker_client import StubAttackerClient
+    from memnotsafe.generation.budget import CallBudget
+    from memnotsafe.generation.rewrite import rewrite
+
+    previous = {"type": "tool_argument_injected", "tool": "book_transaction", "injected": "PROMO2024"}
+    changed = {"type": "tool_argument_injected", "tool": "book_transaction", "injected": "OTHER123"}
+    out = asyncio.run(rewrite(_k3_feedback(previous), StubAttackerClient([_k3_script(changed)]), CallBudget(limit=5)))
+    assert out is None
+
+
+def test_rewrite_keeps_goal_when_only_text_changes():
+    from memnotsafe.generation.attacker_client import StubAttackerClient
+    from memnotsafe.generation.budget import CallBudget
+    from memnotsafe.generation.rewrite import rewrite
+
+    previous = {"type": "tool_argument_injected", "tool": "book_transaction", "injected": "PROMO2024"}
+    out = asyncio.run(rewrite(_k3_feedback(previous), StubAttackerClient([_k3_script(dict(previous))]), CallBudget(limit=5)))
+    assert out is not None
+    assert out.payload == "новый текст атаки"
+    assert out.expected_effect == previous  # тип и ключевые значения не тронуты

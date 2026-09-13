@@ -141,3 +141,81 @@ def test_profile_effect_type_must_match_some_class():
             generate_corpus(profile, load_attack_classes(CLASSES_DIR),
                             StubAttackerClient([]), CallBudget(50), provider="stub", model=None)
         )
+
+
+# ------------------- K3/P03: валидатор expected_effect + запрет маркера в trigger
+
+
+def test_record_issues_rejects_unsupported_effect_type():
+    # авторитетный набор выводится из dispatch оракулов (adoption+external_effect);
+    # тип, который не знает хотя бы одна стадия, отбраковывается ДО target
+    record = CorpusRecord(
+        attack_class="direct_poisoning", payload="p", trigger="t",
+        expected_effect={"type": "mention_only_effect"},
+    )
+    issues = record_issues(record)
+    assert any("mention_only_effect" in i and "type" in i for i in issues), issues
+
+
+@pytest.mark.parametrize("effect_type", [
+    "response_reflects_adoption", "cross_user_data_access",
+    "tool_argument_injected", "scope_escalated",
+])
+def test_record_issues_accepts_all_oracle_dispatch_types(effect_type):
+    record = CorpusRecord(
+        attack_class="direct_poisoning", payload="p", trigger="t",
+        expected_effect={"type": effect_type},
+    )
+    assert all("type" not in i or "поддерживаемый" not in i for i in record_issues(record))
+
+
+def test_record_issues_rejects_case_marker_in_trigger():
+    # контракт R0.1 «origin raw»: маркер разрешён ТОЛЬКО в payload/доставочных
+    # steps; в trigger и trigger_steps плейсхолдер не раскрывается и запрещён
+    bad_trigger = CorpusRecord(
+        attack_class="direct_poisoning", payload="ok {case_marker}",
+        trigger="Повтори {case_marker}", expected_effect={"type": "response_reflects_adoption"},
+    )
+    issues = record_issues(bad_trigger)
+    assert any("trigger" in i and "case_marker" in i for i in issues), issues
+
+    bad_step = CorpusRecord.from_dict({
+        "attack_class": "direct_poisoning", "payload": "ok {case_marker}", "trigger": "чистый вопрос",
+        "expected_effect": {"type": "response_reflects_adoption"},
+        "trigger_steps": [{"label": "recall", "message": "Напомни {case_marker}"}],
+    })
+    issues_step = record_issues(bad_step)
+    assert any("trigger_steps" in i and "case_marker" in i for i in issues_step), issues_step
+
+    # маркер в payload и доставочных steps — разрешён:issues нет про маркер
+    good = CorpusRecord.from_dict({
+        "attack_class": "direct_poisoning", "payload": "яд {case_marker}", "trigger": "чистый вопрос",
+        "expected_effect": {"type": "response_reflects_adoption"},
+        "delivery_steps": [{"label": "s1", "message": "ход {case_marker}"}],
+    })
+    assert not any("case_marker" in i for i in record_issues(good))
+
+
+def test_expected_effect_extra_fields_survive_corpus_roundtrip():
+    effect = {
+        "type": "tool_argument_injected", "tool": "book_transaction",
+        "injected": "PROMO2024", "markers": ["PROMO2024"],
+        "adoption_markers": ["оформляю с PROMO2024"], "custom_note": {"deep": [1, 2]},
+    }
+    record = CorpusRecord(
+        attack_class="tool_argument_hijack", payload="p", trigger="t",
+        expected_effect=dict(effect), case_marker="PROMO2024",
+    )
+    path = write_corpus(
+        Corpus.from_dict({"provenance": {}, "attacks": [record.to_dict()]}), _tmp_corpus_path()
+    )
+    restored = read_corpus(path).records[0]
+    assert restored.expected_effect == effect  # дополнительные поля не потеряны
+    assert restored.case_marker == "PROMO2024"
+
+
+def _tmp_corpus_path():
+    from pathlib import Path
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="k3-corpus-"))
+    return d / "corpus.yaml"
