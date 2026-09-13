@@ -66,6 +66,9 @@ class Campaign:
         # Сбой атакующей LLM в ходе эскалации (FR-011): фиксируется, чтобы CLI
         # вернул exit 1, но уже полученные результаты успели сохраниться (FR-010).
         self.attacker_error: str | None = None
+        # P10b (фича 007): experiment_id появляется в run() и связывает пакеты
+        # доказательств и историю попыток с конфигурацией эксперимента.
+        self.experiment_id: str | None = None
 
     def _build_judge(self):
         spec = self.scenario.judge
@@ -96,6 +99,20 @@ class Campaign:
     async def run(self, repetitions: int | None = None) -> CampaignResult:
         repetitions = repetitions or self.scenario.repetitions
         run_id = new_run_id()
+
+        # P10b (фича 007): конфигурация эксперимента фиксируется ДО первого
+        # случая — experiment_id свяжет пакеты доказательств и историю попыток
+        # с этой конфигурацией. Летучие поля и секреты в digest не входят.
+        from memnotsafe.core.experiment import build_experiment_spec, write_experiment
+
+        spec = build_experiment_spec(
+            self.scenario,
+            attacker_config=self.attacker_config,
+            online=self.online,
+            online_attempts=self.online_attempts,
+        )
+        self.experiment_id = spec.experiment_id
+        write_experiment(self.output_dir, spec)
 
         recorder = TraceRecorder(
             events_path=self.output_dir / "events.jsonl",
