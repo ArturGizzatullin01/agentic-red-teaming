@@ -5,6 +5,27 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14 — glm — evidence/foundation: фиксы RETURN_FOR_FIX ( Codex-приёмка c3c586b)
+
+- P1-1 (checksum обходился): read_bundle валидирует манифест ЦЕЛИКОМ — present без
+  sha256/bytes/path, неизвестный статус или слот, чужой kind, отсутствующие записи слотов →
+  BundleError; проверка checksum стала обязательной, обход невозможен
+- P1-2 (незавершённые незаметны): bundle_states() явно различает complete/incomplete;
+  verify_run_bundles роняет незавершённый каталог как «незавершённый пакет»; cmd_report
+  (report) → exit 1 с этим сообщением (комментарий приведён в соответствие с поведением);
+  сбой записи пакета в кампании больше не немой — запись evidence_error в attempts.jsonl
+- P1-3 (пакеты не на каждую попытку): bundle пишется для КАЖДОЙ попытки на target —
+  начальная в кампании, повторы через bundle_writer в цикле эскалации; каталог
+  bundles/<candidate_id>, attempt_no/parent_candidate_id согласованы с attempts.jsonl
+  (attempt_no = счётчик попыток эскалации, rejected тоже тратит номер); финальный
+  result.evidence["evidence_bundle"] указывает на пакет финального кандидата
+- P2-4 (неизменяемость GoalContract): глубокий снапшот эффекта в __post_init__, digest
+  вычисляется один раз по снапшоту — внешняя мутация словаря effect больше не меняет
+  digest/сериализацию (test_effect_dict_mutation_does_not_change_digest)
+- тесты: +12 (строгий манифест ×4, хронология/линeage e2e ×2 вкл. многошаговый негативный
+  reject→fail→fail, мутация digest, evidence_error-запись); полный набор 741 passed
+- коммит: 1eae486 (поверх c3c586b)
+
 ### 2026-09-14 — glm — evidence/foundation: Evidence Foundation (K1 + P10a + P10b, фича 007)
 
 - задача: большой блок MASTER-PLAN — K1 (roundtrip family) → P10a (GoalContract + EvidenceBundle) →
