@@ -335,6 +335,20 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     campaign = load_campaign(input_dir)
 
+    # P10a (фича 007): пакеты доказательств верифицируются при наличии.
+    # Исторические runs (без bundles/) проходят как раньше; повреждённый или
+    # подменённый артефакт — runtime-ошибка данных → exit 1 (console-output.md,
+    # строка «runtime/config error»). Незавершённые пакеты (без manifest.json)
+    # за завершённые не выдаются и верификацию не срывают — их видимость
+    # показывает attempts.jsonl, а не маскирующий успех.
+    from memnotsafe.evidence.bundle import BundleError, verify_run_bundles
+
+    try:
+        verify_run_bundles(input_dir)
+    except BundleError as exc:
+        reporter.emit_error(command="report", message=str(exc))
+        return 1
+
     # F4: replay пересчитывает агрегаты по загруженным результатам принятой
     # формулой, а не копирует сохранённые — старый файл мог содержать неверные
     # метрики (например, ASR по external_effect вместо композита). Пересчёт

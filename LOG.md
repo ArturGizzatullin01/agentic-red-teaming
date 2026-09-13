@@ -5,6 +5,51 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14 — glm — evidence/foundation: Evidence Foundation (K1 + P10a + P10b, фича 007)
+
+- задача: большой блок MASTER-PLAN — K1 (roundtrip family) → P10a (GoalContract + EvidenceBundle) →
+  P10b (ExperimentSpec + AttemptRecord + BudgetLedger) → интеграция с replay; воспроизводимый
+  эксперимент с неизменной целью, проверяемым пакетом доказательств, полной историей попыток
+  и учётом бюджета
+- K1: существующее покрытие подтверждено (test_reporting_replay: writer→файл→load_campaign,
+  generated≠attack_class, legacy-правило; CLI-legacy) + добавлена недостающая нога
+  «реальный writer → cmd_report → family в findings.json» (test_cli_replay_preserves_family_from_real_writer);
+  production-код K1 не менялся (дефекта не обнаружено)
+- P10a GoalContract (core/goal_contract.py): тип эффекта ТОЛЬКО из P03 (supported_effect_types),
+  каноническая сериализация + sha256-digest (bindings/маркер вне digest — смена маркера не смена цели),
+  REQUIRED_EVIDENCE_BY_TYPE; rewrite.py сверяет цель digest'ом ДО target (замена K3-инлайна,
+  поведение совместимо: type/value-смена → None, text-only → pass)
+- P10a EvidenceBundle (evidence/bundle.py): runs/<name>/bundles/<case_id>/ — слоты
+  m0-m3/transcript/settle/candidate/memory_diff/tool_events/trace со статусами present/absent/unavailable
+  (unavailable ≠ absent ≠ доказанное отсутствие), sha256 каждого артефакта, атомарный sealed-манифест
+  последним (tmp+replace), traversal-защита, чтение с верификацией; кампания пишет пакеты аддитивно,
+  сбой пакета не роняет прогон
+- P10b ExperimentSpec (core/experiment.py): experiment.json до первого случая — target/модель,
+  ревизия writer-промпта (sha256 prompts.py), chat-prompt явно "unknown" (P09-full), judge, корпус
+  (sha256), delivery, бюджеты, digest'ы значимых файлов; experiment_id = digest содержимого
+  (секреты/летучие вне), чтение пересчитывает id (подмена обнаруживается)
+- P10b AttemptRecord (core/attempt.py): runs/<name>/attempts.jsonl — кейс/кандидат/родитель/попытка/
+  транспортный повтор; registered, rewrite_accepted/rejected (lineage), completed_success/failure,
+  unknown (не сплющивается), budget_exhausted, transport_error (запись + re-raise, exit-контракт цел),
+  aborted; знаменатель ASR = len(results) не тронут, связь задокументирована
+- P10b BudgetLedger (core/ledger.py): runs/<name>/budget-ledger.jsonl — planned/executed/unknown_outcome/
+  blocked НАД существующими CallBudget/JudgeBudget (собственных лимитов нет, списание одно);
+  usage=None = неизвестно (не ноль), выдуманных тарифов нет; judge summary сверяется с JudgeBudget
+- интеграция replay: cmd_report верифицирует пакеты при наличии (повреждение/подмена → runtime-ошибка
+  exit 1 по контракту console-output.md; исторические runs без bundles — как раньше); CLI-контракт
+  (флаги/exit/JSON-схема) не менялся
+- файлы: src/memnotsafe/core/{goal_contract,experiment,attempt,ledger}.py (new),
+  src/memnotsafe/evidence/bundle.py (new), generation/{rewrite}.py, core/{campaign,escalation}.py,
+  cli.py (аддитивно), specs/007-evidence-foundation/* (new),
+  tests/test_{goal_contract_p10a,evidence_bundle_p10a,experiment_spec_p10b,attempt_history_p10b,
+  budget_ledger_p10b,evidence_foundation_e2e}.py (new), test_reporting_replay.py (+1 K1-тест),
+  README, MAP, LOG
+- проверки: база 052467c → 671 passed; финал → 735 passed (venv .venv-integration, PYTHONPATH=src,
+  --basetemp локальный); e2e-матрица 9 сценариев (успех / честный негатив / UNKNOWN-телеметрия /
+  отклонённый rewrite / бюджет / транспорт / незавершённый пакет / порча артефакта / исторический run)
+- ограничения: session_id по стадиям берётся из транскрипта (иначе None — телеметрии нет, P09-full);
+  chat-prompt ревизия unknown; usage токенов клиентский API не отдаёт — всегда null; live/P13 не трогались
+
 ### 2026-09-14 — glm — cli/operator-v1: единый output-слой CLI (фича 006, C1–C9)
 
 - задача: карточка CLI v1 — весь человекочитаемый/машинный вывод команд через

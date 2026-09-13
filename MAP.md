@@ -28,11 +28,11 @@ python3 -m pytest tests/ -q
 | Путь | Роль |
 |---|---|
 | `cli.py` | вход: probe / run / campaign / report |
-| `core/` | runner, склейка стадий |
+| `core/` | runner, склейка стадий; GoalContract / ExperimentSpec / AttemptHistory / BudgetLedger (фича 007) |
 | `attacks/` | семьи атак, регистрация по `metadata.family` |
 | `adapters/` | `mock.py` (офлайн канон), `investment_stand.py` (live) |
 | `oracles/` | успех/провал по evidence |
-| `evidence/` | снапшот памяти, matching |
+| `evidence/` | снапшот памяти, matching; EvidenceBundle — пакеты доказательств (фича 007) |
 | `judge/` | LLM-as-judge, бюджет, калибровка |
 | `generation/` | автогенерация слабосигнальных атак |
 | `tracing/` | трасса |
