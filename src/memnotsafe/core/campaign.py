@@ -327,6 +327,51 @@ class Campaign:
             (evidence_dir / f"{case_id}-proof.json").write_text(
                 json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+        self._write_evidence_bundle(result, recorder)
+
+    def _write_evidence_bundle(self, result: AttackResult, recorder: TraceRecorder) -> None:
+        """P10a (фича 007): пакет доказательств попытки — аддитивный слой
+        поверх существующих артефактов. Слоты без телеметрии честно получают
+        unavailable (не «доказанное отсутствие»); сбой записи пакета не роняет
+        прогон — пакет это доказательственная надстройка, а не канал вердикта."""
+        from memnotsafe.core.goal_contract import GoalContract
+        from memnotsafe.evidence.bundle import write_bundle
+
+        ev = result.evidence
+        phases = ev.get("phases") or {}
+        candidate = ev.get("candidate") or {}
+        tool_events = [e for e in recorder.case_events(result.case_id) if e.get("tool")]
+        trace_file = self.output_dir / "traces" / f"{result.case_id}.json"
+        try:
+            goal_digest = GoalContract.from_effect(candidate.get("expected_effect") or {}).digest()
+        except ValueError:
+            goal_digest = None  # рукописная/нестандартная цель: digest не выдумываем
+        try:
+            write_bundle(
+                self.output_dir / "bundles" / result.case_id,
+                run_id=result.run_id,
+                case_id=result.case_id,
+                attempt_no=1,
+                experiment_id=getattr(self, "experiment_id", None),
+                candidate_id=result.case_id,
+                goal_digest=goal_digest,
+                payloads={
+                    "m0": ev.get("before"),
+                    "m1": phases.get("m1"),
+                    "m2": phases.get("m2"),
+                    "m3": ev.get("after"),
+                    "transcript": ev.get("transcript"),
+                    "settle": ev.get("settle"),
+                    "candidate": candidate or None,
+                    "memory_diff": ev.get("diff_m0_m1"),
+                    "tool_events": tool_events or None,
+                },
+                files={"trace": trace_file if trace_file.exists() else None},
+            )
+        except OSError:
+            # Диск/права — прогон важнее пакета; вердикты уже записаны штатно.
+            return
+        result.evidence["evidence_bundle"] = f"bundles/{result.case_id}"
 
     def _run_metadata(self, run_id: str, attempts: int) -> dict:
         """Метаданные прогона для campaign.json (FR-007/FR-012, data-model §7).
