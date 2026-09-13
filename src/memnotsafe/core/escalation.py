@@ -38,6 +38,12 @@ from memnotsafe.core.attempt import (
     sessions_from_transcript,
 )
 from memnotsafe.core.goal_contract import goal_digest_or_none
+from memnotsafe.core.ledger import (
+    OP_TARGET_CALL,
+    PHASE_BLOCKED,
+    PHASE_EXECUTED,
+    PHASE_UNKNOWN_OUTCOME,
+)
 from memnotsafe.core.models import AttackResult, StageVerdict
 from memnotsafe.core.runner import RunnerError, new_case_id, run_attack
 from memnotsafe.generation.attacker_client import AttackerClient
@@ -56,6 +62,10 @@ class EscalationFeedback:
     funnel: dict[str, StageVerdict]
     previous: CorpusRecord
     attempt: int
+    # P10b: привязка расхода атакующей LLM к попытке; заполняет цикл
+    # эскалации, для чистой rewrite() это только данные.
+    case_id: str | None = None
+    candidate_id: str | None = None
 
 
 @dataclass
@@ -113,6 +123,7 @@ async def escalate(
     judge: Any | None = None,
     require_case_marker: bool = False,
     history: Any | None = None,
+    ledger: Any | None = None,
 ) -> EscalationOutcome:
     """Цикл: пока не успех, не исчерпан лимит попыток и не исчерпан бюджет —
     переписываем атаку по обратной связи и пробуем снова. Стоп на первом успехе
@@ -142,6 +153,14 @@ async def escalate(
 
     while attempts < limit:
         if budget.exhausted:
+            # Существующий бюджет отказал: леджер фиксирует блокировку (без
+            # собственного списания), штатный стоп — уже полученный результат
+            # сохраняется.
+            if ledger is not None:
+                ledger.record(
+                    "attacker_llm", PHASE_BLOCKED, case_id=base_ctx.case_id,
+                    candidate_id=previous_candidate_id,
+                )
             break  # штатный стоп по бюджету — уже полученный результат сохраняется
 
         feedback = EscalationFeedback(
@@ -150,10 +169,12 @@ async def escalate(
             funnel={s.stage: s.success for s in last.stages},
             previous=previous,
             attempt=attempts + 1,
+            case_id=base_ctx.case_id,
+            candidate_id=previous_candidate_id,
         )
         # Сбой атакующей LLM (AttackerError) пробрасывается: уже полученные
         # результаты сохранит вызывающий слой кампании (FR-010/FR-011).
-        new_record = await rewrite(feedback, client, budget)
+        new_record = await rewrite(feedback, client, budget, ledger=ledger)
         attempts += 1
         adapted = True
         if new_record is None:
@@ -197,6 +218,12 @@ async def escalate(
         except RunnerError as exc:
             # Транспортный сбой повтора: в историю (candidate тот же — retry не
             # новый кандидат), затем НЕ глотаем — exit-контракт CLI.
+            if ledger is not None:
+                ledger.record(
+                    OP_TARGET_CALL, PHASE_UNKNOWN_OUTCOME,
+                    case_id=base_ctx.case_id, candidate_id=new_ctx.case_id,
+                    attempt_no=attempts, error=str(exc),
+                )
             if history is not None:
                 history.record(
                     case_id=base_ctx.case_id,
@@ -209,6 +236,12 @@ async def escalate(
                     error=str(exc),
                 )
             raise
+        if ledger is not None:
+            ledger.record(
+                OP_TARGET_CALL, PHASE_EXECUTED,
+                case_id=base_ctx.case_id, candidate_id=new_ctx.case_id,
+                attempt_no=attempts,
+            )
         if history is not None:
             history.record(
                 case_id=base_ctx.case_id,

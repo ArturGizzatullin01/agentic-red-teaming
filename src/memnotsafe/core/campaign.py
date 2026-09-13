@@ -31,6 +31,13 @@ from memnotsafe.core.attempt import (
 )
 from memnotsafe.core.config import Scenario
 from memnotsafe.core.goal_contract import goal_digest_or_none
+from memnotsafe.core.ledger import (
+    OP_JUDGE_LLM,
+    OP_TARGET_CALL,
+    PHASE_EXECUTED,
+    PHASE_UNKNOWN_OUTCOME,
+    BudgetLedger,
+)
 from memnotsafe.core.models import AttackResult, CampaignResult
 from memnotsafe.core.runner import RunnerError, new_case_id, new_run_id, run_attack
 from memnotsafe.reporting.metrics import aggregate_metrics
@@ -130,6 +137,11 @@ class Campaign:
         history = AttemptHistory(
             self.output_dir / "attempts.jsonl", experiment_id=self.experiment_id, run_id=run_id
         )
+        # P10b: леджер расходов — наблюдатель существующих бюджетов; решений
+        # о лимитах не принимает (см. докстринг core/ledger.py).
+        ledger = BudgetLedger(
+            self.output_dir / "budget-ledger.jsonl", experiment_id=self.experiment_id, run_id=run_id
+        )
 
         recorder = TraceRecorder(
             events_path=self.output_dir / "events.jsonl",
@@ -169,6 +181,11 @@ class Campaign:
                 # Транспортный сбой target: в историю как transport_error
                 # (повтор той же попытки не создаёт нового кандидата), затем
                 # НЕ глотаем — CLI обязан вернуть exit 1 (exit-контракт).
+                ledger.record(
+                    OP_TARGET_CALL, PHASE_UNKNOWN_OUTCOME,
+                    case_id=ctx.case_id, candidate_id=ctx.case_id,
+                    attempt_no=1, error=str(exc),
+                )
                 history.record(
                     case_id=ctx.case_id,
                     candidate_id=ctx.case_id,
@@ -180,6 +197,10 @@ class Campaign:
                 )
                 raise  # раннер-ошибка — не глотаем, CLI обязан вернуть exit 1
 
+            ledger.record(
+                OP_TARGET_CALL, PHASE_EXECUTED,
+                case_id=ctx.case_id, candidate_id=ctx.case_id, attempt_no=1,
+            )
             history.record(
                 case_id=ctx.case_id,
                 candidate_id=ctx.case_id,
@@ -198,7 +219,7 @@ class Campaign:
             # выключенном онлайн-уровне возвращает result как есть (SC-003).
             result = await self._maybe_escalate(
                 attack, ctx, result, run_id=run_id, recorder=recorder, require_case_marker=require_marker,
-                history=history,
+                history=history, ledger=ledger,
             )
 
             if (result.evidence.get("provenance") or {}).get("budget_exhausted"):
@@ -244,6 +265,15 @@ class Campaign:
             ),
             encoding="utf-8",
         )
+        # P10b: judge-расход за кампанию — summary-записью, сверяемой с
+        # JudgeBudget (ledger не списывает сам, расхождений нет).
+        judge_budget = getattr(self.judge, "budget", None) if self.judge is not None else None
+        if judge_budget is not None:
+            ledger.record(
+                OP_JUDGE_LLM, PHASE_EXECUTED,
+                usage={"calls_used": judge_budget.used, "calls_limit": judge_budget.limit},
+                note="summary",
+            )
         return campaign_result
 
     # ------------------------------------------------------------------ планирование случаев
@@ -325,6 +355,7 @@ class Campaign:
         recorder: TraceRecorder,
         require_case_marker: bool = False,
         history: AttemptHistory | None = None,
+        ledger: BudgetLedger | None = None,
     ) -> AttackResult:
         """Онлайн-уровень (US2/US3). Реализация цикла — в core/escalation.py; здесь
         только точка вызова при `--online` и `success=False`. При выключенном
@@ -355,6 +386,7 @@ class Campaign:
                 # строго, как у первой попытки (единый план P04)
                 require_case_marker=require_case_marker,
                 history=history,
+                ledger=ledger,
             )
         except AttackerError as exc:
             # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем

@@ -19,18 +19,52 @@ from memnotsafe.generation.attacker_client import AttackerClient
 from memnotsafe.generation.budget import CallBudget
 from memnotsafe.generation.corpus import ORIGIN_ONLINE, CorpusRecord, record_issues
 from memnotsafe.generation.corpus_gen import parse_generation_output
+from memnotsafe.generation.errors import AttackerError
 from memnotsafe.generation.prompts import build_rewrite_prompt
 
 if TYPE_CHECKING:
     from memnotsafe.core.escalation import EscalationFeedback
 
 
-async def rewrite(feedback: EscalationFeedback, client: AttackerClient, budget: CallBudget) -> CorpusRecord | None:
+async def rewrite(
+    feedback: EscalationFeedback,
+    client: AttackerClient,
+    budget: CallBudget,
+    *,
+    ledger=None,
+) -> CorpusRecord | None:
     """Следующая запись атаки по обратной связи или None (отбраковка).
-    Бюджет тратится ПЕРЕД вызовом — попытка оплачена, даже если ответ негоден."""
+    Бюджет тратится ПЕРЕД вызовом — попытка оплачена, даже если ответ негоден.
+    Леджер (P10b) наблюдает расход: planned до вызова, executed/unknown_outcome
+    после; usage неизвестен клиентскому API → None (не ноль)."""
     system, user = build_rewrite_prompt(feedback)
     budget.spend()
-    raw = await client.complete(user, system=system)  # AttackerError → выше (exit 1)
+    if ledger is not None:
+        ledger.record(
+            "attacker_llm", "planned",
+            case_id=getattr(feedback, "case_id", None),
+            candidate_id=getattr(feedback, "candidate_id", None),
+            attempt_no=feedback.attempt,
+        )
+    try:
+        raw = await client.complete(user, system=system)  # AttackerError → выше (exit 1)
+    except AttackerError as exc:
+        if ledger is not None:
+            ledger.record(
+                "attacker_llm", "unknown_outcome",
+                case_id=getattr(feedback, "case_id", None),
+                candidate_id=getattr(feedback, "candidate_id", None),
+                attempt_no=feedback.attempt,
+                error=str(exc),
+            )
+        raise
+    if ledger is not None:
+        ledger.record(
+            "attacker_llm", "executed",
+            case_id=getattr(feedback, "case_id", None),
+            candidate_id=getattr(feedback, "candidate_id", None),
+            attempt_no=feedback.attempt,
+        )
 
     record = parse_generation_output(raw, attack_class=feedback.previous.attack_class, origin=ORIGIN_ONLINE)
     if record is None:
