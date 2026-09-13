@@ -23,6 +23,7 @@ from memnotsafe.attacks.base import AttackBase, AttackContext, get_attack
 from memnotsafe.core.attempt import (
     OUTCOME_ABORTED,
     OUTCOME_BUDGET_EXHAUSTED,
+    OUTCOME_EVIDENCE_ERROR,
     OUTCOME_REGISTERED,
     OUTCOME_TRANSPORT_ERROR,
     AttemptHistory,
@@ -211,15 +212,32 @@ class Campaign:
                 seed=ctx.run_seed,
                 session_ids=sessions_from_transcript(result.evidence.get("transcript")),
             )
+            # P10a (фикс приёмки): пакет доказательств — на КАЖДУЮ попытку на
+            # target, а не только на финальный результат: начальная попытка
+            # получает свой bundle здесь, повторы эскалации — через
+            # bundle_writer в цикле эскалации (attempt_no/parent совпадают с
+            # историей попыток).
+            self._write_evidence_bundle(
+                result, recorder,
+                logical_case=ctx.case_id, candidate_id=ctx.case_id,
+                parent_candidate_id=None, attempt_no=1, history=history,
+            )
 
             # Провенанс происхождения — слоем кампании, а не раннером (research §12).
             result.evidence["provenance"] = dict(provenance)
 
             # Онлайн-эскалация (US2): вокруг немодифицированного run_attack. При
             # выключенном онлайн-уровне возвращает result как есть (SC-003).
+            def _bundle_writer(res, candidate, parent, attempt_no, _ctx=ctx, _rec=recorder, _h=history):
+                self._write_evidence_bundle(
+                    res, _rec,
+                    logical_case=_ctx.case_id, candidate_id=candidate,
+                    parent_candidate_id=parent, attempt_no=attempt_no, history=_h,
+                )
+
             result = await self._maybe_escalate(
                 attack, ctx, result, run_id=run_id, recorder=recorder, require_case_marker=require_marker,
-                history=history, ledger=ledger,
+                history=history, ledger=ledger, bundle_writer=_bundle_writer,
             )
 
             if (result.evidence.get("provenance") or {}).get("budget_exhausted"):
@@ -356,6 +374,7 @@ class Campaign:
         require_case_marker: bool = False,
         history: AttemptHistory | None = None,
         ledger: BudgetLedger | None = None,
+        bundle_writer=None,
     ) -> AttackResult:
         """Онлайн-уровень (US2/US3). Реализация цикла — в core/escalation.py; здесь
         только точка вызова при `--online` и `success=False`. При выключенном
@@ -387,6 +406,7 @@ class Campaign:
                 require_case_marker=require_case_marker,
                 history=history,
                 ledger=ledger,
+                bundle_writer=bundle_writer,
             )
         except AttackerError as exc:
             # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем
@@ -446,30 +466,44 @@ class Campaign:
             (evidence_dir / f"{case_id}-proof.json").write_text(
                 json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-        self._write_evidence_bundle(result, recorder)
 
-    def _write_evidence_bundle(self, result: AttackResult, recorder: TraceRecorder) -> None:
-        """P10a (фича 007): пакет доказательств попытки — аддитивный слой
-        поверх существующих артефактов. Слоты без телеметрии честно получают
-        unavailable (не «доказанное отсутствие»); сбой записи пакета не роняет
-        прогон — пакет это доказательственная надстройка, а не канал вердикта."""
+    def _write_evidence_bundle(
+        self,
+        result: AttackResult,
+        recorder: TraceRecorder,
+        *,
+        logical_case: str,
+        candidate_id: str,
+        parent_candidate_id: str | None,
+        attempt_no: int,
+        history: AttemptHistory | None = None,
+    ) -> None:
+        """P10a (фича 007): пакет доказательств для КАЖДОЙ попытки на target
+        (фикс приёмки: не только финальный результат) — каталог
+        bundles/<candidate_id>, attempt_no/parent_candidate_id согласованы с
+        attempts.jsonl. Слоты без телеметрии честно получают unavailable (не
+        «доказанное отсутствие»). Сбой записи НЕ роняет прогон (вердикты уже
+        сохранены штатно), но НЕ остаётся невидимым: сбой фиксируется в
+        attempts.jsonl, а недописанный каталог виден replay через
+        verify_run_bundles → exit 1."""
         from memnotsafe.evidence.bundle import write_bundle
 
         ev = result.evidence
         phases = ev.get("phases") or {}
         candidate = ev.get("candidate") or {}
-        tool_events = [e for e in recorder.case_events(result.case_id) if e.get("tool")]
-        trace_file = self.output_dir / "traces" / f"{result.case_id}.json"
+        tool_events = [e for e in recorder.case_events(candidate_id) if e.get("tool")]
+        trace_file = self.output_dir / "traces" / f"{candidate_id}.json"
         # рукописная/нестандартная цель → None: digest не выдумываем
         goal_digest = goal_digest_or_none(candidate.get("expected_effect"))
         try:
             write_bundle(
-                self.output_dir / "bundles" / result.case_id,
+                self.output_dir / "bundles" / candidate_id,
                 run_id=result.run_id,
-                case_id=result.case_id,
-                attempt_no=1,
+                case_id=logical_case,
+                attempt_no=attempt_no,
                 experiment_id=getattr(self, "experiment_id", None),
-                candidate_id=result.case_id,
+                candidate_id=candidate_id,
+                parent_candidate_id=parent_candidate_id,
                 goal_digest=goal_digest,
                 payloads={
                     "m0": ev.get("before"),
@@ -484,10 +518,20 @@ class Campaign:
                 },
                 files={"trace": trace_file if trace_file.exists() else None},
             )
-        except OSError:
-            # Диск/права — прогон важнее пакета; вердикты уже записаны штатно.
+        except OSError as exc:
+            # Диск/права — прогон важнее пакета, но сбой обязан быть виден:
+            # запись в историю + недописанный каталог (без манифеста) рано или
+            # поздно срежется верификацией replay.
+            if history is not None:
+                history.record(
+                    case_id=logical_case,
+                    candidate_id=candidate_id,
+                    outcome=OUTCOME_EVIDENCE_ERROR,
+                    attempt_no=attempt_no,
+                    error=f"пакет доказательств не записан: {exc}",
+                )
             return
-        result.evidence["evidence_bundle"] = f"bundles/{result.case_id}"
+        result.evidence["evidence_bundle"] = f"bundles/{candidate_id}"
 
     def _run_metadata(self, run_id: str, attempts: int) -> dict:
         """Метаданные прогона для campaign.json (FR-007/FR-012, data-model §7).

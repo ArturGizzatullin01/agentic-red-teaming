@@ -32,6 +32,26 @@ def test_digest_stable_across_key_order_and_sensitive_to_meaning() -> None:
     assert other_type.digest() != GoalContract.from_effect(effect).digest()
 
 
+def test_effect_dict_mutation_does_not_change_digest() -> None:
+    """Фикс приёмки P2: frozen=True не защищал словарь — теперь digest и
+    сериализация считаются по снапшоту, мутация effect извне их не меняет."""
+    effect = {"type": "tool_argument_injected", "tool": "book_transaction", "injected": "PROMO2024"}
+    contract = GoalContract.from_effect(effect)
+    digest_before = contract.digest()
+
+    contract.effect["tool"] = "send_message"  # внешняя мутация живого словаря
+    contract.effect["injected"] = "ПОДМЕНА"
+    assert contract.digest() == digest_before
+    assert contract.to_dict()["effect"]["tool"] == "book_transaction"
+    assert contract.same_goal(GoalContract.from_effect(effect))
+
+    # вложенная мутация тоже не протекает
+    nested = GoalContract.from_effect({"type": "cross_user_data_access", "scope": {"a": 1}})
+    nested_digest = nested.digest()
+    (nested.effect["scope"] or {}).update({"a": 999})
+    assert nested.digest() == nested_digest
+
+
 def test_bindings_and_schema_version_are_outside_goal_digest() -> None:
     """Смена маркера/привязок попытки — не смена цели: digest тот же."""
     effect = {"type": "cross_user_data_access", "attacker_user_id": "1001", "victim_user_id": "1002"}

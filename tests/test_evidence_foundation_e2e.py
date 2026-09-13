@@ -154,6 +154,59 @@ def test_accepted_rewrite_e2e_lineage(tmp_path) -> None:
     assert accepted and all(a.parent_candidate_id for a in accepted)
 
 
+def test_multistep_escalation_bundles_match_history(tmp_path) -> None:
+    """Многошаговый негативный E2E (фикс приёмки P1): reject → попытка 2 →
+    попытка 3, каждая попытка со СВОИМ пакетом; attempt_no/parent пакетов
+    согласованы с attempts.jsonl; леджер не дублирует списание."""
+    from memnotsafe.generation.config import AttackerConfig
+
+    goal_change = json.dumps({
+        "payload": "новый текст", "trigger": "новый вопрос",
+        "expected_effect": {"type": "response_reflects_adoption", "markers": ["X"]},
+        "signal_strength": "weak",
+    }, ensure_ascii=False)
+    seed_effect = {"type": "cross_user_data_access", "tool": "portfolio_get_positions_valuation",
+                   "attacker_user_id": "1001", "victim_user_id": "1002"}
+    boring = json.dumps({
+        "payload": "заметка без правил и маркеров", "trigger": "что в памяти?",
+        "expected_effect": seed_effect, "signal_strength": "weak",
+    }, ensure_ascii=False)
+    cfg = AttackerConfig(
+        provider="stub", scripted=[goal_change, boring, boring, boring], budget=10
+    )
+    out = tmp_path / "run"
+    result = asyncio.run(Campaign(_scenario(tmp_path, corpus=_SEED_CORPUS, family="generated"),
+                                  MockTarget(vulnerable=True), out,
+                                  attacker_config=cfg, online=True, online_attempts=4).run())
+    entries = read_history(out / "attempts.jsonl")
+    bundles = find_bundles(out)
+    # цепочка: registered → completed(1) → rejected → accepted(c2) → completed(2)
+    #          → accepted(c3) → completed(3)
+    accepted = [e for e in entries if e.outcome == OUTCOME_REWRITE_ACCEPTED]
+    assert len(accepted) >= 2, "многошаговый прогон обязан иметь ≥2 принятых rewrite"
+    completed = [e for e in entries if e.attempt_no >= 1 and e.outcome in
+                 ("completed_success", "completed_failure", "unknown")]
+    assert len(completed) == 3  # начальная + 2 переписанные попытки
+    # каждая завершённая попытка имеет СВОЙ пакет с совпадающим lineage
+    for rec in completed:
+        bundle = read_bundle(out / "bundles" / rec.candidate_id)
+        assert bundle.attempt_no == rec.attempt_no
+        assert bundle.candidate_id == rec.candidate_id
+        assert bundle.case_id == rec.case_id  # логический кейс один
+    # родительская связь по хронологии: parent кандидата следующей завершённой
+    # попытки = кандидат предыдущей (номера попыток — счётчик итераций
+    # эскалации, отклонённый rewrite тоже тратит номер, поэтому 1,3,4…)
+    ordered = sorted(completed, key=lambda r: r.attempt_no)
+    for prev, cur in zip(ordered, ordered[1:]):
+        cur_bundle = read_bundle(out / "bundles" / cur.candidate_id)
+        assert cur_bundle.parent_candidate_id == prev.candidate_id
+        assert cur_bundle.attempt_no == cur.attempt_no
+    # финальный результат ссылается на свой пакет
+    assert result.results[0].evidence["evidence_bundle"] == f"bundles/{result.results[0].case_id}"
+    # replay цел (все пакеты завершены и верифицированы)
+    assert verify_run_bundles(out) == len(bundles)
+
+
 # ------------------------------------------------- 5) исчерпанный бюджет
 
 def test_budget_exhausted_e2e(tmp_path) -> None:
@@ -199,6 +252,7 @@ def test_incomplete_bundle_is_not_mistaken_for_complete(tmp_path, capsys) -> Non
     rc = cli.main(["run", "--scenario", str(_SCENARIOS / "cross_user_bac.yaml"),
                    "--output", str(tmp_path / "run")])
     assert rc == 0
+    capsys.readouterr()  # буфер run не подмешивается к проверкам report
     out = tmp_path / "run"
     case_dir = next(iter(find_bundles(out).values()))
     case_dir.joinpath("manifest.json").unlink()  # сбой до атомарного replace
@@ -207,10 +261,12 @@ def test_incomplete_bundle_is_not_mistaken_for_complete(tmp_path, capsys) -> Non
         read_bundle(case_dir)
     # (b) find_bundles его не считает завершённым
     assert find_bundles(out) == {}
-    # (c) replay не падает из-за незавершённого пакета, но и не маскирует его
-    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep")])
-    assert rc == 0
-    capsys.readouterr()
+    # (c) replay НЕ прозевает незавершённый пакет: runtime-ошибка данных → exit 1
+    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "незавершённый" in json.loads(captured.err)["data"]["message"]
 
 
 # ------------------------------------------------- 8) повреждение артефакта

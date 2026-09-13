@@ -124,6 +124,7 @@ async def escalate(
     require_case_marker: bool = False,
     history: Any | None = None,
     ledger: Any | None = None,
+    bundle_writer: Any | None = None,
 ) -> EscalationOutcome:
     """Цикл: пока не успех, не исчерпан лимит попыток и не исчерпан бюджет —
     переписываем атаку по обратной связи и пробуем снова. Стоп на первом успехе
@@ -242,6 +243,10 @@ async def escalate(
                 case_id=base_ctx.case_id, candidate_id=new_ctx.case_id,
                 attempt_no=attempts,
             )
+        if bundle_writer is not None:
+            # Пакет доказательств для КАЖДОЙ попытки эскалации (не только
+            # финальной): attempt_no/parent согласованы с attempts.jsonl.
+            bundle_writer(last, new_ctx.case_id, parent_candidate_id, attempts)
         if history is not None:
             history.record(
                 case_id=base_ctx.case_id,

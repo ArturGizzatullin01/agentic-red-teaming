@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from memnotsafe.evidence.bundle import (
     STATUS_PRESENT,
     STATUS_UNAVAILABLE,
     BundleError,
+    bundle_states,
     find_bundles,
     read_bundle,
     verify_run_bundles,
@@ -130,8 +132,6 @@ def test_old_runs_without_bundles_read_as_empty(tmp_path) -> None:
 
 
 def test_find_bundles_skips_unsealed_directories(tmp_path) -> None:
-    import shutil
-
     _write(tmp_path)
     (tmp_path / "run" / "bundles" / "CASE-partial").mkdir(parents=True)  # манифеста нет
     shutil.copytree(tmp_path / "bundle", tmp_path / "run" / "bundles" / "CASE-x-001-aaaaaa")
@@ -167,6 +167,57 @@ def test_verify_run_bundles_counts_and_verifies(tmp_path) -> None:
         verify_run_bundles(tmp_path)
 
 
+def test_present_without_sha256_is_rejected(tmp_path) -> None:
+    """Фикс приёмки P1: present без sha256 НЕ проходит reader — проверка
+    checksum обязательна, манифест с дыркой не принимается."""
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del raw["slots"]["m0"]["sha256"]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="sha256"):
+        read_bundle(tmp_path / "bundle")
+
+
+def test_present_with_unknown_status_or_slot_rejected(tmp_path) -> None:
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["slots"]["m0"]["status"] = "maybe"
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="статус"):
+        read_bundle(tmp_path / "bundle")
+
+    raw2 = json.loads((tmp_path / "bundle" / "manifest.json").read_text(encoding="utf-8"))
+    raw2["slots"]["m0"]["status"] = "present"  # вернуть
+    raw2["slots"]["extra_slot"] = {"status": "absent"}
+    manifest_path.write_text(json.dumps(raw2), encoding="utf-8")
+    with pytest.raises(BundleError, match="неизвестный слот"):
+        read_bundle(tmp_path / "bundle")
+
+
+def test_manifest_missing_slot_entries_rejected(tmp_path) -> None:
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del raw["slots"]["settle"]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="не перечислены"):
+        read_bundle(tmp_path / "bundle")
+
+
+def test_verify_run_bundles_fails_on_incomplete_dir(tmp_path) -> None:
+    """Фикс приёмки P1: каталог пакета без манифеста НЕ проскальзывает мимо
+    верификации — verify_run_bundles роняет его как незавершённый."""
+    _write(tmp_path)
+    shutil.copytree(tmp_path / "bundle", tmp_path / "bundles" / "CASE-x-001-aaaaaa")
+    (tmp_path / "bundles" / "CASE-partial-000").mkdir(parents=True)
+    states = bundle_states(tmp_path)
+    assert states == {"CASE-x-001-aaaaaa": "complete", "CASE-partial-000": "incomplete"}
+    with pytest.raises(BundleError, match="незавершённый"):
+        verify_run_bundles(tmp_path)
+
+
 # ------------------------------------------------- интеграция с кампанией
 
 def test_campaign_writes_bundle_per_case(tmp_path) -> None:
@@ -193,6 +244,10 @@ def test_campaign_writes_bundle_per_case(tmp_path) -> None:
     for slot in ("m0", "m1", "m2", "m3", "transcript", "settle", "candidate"):
         assert bundle.present(slot), slot
     assert bundle.goal_digest  # цель валидна → digest записан
+    # lineage: начальная попытка — attempt_no=1, родителя нет (фикс приёмки)
+    assert bundle.attempt_no == 1
+    assert bundle.parent_candidate_id is None
+    assert bundle.candidate_id == bundle.case_id
     # пакет внутренне согласован: полная верификация проходит
     assert verify_run_bundles(out) == 1
     # evidence содержит аддитивную ссылку на пакет
@@ -201,8 +256,9 @@ def test_campaign_writes_bundle_per_case(tmp_path) -> None:
 
 
 def test_bundle_write_failure_does_not_kill_the_run(tmp_path, monkeypatch) -> None:
-    """Сбой записи пакета (диск/права) не роняет прогон: вердикты важнее
-    доказательственной надстройки (см. докстринг _write_evidence_bundle)."""
+    """Сбой записи пакета (диск/права) не роняет прогон, но НЕ остаётся
+    невидимым: сбой фиксируется в attempts.jsonl (evidence_error), а
+    недописанный каталог виден replay-верификации (фикс приёмки P1)."""
     import asyncio
 
     from memnotsafe.adapters.mock import MockTarget
@@ -225,3 +281,9 @@ def test_bundle_write_failure_does_not_kill_the_run(tmp_path, monkeypatch) -> No
     result = asyncio.run(Campaign(scenario, MockTarget(vulnerable=True), out).run())
     assert len(result.results) == 1
     assert "evidence_bundle" not in result.results[0].evidence
+    # сбой видим в истории попыток
+    from memnotsafe.core.attempt import read_history
+
+    entries = read_history(out / "attempts.jsonl")
+    evidence_errors = [e for e in entries if e.outcome == "evidence_error"]
+    assert evidence_errors and "не записан" in evidence_errors[0].error

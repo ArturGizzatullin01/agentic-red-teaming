@@ -48,6 +48,7 @@ OUTCOME_UNKNOWN = "unknown"                        # оценка неопред
 OUTCOME_BUDGET_EXHAUSTED = "budget_exhausted"      # штатный стоп по бюджету
 OUTCOME_TRANSPORT_ERROR = "transport_error"        # сбой транспорта target
 OUTCOME_ABORTED = "aborted"                        # попытка прервана (сбой атакующей LLM и т.п.)
+OUTCOME_EVIDENCE_ERROR = "evidence_error"          # пакет доказательств не записан (сбой I/O)
 
 # Завершённые исходы — ровно те, что образуют знаменатель ASR.
 COMPLETED_OUTCOMES = (OUTCOME_COMPLETED_SUCCESS, OUTCOME_COMPLETED_FAILURE, OUTCOME_UNKNOWN)

@@ -211,9 +211,31 @@ def _safe_rel_path(bundle_dir: Path, rel: str) -> Path:
     return candidate
 
 
+def _validate_slot_record(bundle_dir: Path, name: str, rec: SlotRecord) -> None:
+    """ОБЯЗАТЕЛЬНАЯ валидация записи слота в манифесте (фикс приёмки P1):
+    present без path/sha256/bytes, неизвестный статус или неизвестное имя
+    слота — контрактное нарушение, а не «пропуск проверки checksum»."""
+    if name not in BUNDLE_SLOTS:
+        raise BundleError(f"пакет {bundle_dir}: неизвестный слот {name!r} в манифесте")
+    if rec.status not in (STATUS_PRESENT, STATUS_ABSENT, STATUS_UNAVAILABLE):
+        raise BundleError(f"пакет {bundle_dir}: слот {name!r}: неизвестный статус {rec.status!r}")
+    if rec.status == STATUS_PRESENT:
+        if not rec.path:
+            raise BundleError(f"пакет {bundle_dir}: слот {name!r} present без пути — манифест неполон")
+        if not rec.sha256:
+            raise BundleError(
+                f"пакет {bundle_dir}: слот {name!r} present без sha256 — проверка checksum "
+                "обязательна, манифест без неё не принимается"
+            )
+        if not rec.bytes:
+            raise BundleError(f"пакет {bundle_dir}: слот {name!r} present без размера — манифест неполон")
+
+
 def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundle:
-    """Читает и верифицирует пакет. Любое нарушение целостности/контракта —
-    BundleError с именем слота; «тихо починить» подменённый файл нельзя."""
+    """Читает и верифицирует пакет. Манифест валидируется ЦЕЛИКОМ (статусы,
+    пути, обязательные sha256), затем каждый present-артефакт перепроверяется
+    по checksum. Любое нарушение — BundleError с именем слота; «тихо починить»
+    подменённый или недоописанный манифест нельзя."""
     bundle_dir = Path(bundle_dir)
     manifest_path = bundle_dir / "manifest.json"
     if not manifest_path.exists():
@@ -229,28 +251,36 @@ def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundl
         )
     if not raw.get("sealed"):
         raise BundleError(f"пакет {bundle_dir}: манифест не запечатан — пакет незавершён")
+    if not raw.get("kind") == "evidence_bundle":
+        raise BundleError(f"пакет {bundle_dir}: чужой манифест (kind={raw.get('kind')!r})")
+    if not str(raw.get("run_id") or "") or not str(raw.get("case_id") or ""):
+        raise BundleError(f"пакет {bundle_dir}: run_id/case_id обязательны — манифест неполон")
 
     slots: dict[str, SlotRecord] = {}
     for name, slot_raw in (raw.get("slots") or {}).items():
         rec = SlotRecord.from_dict(slot_raw)
+        _validate_slot_record(bundle_dir, name, rec)
         if rec.status == STATUS_PRESENT:
-            if not rec.path:
-                raise BundleError(f"пакет {bundle_dir}: слот {name!r} present без пути")
             artifact = _safe_rel_path(bundle_dir, rec.path)
             if not artifact.exists():
                 raise BundleError(f"пакет {bundle_dir}: артефакт слота {name!r} отсутствует: {rec.path}")
-            if verify and rec.sha256 and _sha256_file(artifact) != rec.sha256:
+            if verify and _sha256_file(artifact) != rec.sha256:
                 raise BundleError(
                     f"пакет {bundle_dir}: артефакт слота {name!r} повреждён или подменён "
                     f"(sha256 не совпал: {rec.path})"
                 )
         slots[name] = rec
+    missing_required = [s for s in BUNDLE_SLOTS if s not in slots]
+    if missing_required:
+        raise BundleError(
+            f"пакет {bundle_dir}: слоты не перечислены в манифесте: {missing_required} — манифест неполон"
+        )
 
     return EvidenceBundle(
         schema_version=BUNDLE_SCHEMA_VERSION,
         run_id=str(raw.get("run_id") or ""),
         case_id=str(raw.get("case_id") or ""),
-        attempt_no=int(raw.get("attempt_no") or 1),
+        attempt_no=int(raw.get("attempt_no") or 0),
         experiment_id=raw.get("experiment_id"),
         candidate_id=raw.get("candidate_id"),
         parent_candidate_id=raw.get("parent_candidate_id"),
@@ -261,25 +291,42 @@ def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundl
 
 
 def find_bundles(run_dir: str | Path) -> dict[str, Path]:
-    """Каталог пакетов прогона: {case_id: путь пакета}. Нет каталога (старый
-    run) → пустой словарь; каталог есть, но манифеста в подпапке нет → подпапка
-    НЕ попадает в результат (незавершённый пакет не маскируется под готовый)."""
+    """Завершённые пакеты прогона: {candidate_id: путь пакета}. Каталог без
+    manifest.json сюда НЕ попадает (незавершённый ≠ завершённый); его
+    обнаруживает verify_run_bundles / bundle_states, а не молчаливый пропуск."""
     bundles_dir = Path(run_dir) / "bundles"
     if not bundles_dir.is_dir():
         return {}
-    found: dict[str, Path] = {}
+    return {
+        child.name: child
+        for child in sorted(bundles_dir.iterdir())
+        if child.is_dir() and (child / "manifest.json").exists()
+    }
+
+
+def bundle_states(run_dir: str | Path) -> dict[str, str]:
+    """Состояние каждого каталога пакетов прогона: 'complete' | 'incomplete'.
+    Незавершённые каталоги (нет манифеста) ЯВНО видимы — их нельзя перепутать
+    с отсутствием пакетов у исторического run."""
+    bundles_dir = Path(run_dir) / "bundles"
+    if not bundles_dir.is_dir():
+        return {}
+    states: dict[str, str] = {}
     for child in sorted(bundles_dir.iterdir()):
-        if child.is_dir() and (child / "manifest.json").exists():
-            found[child.name] = child
-    return found
+        if child.is_dir():
+            states[child.name] = "complete" if (child / "manifest.json").exists() else "incomplete"
+    return states
 
 
 def verify_run_bundles(run_dir: str | Path) -> int:
-    """Полная верификация пакетов прогона (checksums, seal, пути); возвращает
-    число проверенных пакетов. Любое нарушение → BundleError. Незавершённые
-    каталоги (без манифеста) верификацию не проходят молча: find_bundles их
-    не считает завершёнными, а attempt-history/отчёт решают, как их показать."""
-    bundles = find_bundles(run_dir)
-    for path in bundles.values():
+    """Полная верификация пакетов прогона (обязательные sha256, checksums,
+    seal, пути); возвращает число завершённых пакетов. Незавершённый каталог
+    — BundleError «незавершённый пакет» (replay не вправе его прозевать);
+    отсутствие каталога bundles/ целиком (исторический run) — 0, не ошибка."""
+    states = bundle_states(run_dir)
+    incomplete = [name for name, state in states.items() if state == "incomplete"]
+    if incomplete:
+        raise BundleError(f"незавершённый пакет: bundles/{incomplete[0]} (manifest.json отсутствует)")
+    for path in (Path(run_dir) / "bundles" / name for name in sorted(states)):
         read_bundle(path)
-    return len(bundles)
+    return len(states)

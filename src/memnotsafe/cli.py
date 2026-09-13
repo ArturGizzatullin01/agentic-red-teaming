@@ -336,11 +336,11 @@ def cmd_report(args: argparse.Namespace) -> int:
     campaign = load_campaign(input_dir)
 
     # P10a (фича 007): пакеты доказательств верифицируются при наличии.
-    # Исторические runs (без bundles/) проходят как раньше; повреждённый или
-    # подменённый артефакт — runtime-ошибка данных → exit 1 (console-output.md,
-    # строка «runtime/config error»). Незавершённые пакеты (без manifest.json)
-    # за завершённые не выдаются и верификацию не срывают — их видимость
-    # показывает attempts.jsonl, а не маскирующий успех.
+    # Повреждённый/подменённый артефакт или НЕЗАВЕРШЁННЫЙ каталог пакета (без
+    # manifest.json) — runtime-ошибка данных → exit 1 (console-output.md,
+    # строка «runtime/config error»); незавершённый не маскируется под
+    # завершённый и не прозевать его replay'ем. Исторические runs без
+    # bundles/ проходят как раньше (0 пакетов — не ошибка).
     from memnotsafe.evidence.bundle import BundleError, verify_run_bundles
 
     try:
