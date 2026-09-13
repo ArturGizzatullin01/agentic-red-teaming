@@ -418,3 +418,32 @@ def test_legacy_wire_without_family_still_reads_by_the_old_rule(tmp_path) -> Non
     camp["results"][0]["attack_id"] = "direct_poisoning-CASE-001"  # неоднозначный legacy
     path.write_text(json.dumps(camp, ensure_ascii=False), encoding="utf-8")
     assert load_campaign(out).results[0].family == ""
+
+
+def test_cli_replay_preserves_family_from_real_writer(tmp_path, capsys) -> None:
+    """K1 (фича 007): реальный writer кампании → файл → ШТАТНЫЙ CLI-replay
+    (cmd_report) одной цепочкой: family доходит до findings.json без подмены
+    значением attack_id — и у рукописной атаки, и у корпусной (family=
+    "generated" при attack_id = зарегистрированный класс-источник)."""
+    from memnotsafe.cli import cmd_report
+
+    _result, out = _real_run(tmp_path, family="direct_poisoning", out_name="out-plain")
+    rep_plain = tmp_path / "rep-plain"
+    rc = cmd_report(type("A", (), {"input": str(out), "output": str(rep_plain)})())
+    assert rc == 0
+    findings = json.loads((rep_plain / "findings.json").read_text(encoding="utf-8"))
+    assert findings
+    assert {f["family"] for f in findings} == {"direct_poisoning"}
+    assert {f["attack_id"] for f in findings} == {"direct_poisoning"}
+    capsys.readouterr()
+
+    _gen, gen_out = _real_run(tmp_path, family="generated", corpus_path=_corpus(tmp_path),
+                              out_name="out-gen")
+    rep_gen = tmp_path / "rep-gen"
+    rc = cmd_report(type("A", (), {"input": str(gen_out), "output": str(rep_gen)})())
+    assert rc == 0
+    gen_findings = json.loads((rep_gen / "findings.json").read_text(encoding="utf-8"))
+    assert gen_findings
+    # generated НЕ превращается в family своего attack_class даже в replay-пути
+    assert {f["family"] for f in gen_findings} == {"generated"}
+    assert any(f["attack_id"] != "generated" for f in gen_findings)
