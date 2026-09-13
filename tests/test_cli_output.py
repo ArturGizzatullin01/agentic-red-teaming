@@ -103,3 +103,91 @@ def test_streams_default_to_sys_stdout_and_stderr(monkeypatch) -> None:
         command="probe", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
     )
     assert "AGENTIC MEMORY RED TEAMING" in fake_out.getvalue()
+
+
+# ----------------------------------------------------------------- C3: цвет/TTY
+
+
+class _FakeTTY(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def _tty_opts(**kw) -> tuple[OutputOptions, _FakeTTY, io.StringIO]:
+    """Репортер с фейковым TTY в stdout; тест читает ИМЕННО инъекцированный
+    поток (второй элемент), а не посторонний StringIO."""
+    err = io.StringIO()
+    tty = _FakeTTY()
+    kw.setdefault("stderr", err)
+    kw.setdefault("stdout", tty)
+    return OutputOptions(**kw), tty, err
+
+
+def _forget_rich(monkeypatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delitem(sys.modules, "rich", raising=False)
+    monkeypatch.delitem(sys.modules, "rich.console", raising=False)
+
+
+def test_non_tty_stays_plain_and_does_not_import_rich(monkeypatch) -> None:
+    _forget_rich(monkeypatch)
+    opts, out, err = _opts()  # io.StringIO → isatty() False
+    ConsoleReporter(opts).emit_result(
+        command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
+    )
+    assert "\x1b[" not in out.getvalue()
+    assert "rich" not in sys.modules  # ленивый импорт: non-TTY rich вообще не трогает
+
+
+def test_no_color_flag_forces_plain_even_on_tty(monkeypatch) -> None:
+    _forget_rich(monkeypatch)
+    opts, tty, err = _tty_opts(no_color=True)
+    ConsoleReporter(opts).emit_result(
+        command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
+    )
+    assert "AGENTIC MEMORY RED TEAMING" in tty.getvalue()  # вывод состоялся
+    assert "\x1b[" not in tty.getvalue()
+    assert "rich" not in sys.modules
+
+
+def test_no_color_env_forces_plain_even_on_tty(monkeypatch) -> None:
+    _forget_rich(monkeypatch)
+    monkeypatch.setenv("NO_COLOR", "1")
+    opts, tty, err = _tty_opts()
+    ConsoleReporter(opts).emit_result(
+        command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
+    )
+    assert "AGENTIC MEMORY RED TEAMING" in tty.getvalue()
+    assert "\x1b[" not in tty.getvalue()
+    assert "rich" not in sys.modules
+
+
+def test_json_and_quiet_paths_do_not_import_rich(monkeypatch) -> None:
+    _forget_rich(monkeypatch)
+    ConsoleReporter(_tty_opts(json=True)[0]).emit_result(
+        command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
+    )
+    ConsoleReporter(_tty_opts(quiet=True)[0]).emit_result(
+        command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
+    )
+    assert "rich" not in sys.modules
+
+
+def test_tty_gets_ansi_and_lazy_import_happens_only_there(monkeypatch) -> None:
+    _forget_rich(monkeypatch)
+    opts, tty, err = _tty_opts()
+    ConsoleReporter(opts).emit_result(
+        command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
+    )
+    assert "\x1b[" in tty.getvalue()  # заголовок отрисован rich с цветом
+    assert "rich" in sys.modules  # импорт случился только в TTY-ветке
+
+
+def test_narrow_width_is_safe(monkeypatch) -> None:
+    _forget_rich(monkeypatch)
+    monkeypatch.setenv("COLUMNS", "20")
+    opts, tty, err = _tty_opts()
+    ConsoleReporter(opts).emit_result(
+        command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
+    )
+    assert "AGENTIC MEMORY RED TEAMING" in tty.getvalue()  # не падает даже на 20 колонках

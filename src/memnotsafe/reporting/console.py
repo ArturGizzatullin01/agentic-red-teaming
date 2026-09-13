@@ -19,6 +19,7 @@ ConsoleReporter; cmd_* в cli.py только готовят данные и ren
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass
 from typing import IO, Any, Callable
@@ -31,6 +32,16 @@ GLYPHS: dict[str, str] = {
     "fail": "FAIL",
     "unknown": "UNKNOWN",
     "error": "ERROR",
+}
+
+# Цветовые роли для Rich-бэкенда; plain-бэкенд роли игнорирует.
+_RICH_STYLES: dict[str, str] = {
+    "heading": "bold",
+    "pass": "green",
+    "fail": "red",
+    "unknown": "yellow",
+    "error": "bold red",
+    "dim": "dim",
 }
 
 _JSON_KEYS = ("schema_version", "command", "outcome", "exit_code", "data", "artifacts")
@@ -68,6 +79,40 @@ class ConsoleReporter:
 
     def __init__(self, options: OutputOptions) -> None:
         self.options = options
+        self._rich_console: Any | None = None
+        self._rich_checked = False
+
+    # ------------------------------------------------------------------ цвет
+    def _use_color(self) -> bool:
+        """Цвет — только на настоящем TTY и только если его явно не выключили.
+        json/quiet вывод цвет не получают в принципе."""
+        o = self.options
+        if o.json or o.quiet or o.no_color:
+            return False
+        if os.environ.get("NO_COLOR"):
+            return False
+        try:
+            return bool(self.out.isatty())
+        except Exception:
+            return False
+
+    @property
+    def _console(self) -> Any | None:
+        """Rich-консоль или None. rich импортируется ЛЕНИВО и только в этой
+        ветке: json/quiet/non-TTY/--no-color пути rich вообще не импортируют.
+        Если rich недоступен — молчаливый откат в plain (ASCII без ANSI)."""
+        if self._rich_checked:
+            return self._rich_console
+        self._rich_checked = True
+        if not self._use_color():
+            return None
+        try:
+            import rich.console  # ленивый импорт — только TTY-ветка с цветом
+
+            self._rich_console = rich.console.Console(file=self.out, force_terminal=True)
+        except Exception:
+            self._rich_console = None
+        return self._rich_console
 
     # ------------------------------------------------------------------ потоки
     @property
@@ -126,15 +171,21 @@ class ConsoleReporter:
 
     # -------------------------------------------- примитивы human-рендера
     def line(self, text: str = "", role: str = "text") -> None:
+        console = self._console
+        if console is not None:
+            # soft_wrap: rich не переносит строки сам — на узкой ширине строка
+            # уходит терминалу как есть, текст не перемешивается.
+            console.print(text, style=_RICH_STYLES.get(role, ""), markup=False, highlight=False, soft_wrap=True)
+            return
         print(text, file=self.out)
 
     def heading(self, text: str) -> None:
         self.rule()
-        self.line(text)
+        self.line(text, role="heading")
         self.rule()
 
     def rule(self) -> None:
-        print("=" * 50, file=self.out)
+        self.line("=" * 50)
 
     def kv(self, key: str, value: str) -> None:
         self.line(f"{key:<14} {value}")
