@@ -69,6 +69,29 @@ memnotsafe run \
   --output runs/protected
 ```
 
+## Режимы вывода CLI: --json / --quiet / --no-color
+
+Каждая подкоманда понимает три флага вывода. По умолчанию — человекочитаемая таблица.
+
+```bash
+# машинный режим: ровно один JSON-объект в stdout
+# {schema_version, command, outcome, exit_code, data, artifacts}; UNKNOWN -> null
+memnotsafe run --scenario scenarios/cross_user_bac.yaml --output runs/demo --json
+
+# тихий режим: stdout пуст; результат — код возврата и артефакты в runs/
+memnotsafe campaign --scenario scenarios/cross_user_bac.yaml --output runs/camp --quiet
+```
+
+- `--json` сильнее `--quiet` (сочетание даёт один JSON-объект). Ошибки: human →
+  `[FATAL] …` в stderr, `--json` → один JSON-объект ошибки в stderr (stdout пуст).
+- Цвет включается только на настоящем TTY; `--no-color` или переменная `NO_COLOR`
+  дают чистый ASCII без ANSI.
+- Exit-коды: **0** — успех или честный негатив (NOT_EXPLOITABLE); **1** — ошибка
+  runner/adapter/config, сбой атакующей LLM (результат при этом сохранён) или
+  непройденный `judge-calibrate --gate` (outcome `gate_failed`); **2** — ошибка
+  argparse. Отдельного кода для INCONCLUSIVE нет — UNKNOWN это `null` в JSON.
+- Полный контракт вывода: `specs/006-operator-cli/contracts/console-output.md`.
+
 ## Ключи и доступы: что генерить, где брать, куда вставлять
 
 Четыре уровня запуска. Каждый следующий добавляет ключи, но **ни один не требует правок YAML**:

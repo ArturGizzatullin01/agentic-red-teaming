@@ -5,6 +5,33 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14 — glm — cli/operator-v1: единый output-слой CLI (фича 006, C1–C9)
+
+- задача: карточка CLI v1 — весь человекочитаемый/машинный вывод команд через
+  ConsoleReporter; ядро (Runner/Oracle/Adapter/composite) только читалось
+- сделано: `reporting/console.py` (new): OutputOptions + ConsoleReporter с инъекцией
+  потоков, render-функции кампании/probe/калибровки/replay/generate; Rich только на TTY
+  с ленивым импортом, non-TTY/--no-color/NO_COLOR → чистый ASCII; `--json/--quiet/--no-color`
+  на каждую подкоманду; JSON-контракт {schema_version, command, outcome, exit_code, data,
+  artifacts}: ровно один объект, UNKNOWN → null, секретов нет; attacker-failure — результат
+  сохраняется и проговаривается, затем error + exit 1; judge-calibrate --gate →
+  outcome=gate_failed, exit 1, stdout «как success»; exit-инварианты 0/1/2 зафиксированы
+  тестами, отдельного кода для INCONCLUSIVE нет
+- файлы: `src/memnotsafe/reporting/console.py` (new), `src/memnotsafe/cli.py`,
+  `pyproject.toml` (+rich>=13.9,<15), `specs/006-operator-cli/research.md` и
+  `contracts/console-output.md` (new), `tests/test_cli_{exit_invariants,output,wiring,edges}.py` (new),
+  README, MAP, LOG
+- проверки: база c7fd325 → 608 passed; финал → 671 passed (venv .venv-integration,
+  PYTHONPATH=src, --basetemp локальный); smoke: probe human + probe --json в файл —
+  байта ESC-последовательности ([) в stdout нет, stderr пуст, объект парсится целиком
+- переходный разрыв: коммит C5 (39458fa) содержал 11 failed — cmd_report ссылался на
+  удалённый _print_summary до проводки C6; закрыт в C6 (84e3f6d), финальный набор зелёный
+- ограничения: `python -m memnotsafe` не работает (нет __main__.py — вне allowlist);
+  docs/quickstart в репо отсутствует, не создавался; релиз C10 (offline wheel, E2E-gate)
+  ждёт R1 и в карточку не входит
+
+
+
 ### 2026-09-13 — glm — фикс WRITE-scope: зона поражения для кросс-юзерных кейсов (ревью 13.09, дефект №1)
 
 - дефект: match_candidate_record искал global+user:attacker → WRITE ✅ на R3/R4 кредитовал запись ядра В СЛОЕ АТАКАЮЩЕГО (сработавшую изоляцию) как прогресс атаки; кросс-юзерная воронка читалась оптимистичнее реальности

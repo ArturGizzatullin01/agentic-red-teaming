@@ -36,7 +36,7 @@ python3 -m pytest tests/ -q
 | `judge/` | LLM-as-judge, бюджет, калибровка |
 | `generation/` | автогенерация слабосигнальных атак |
 | `tracing/` | трасса |
-| `reporting/` | HTML/JSON/SARIF, воронка |
+| `reporting/` | HTML/JSON/SARIF, воронка; ConsoleReporter — единый вывод CLI (фича 006) |
 
 ## Рядом с кодом
 
