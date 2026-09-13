@@ -536,6 +536,15 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_output_flags(parser: argparse.ArgumentParser) -> None:
+    """Флаги output-слоя (фича 006) — на КАЖДУЮ подкоманду. cmd_* читает их
+    только через getattr(args, name, False): прямые вызовы cmd_* с самодельным
+    Namespace (регресс-тесты) остаются валидными без флагов."""
+    parser.add_argument("--json", action="store_true", help="машинный вывод: ровно один JSON-объект в stdout (UNKNOWN → null)")
+    parser.add_argument("--quiet", action="store_true", help="без человекочитаемого вывода; результат — код возврата и артефакты")
+    parser.add_argument("--no-color", action="store_true", help="выключить цвет (ANSI) в human-выводе")
+
+
 def _add_judge_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--judge", action="store_true", help="включить LLM-судью независимо от judge.enabled в сценарии")
     parser.add_argument("--no-judge", action="store_true", help="выключить судью независимо от сценария (приоритет над --judge)")
@@ -553,6 +562,7 @@ def build_parser() -> argparse.ArgumentParser:
     pp = sub.add_parser("probe", help="проверить доступность таргета и его telemetry-возможности")
     pp.add_argument("--target", default=None, help="URL таргета или 'mock' (по умолчанию mock)")
     pp.add_argument("--scenario", default=None)
+    _add_output_flags(pp)
     pp.set_defaults(func=cmd_probe)
 
     pr = sub.add_parser("run", help="один прогон атаки (repetitions=1)")
@@ -563,6 +573,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_online_flags(pr)
     _add_attacker_flags(pr)
     _add_judge_flags(pr)
+    _add_output_flags(pr)
     pr.set_defaults(func=cmd_run)
 
     pc = sub.add_parser("campaign", help="N повторов атаки с агрегацией метрик")
@@ -573,6 +584,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_online_flags(pc)
     _add_attacker_flags(pc)
     _add_judge_flags(pc)
+    _add_output_flags(pc)
     pc.set_defaults(func=cmd_campaign)
 
     pgen = sub.add_parser("generate", help="precompute-генерация корпуса атак под профиль (US1)")
@@ -580,11 +592,13 @@ def build_parser() -> argparse.ArgumentParser:
     pgen.add_argument("--classes", default=None, help="каталог/файл описаний классов (по умолчанию attack_classes/)")
     pgen.add_argument("--out", required=True, help="куда сохранить корпус (corpora/<name>.yaml)")
     _add_attacker_flags(pgen)
+    _add_output_flags(pgen)
     pgen.set_defaults(func=cmd_generate)
 
     prep = sub.add_parser("report", help="пересобрать report.html/.json из сохранённого runs/<name>")
     prep.add_argument("--input", required=True)
     prep.add_argument("--output", required=True)
+    _add_output_flags(prep)
     prep.set_defaults(func=cmd_report)
 
     pcal = sub.add_parser("judge-calibrate", help="измерить судью на размеченном наборе (US3)")
@@ -596,11 +610,13 @@ def build_parser() -> argparse.ArgumentParser:
     pcal.add_argument("--gate", action="store_true", help="exit 1, если судья не проходит SC-002/SC-005")
     pcal.add_argument("--from-run", default=None, help="собрать набор из завершённого офлайн-прогона")
     pcal.add_argument("--out", default=None, help="куда записать собранный набор (с --from-run)")
+    _add_output_flags(pcal)
     pcal.set_defaults(func=cmd_judge_calibrate)
 
     prepl = sub.add_parser("replay", help="напечатать причинную трассу одного case")
     prepl.add_argument("--input", required=True)
     prepl.add_argument("--case", required=True)
+    _add_output_flags(prepl)
     prepl.set_defaults(func=cmd_replay)
 
     return p

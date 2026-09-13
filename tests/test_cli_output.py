@@ -191,3 +191,39 @@ def test_narrow_width_is_safe(monkeypatch) -> None:
         command="report", outcome="success", exit_code=0, data={}, artifacts=[], render=_render,
     )
     assert "AGENTIC MEMORY RED TEAMING" in tty.getvalue()  # не падает даже на 20 колонках
+
+
+# ------------------------------------------------------------ C4: флаги CLI
+
+_COMMANDS = ["probe", "run", "campaign", "generate", "report", "judge-calibrate", "replay"]
+
+# минимально валидный argv на подкоманду (required-аргументы покрыть до флагов)
+_MINIMAL_ARGV = {
+    "probe": ["probe"],
+    "run": ["run", "--scenario", "s.yaml", "--output", "out"],
+    "campaign": ["campaign", "--scenario", "s.yaml", "--output", "out"],
+    "generate": ["generate", "--profile", "p.yaml", "--out", "corpus.yaml"],
+    "report": ["report", "--input", "in", "--output", "out"],
+    "judge-calibrate": ["judge-calibrate"],
+    "replay": ["replay", "--input", "in", "--case", "CASE-1"],
+}
+
+
+@pytest.mark.parametrize("command", _COMMANDS)
+def test_output_flags_default_to_false(command) -> None:
+    from memnotsafe.cli import build_parser
+
+    args = build_parser().parse_args(_MINIMAL_ARGV[command])
+    assert args.json is False
+    assert args.quiet is False
+    assert args.no_color is False
+
+
+@pytest.mark.parametrize("command", _COMMANDS)
+def test_output_flags_parse_on_every_subcommand(command) -> None:
+    from memnotsafe.cli import build_parser
+
+    args = build_parser().parse_args(_MINIMAL_ARGV[command] + ["--json", "--quiet", "--no-color"])
+    assert args.json is True
+    assert args.quiet is True
+    assert args.no_color is True
