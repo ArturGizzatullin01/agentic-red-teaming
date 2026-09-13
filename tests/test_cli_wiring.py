@@ -229,3 +229,94 @@ def test_judge_calibrate_from_run_json_contract(tmp_path, capsys) -> None:
     assert payload["command"] == "judge-calibrate"
     assert payload["data"]["cases"] >= 1
     assert payload["artifacts"] == [payload["data"]["dataset"]]
+
+
+# --------------------------------------------------------------------- C7
+
+_JSON_KEYS = {"schema_version", "command", "outcome", "exit_code", "data", "artifacts"}
+
+
+def _write_campaign_with_unknown_stage(tmp_path: Path) -> Path:
+    """Прогон с UNKNOWN-стадией (retrieval/tool success=None): JSON-контракт
+    обязан отдать её как null, а НЕ привести к pass/fail."""
+    from memnotsafe.core.models import AttackResult, StageResult
+    from memnotsafe.reporting.metrics import aggregate_metrics
+
+    result = {
+        "case_id": "CASE-direct_poisoning-001-df4699",
+        "attack_id": "direct_poisoning",
+        "family": "direct_poisoning",
+        "success": False,
+        "stages": [
+            {"stage": "write", "success": False, "reason": "нет", "evidence": []},
+            {"stage": "persistence", "success": False, "reason": "нет", "evidence": []},
+            {"stage": "retrieval", "success": None, "reason": "нет trace", "evidence": []},
+            {"stage": "adoption", "success": False, "reason": "нет", "evidence": []},
+            {"stage": "tool", "success": None, "reason": "не задействует", "evidence": []},
+            {"stage": "external_effect", "success": False, "reason": "нет", "evidence": []},
+        ],
+        "attacker_user_id": "1003",
+        "victim_user_id": "1003",
+        "evidence": {"victim_response": "…"},
+    }
+    attack_result = AttackResult(
+        run_id="RUN-TEST", case_id=result["case_id"], attack_id="direct_poisoning",
+        scenario_id="direct_poisoning_smoke", family="direct_poisoning",
+        stages=[StageResult(stage=s["stage"], success=s["success"], reason=s["reason"])
+                for s in result["stages"]],
+        success=False, metrics={}, evidence={}, attacker_user_id="1003", victim_user_id="1003",
+    )
+    campaign = {
+        "run_id": "RUN-TEST", "scenario_id": "direct_poisoning_smoke", "attempts": 1,
+        "metadata": {}, "aggregate_metrics": aggregate_metrics([attack_result]),
+        "results": [result],
+    }
+    d = tmp_path / "run"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "campaign.json").write_text(json.dumps(campaign, ensure_ascii=False), encoding="utf-8")
+    return d
+
+
+def test_json_contract_keys_and_types(tmp_path, capsys) -> None:
+    run = tmp_path / "run"
+    assert cli.main(["run", "--scenario", _VULNERABLE, "--output", str(run), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == _JSON_KEYS
+    assert isinstance(payload["schema_version"], int)
+    assert isinstance(payload["command"], str)
+    assert payload["outcome"] in {"success", "gate_failed", "error"}
+    assert isinstance(payload["exit_code"], int)
+    assert isinstance(payload["data"], dict)
+    assert isinstance(payload["artifacts"], list) and all(isinstance(a, str) for a in payload["artifacts"])
+
+
+def test_json_unknown_stage_is_null_never_coerced(tmp_path, capsys) -> None:
+    d = _write_campaign_with_unknown_stage(tmp_path)
+    rc = cli.main(["report", "--input", str(d), "--output", str(tmp_path / "rep"), "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    stages = payload["data"]["results"][0]["stages"]
+    assert stages["retrieval"] is None  # UNKNOWN → null
+    assert stages["tool"] is None
+    assert payload["data"]["results"][0]["status"] == "NOT_EXPLOITABLE"
+
+
+def test_json_beats_quiet_at_cli_level(tmp_path, capsys) -> None:
+    rc = cli.main(["run", "--scenario", _VULNERABLE, "--output", str(tmp_path / "run"),
+                   "--json", "--quiet"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)  # один объект, не пусто
+    assert payload["command"] == "run"
+    assert captured.err == ""
+
+
+def test_json_contract_carries_no_secrets(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv("ATTACKER_API_KEY", "sk-super-secret-value")
+    rc = cli.main(["run", "--scenario", _VULNERABLE, "--output", str(tmp_path / "run"), "--json"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "sk-super-secret-value" not in captured.out
+    assert "sk-super-secret-value" not in captured.err
+    payload = json.loads(captured.out)  # контракт при этом не сломан
+    assert payload["command"] == "run"
