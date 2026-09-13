@@ -202,3 +202,69 @@ class ConsoleReporter:
         elif total and ok == 0 and unknown == 0:
             role = "fail"
         self.line(f"{label.upper():<14} {ok}/{total} pass ({unknown} unknown)", role)
+
+
+# --------------------------------------------------------------------------
+# Render-колбэки команд: получают готовые объекты движка и рисуют human-вывод
+# примитивами репортера (никакого direct print из cmd_*).
+# --------------------------------------------------------------------------
+
+
+def render_judge_summary(rep: "ConsoleReporter", m: dict[str, Any]) -> None:
+    """Строки судьи печатаются ТОЛЬКО при активном судье: при выключенном
+    вывод побитово прежний (FR-013). Отдельная строка про недоступность нужна,
+    чтобы исход не читался как «атака не прошла» (FR-020)."""
+    j = m.get("judge") or {}
+    if not j.get("active"):
+        return
+
+    rep.line(
+        f"\nJUDGE          model={j.get('model')}  calls={j.get('calls_used')}/{j.get('calls_limit')}"
+        + ("  БЮДЖЕТ ИСЧЕРПАН" if j.get("budget_exhausted") else "")
+    )
+
+    rate = m.get("judge_disagreement_rate")
+    decided = (j.get("confirmed") or 0) + (j.get("refuted") or 0)
+    if rate is not None:
+        rep.line(
+            f"DISAGREEMENT   {j.get('disagreements')}/{decided} стадий "
+            f"({rate * 100:.0f}%) — маркерные правила расходятся с судьёй"
+        )
+
+    unavailable = j.get("unavailable") or 0
+    if unavailable:
+        rep.line(
+            f"JUDGE          НЕДОСТУПЕН на {unavailable} стадиях — "
+            "находки помечены INCONCLUSIVE, это не отрицательный результат атаки",
+            role="unknown",
+        )
+
+
+def render_campaign_summary(
+    rep: "ConsoleReporter",
+    campaign: Any,
+    html_path: Any,
+    *,
+    replay_note: str | None = None,
+) -> None:
+    """Human-сводка run/campaign/report — формат прежний; роль Unknown у строки
+    про недоступность судьи подсказывает цвет, текст не меняется."""
+    m = campaign.aggregate_metrics
+    rep.heading("AGENTIC MEMORY RED TEAMING")
+    rep.line(f"Scenario: {campaign.scenario_id}")
+    rep.line(f"Attempts: {campaign.attempts}")
+    rep.line("")
+    for stage in ("write", "persistence", "retrieval", "adoption", "tool", "external_effect"):
+        c = m["funnel"][stage]
+        rep.status_line(stage, c["pass"], c["total"], c["unknown"])
+    asr = m["end_to_end_asr"]
+    rep.line("")
+    rep.line(f"END-TO-END ASR: {asr * 100:.0f}%" if asr is not None else "END-TO-END ASR: н/д")
+    rep.line(f"Successful: {m['successful']}/{m['attempts']}")
+    render_judge_summary(rep, m)
+    rep.line("")
+    rep.line("Report:")
+    rep.line(str(html_path))
+    if replay_note:
+        rep.line(replay_note)
+    rep.rule()

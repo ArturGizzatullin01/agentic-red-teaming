@@ -16,12 +16,25 @@ from memnotsafe.core.campaign import Campaign
 from memnotsafe.core.config import build_adapter, load_scenario, validate_judge_spec
 from memnotsafe.core.runner import RunnerError
 from memnotsafe.generation.errors import AttackerError
+from memnotsafe.reporting.console import ConsoleReporter, OutputOptions, render_campaign_summary
 from memnotsafe.reporting.html_report import write_html_report
 from memnotsafe.reporting.json_report import write_json_reports
 from memnotsafe.reporting.metrics import aggregate_metrics
 from memnotsafe.reporting.sarif import write_sarif
 from memnotsafe.reporting.findings import build_findings
 from memnotsafe.tracing.recorder import read_events_jsonl
+
+
+def _reporter(args: argparse.Namespace) -> ConsoleReporter:
+    """Output-слой команды (фича 006): флаги читаются через getattr, поэтому
+    cmd_* остаётся вызываемым с самодельным Namespace без флагов."""
+    return ConsoleReporter(
+        OutputOptions(
+            json=getattr(args, "json", False),
+            quiet=getattr(args, "quiet", False),
+            no_color=getattr(args, "no_color", False),
+        )
+    )
 
 
 def _build_target(target_arg: str | None, scenario_path: str | None):
@@ -81,7 +94,8 @@ def _apply_judge_overrides(scenario, args: argparse.Namespace) -> None:
         spec.enabled = False
 
 
-async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int) -> int:
+async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int, command: str) -> int:
+    reporter = _reporter(args)
     scenario = load_scenario(args.scenario)
     _apply_judge_overrides(scenario, args)
     try:
@@ -89,7 +103,7 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int) -
         # оператор узнаёт о ней раньше, чем прогон потратит вызовы к стенду.
         validate_judge_spec(scenario.judge, scenario.id)
     except RunnerError as exc:
-        print(f"[FATAL] {exc}", file=sys.stderr)
+        reporter.emit_error(command=command, message=str(exc))
         return 1
     target = build_adapter(scenario, args.target)
     repetitions = args.iterations if getattr(args, "iterations", None) else default_repetitions
@@ -98,7 +112,7 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int) -
     online = getattr(args, "online", False)
     # При выключенном онлайне (по умолчанию) атакующая LLM не конфигурируется вовсе
     # (SC-003): ни вызовов, ни клиента. AttackerConfig создаётся только под --online.
-    attacker_config = _online_attacker_config(args, scenario) if online else None
+    attacker_config = _online_attacker_config(args, scenario, reporter) if online else None
     campaign = Campaign(
         scenario,
         target,
@@ -112,7 +126,7 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int) -
     except (RunnerError, AttackerError) as exc:
         # AttackerError здесь — config-ошибка ДО прогона (например, битый путь к
         # корпусу): результатов ещё нет, exit 1.
-        print(f"[FATAL] {exc}", file=sys.stderr)
+        reporter.emit_error(command=command, message=str(exc))
         return 1
     finally:
         await target.aclose()
@@ -131,17 +145,57 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int) -
         by_case.setdefault(e.get("case_id", ""), []).append(e)
     html_path = write_html_report(result, report_dir / html_name, by_case)
 
-    _print_summary(result, html_path)
-
     # Сбой атакующей LLM В ХОДЕ эскалации ≠ «атака не пробила» (FR-011, SC-005):
     # уже полученные результаты сохранены в runs/ и отчёт собран, но код — 1.
-    if campaign.attacker_error is not None:
-        print(f"[FATAL] сбой атакующей LLM в онлайн-эскалации: {campaign.attacker_error}", file=sys.stderr)
+    attacker_failed = campaign.attacker_error is not None
+    reporter.emit_result(
+        command=command,
+        outcome="success",
+        exit_code=1 if attacker_failed else 0,
+        data=_campaign_data(result, findings),
+        artifacts=[str(html_path), str(written["report"]), str(written["findings"])],
+        render=lambda rep: render_campaign_summary(rep, result, html_path),
+    )
+    if attacker_failed:
+        reporter.emit_error(
+            command=command,
+            message=f"сбой атакующей LLM в онлайн-эскалации: {campaign.attacker_error}",
+        )
         return 1
     return 0
 
 
-def _online_attacker_config(args: argparse.Namespace, scenario):
+def _findings_counts(findings: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for f in findings:
+        counts[f.status] = counts.get(f.status, 0) + 1
+    return counts
+
+
+def _campaign_data(result, findings: list) -> dict:
+    """data для JSON-контракта run/campaign/report. Стадии со значением None
+    (UNKNOWN) уходят в JSON как null — НЕ приводятся к pass/fail."""
+    m = result.aggregate_metrics
+    return {
+        "run_id": result.run_id,
+        "scenario_id": result.scenario_id,
+        "attempts": result.attempts,
+        "end_to_end_asr": m.get("end_to_end_asr"),
+        "findings_counts": _findings_counts(findings),
+        "results": [
+            {
+                "case_id": f.case_id,
+                "family": f.family,
+                "status": f.status,
+                "severity": f.severity,
+                "stages": f.stages,
+            }
+            for f in findings
+        ],
+    }
+
+
+def _online_attacker_config(args: argparse.Namespace, scenario, reporter: ConsoleReporter):
     """Конфигурация атакующей LLM для онлайн-уровня. Офлайн-заглушка без скрипта
     получает детерминированные «переписывания» (research §9). При совпадении
     модели атакующей LLM с моделью цели печатает предупреждение (FR-015)."""
@@ -154,7 +208,7 @@ def _online_attacker_config(args: argparse.Namespace, scenario):
     target_model = (scenario.target.extra or {}).get("model_name")
     warn = warn_on_model_collision(config, target_model)
     if warn:
-        print(warn, file=sys.stderr)
+        reporter.warn(warn)
     return config
 
 
@@ -176,11 +230,11 @@ def _online_stub_scripts(scenario, online_attempts: int) -> list[str]:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    return asyncio.run(_run_campaign(args, default_repetitions=1))
+    return asyncio.run(_run_campaign(args, default_repetitions=1, command="run"))
 
 
 def cmd_campaign(args: argparse.Namespace) -> int:
-    return asyncio.run(_run_campaign(args, default_repetitions=args.iterations or 5))
+    return asyncio.run(_run_campaign(args, default_repetitions=args.iterations or 5, command="campaign"))
 
 
 def _stage_from_dict(s: dict):
@@ -408,47 +462,6 @@ def cmd_replay(args: argparse.Namespace) -> int:
     for e in events:
         print(f"{e['timestamp']}  {e['event']:<18} actor={e['actor']:<8} tool={e.get('tool') or '-':<32} args={e.get('arguments')}")
     return 0
-
-
-def _print_summary(campaign, html_path: Path) -> None:
-    m = campaign.aggregate_metrics
-    print("=" * 50)
-    print("AGENTIC MEMORY RED TEAMING")
-    print("=" * 50)
-    print(f"Scenario: {campaign.scenario_id}")
-    print(f"Attempts: {campaign.attempts}\n")
-    for stage in ("write", "persistence", "retrieval", "adoption", "tool", "external_effect"):
-        c = m["funnel"][stage]
-        print(f"{stage.upper():<14} {c['pass']}/{c['total']} pass ({c['unknown']} unknown)")
-    asr = m["end_to_end_asr"]
-    print(f"\nEND-TO-END ASR: {asr * 100:.0f}%" if asr is not None else "\nEND-TO-END ASR: н/д")
-    print(f"Successful: {m['successful']}/{m['attempts']}")
-    _print_judge_summary(m)
-    print(f"\nReport:\n{html_path}")
-    print("=" * 50)
-
-
-def _print_judge_summary(m: dict) -> None:
-    """Строки судьи печатаются ТОЛЬКО при активном судье: при выключенном
-    вывод побитово прежний (FR-013). Отдельная строка про недоступность нужна,
-    чтобы исход не читался как «атака не прошла» (FR-020)."""
-    j = m.get("judge") or {}
-    if not j.get("active"):
-        return
-
-    print(f"\nJUDGE          model={j.get('model')}  calls={j.get('calls_used')}/{j.get('calls_limit')}"
-          + ("  БЮДЖЕТ ИСЧЕРПАН" if j.get("budget_exhausted") else ""))
-
-    rate = m.get("judge_disagreement_rate")
-    decided = (j.get("confirmed") or 0) + (j.get("refuted") or 0)
-    if rate is not None:
-        print(f"DISAGREEMENT   {j.get('disagreements')}/{decided} стадий "
-              f"({rate * 100:.0f}%) — маркерные правила расходятся с судьёй")
-
-    unavailable = j.get("unavailable") or 0
-    if unavailable:
-        print(f"JUDGE          НЕДОСТУПЕН на {unavailable} стадиях — "
-              f"находки помечены INCONCLUSIVE, это не отрицательный результат атаки")
 
 
 def _add_online_flags(parser: argparse.ArgumentParser) -> None:
