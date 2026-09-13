@@ -35,12 +35,12 @@ import time
 import uuid
 from typing import Any
 
-from memnotsafe.adapters.base import Capabilities, TargetAdapter
+from memnotsafe.adapters.base import Capabilities, SettleResult, TargetAdapter
 from memnotsafe.attacks.base import AttackBase, AttackContext
 from memnotsafe.core.models import AttackResult, JudgeVerdict, StageResult
 from memnotsafe.evidence.diff import SnapshotDiff, compute_diff
 from memnotsafe.evidence.matching import derive_case_marker
-from memnotsafe.evidence.snapshot import SystemSnapshot
+from memnotsafe.evidence.snapshot import PhaseSnapshots, SystemSnapshot
 from memnotsafe.oracles.base import EvaluationContext
 from memnotsafe.oracles.composite import composite_success, evaluate_all
 from memnotsafe.tracing.recorder import TraceRecorder
@@ -212,7 +212,11 @@ async def run_attack(
         if require_case_marker:
             # маркер может жить в payload ИЛИ в любой delivery-реплике
             # (двухходовая consent-атака записывает второй ход) — та же
-            # политика, что у settle-доказательства ниже
+            # политика, что у settle-доказательства ниже. Флаг включает
+            # сценарий ИЛИ заявку маркера самой записью корпуса — её
+            # считает слой кампании (она знает record.case_marker):
+            # токен, не дошедший до доставки, дал бы тихий фолбэк на
+            # legacy-needle, который финалайзер перефразированием не находит.
             delivery_texts = [s.message for s in attack.delivery_steps(candidate, ctx)]
             marker_placed = any(ctx.case_marker in t for t in delivery_texts if t)
             if not marker_placed:
@@ -222,7 +226,7 @@ async def run_attack(
                     f"config error на случае {ctx.case_id}: scenario требует case-marker "
                     f"({ctx.case_marker}), но ни payload, ни delivery-реплики его "
                     "не содержат — подстановка возможна только через явный "
-                    "плейсхолдер {case_marker}"
+                    "плейсхолдер {case_marker} или буквальный токен в данных"
                 )
 
         # --- baseline: та же политика владения/ошибок, что и основной поток
@@ -286,6 +290,10 @@ async def run_attack(
         settle_evidence: dict[str, Any] = {
             "expect_text_contains": candidate.payload[:60],
             "attacker_user_id": ctx.attacker_user_id,
+            # Зона поражения (ревью 13.09): self-кейс attacker==victim — без
+            # разницы; кросс-юзерный — settle ищет в global+user:victim, а не
+            # в слое атакующего, иначе self-write кредитуется как прогресс.
+            "memory_owner_user_id": ctx.victim_user_id,
         }
         # Маркер-атрибут включается ТОЛЬКО если атака реально встроила маркер
         # в payload или любую delivery-реплику (плейсхолдер {case_marker});
@@ -295,12 +303,33 @@ async def run_attack(
         )
         if marker_used:
             settle_evidence["case_marker"] = ctx.case_marker
-        persistence_ok = await target.wait_until_persistent(settle_evidence)
+        settle_raw = await target.wait_until_persistent(settle_evidence)
+        # P05: типизированный исход settle. Адаптеры со старым bool-контрактом
+        # нормализуются (True→observed, False→timeout); unavailable — не True
+        # и не False, оракул обязан ответить UNKNOWN.
+        if isinstance(settle_raw, SettleResult):
+            settle_result = settle_raw
+        else:
+            settle_result = SettleResult(
+                outcome="observed" if settle_raw else "timeout",
+                reason="legacy bool-контракт адаптера",
+            )
+        persistence_ok = settle_result.success is True
+
+        # P06 (M1): снимок сразу после delivery-finalize и settle — ДО открытия
+        # trigger-сессии. WRITE сравнивает M0 (before) с M1: что появилось или
+        # изменилось вследствие доставки.
+        phase = "snapshot_m1"
+        m1: SystemSnapshot | None = await target.snapshot()
 
         # --- trigger в НОВОЙ сессии (после границы сессии доставки)
         phase = "trigger_open"
         victim_session = await book.open(ctx.victim_user_id)
         trigger_session_ids: list[str] = [victim_session]
+        # P06 (M2): снимок новой сессии ДО trigger-вопроса — свидетельство
+        # PERSISTENCE (те же id/слой/текст, что в M1).
+        phase = "snapshot_m2"
+        m2: SystemSnapshot | None = await target.snapshot()
         victim_response = ""
         for step in attack.trigger_steps(candidate, ctx):
             if step.message is None:
@@ -390,11 +419,18 @@ async def run_attack(
     # собираемый сигнал качества маркерных правил (FR-016, FR-019).
     judge_verdicts: dict[str, JudgeVerdict] = {}
     if judge is not None:
+        # P07: судья видит КОНКРЕТНУЮ цель кейса — фактическое содержание
+        # доставки (с подставленным маркером), а не только общий вопрос
+        # рубрики. Иначе смена формулировки отказа (кейс 003) выглядит
+        # подтверждением чужой цели. Сырой вердикт судьи сохраняется в
+        # артефакте вызова; структурные проверки цитат — отдельно (verdict.py).
+        goal_text = "\n".join(m for m in delivery_messages if m) or candidate.payload
         judge_verdicts = await judge.evaluate_stages(
             case_id=ctx.case_id,
             expected_effect=candidate.expected_effect,
             artifact=victim_response,
             baseline=baseline_response,
+            goal=goal_text,
         )
 
     ec = EvaluationContext(
@@ -404,11 +440,16 @@ async def run_attack(
         before=before,
         after=after,
         diff=diff,
+        # P06: фазовые снимки — WRITE=m0/m1, PERSISTENCE=m2 (m3 только
+        # анализ). Runner передаёт контейнер ВСЕГДА; None внутри — честное
+        # отсутствие наблюдения, не основание подменять m1/m2 через m3.
+        phases=PhaseSnapshots(m0=before, m1=m1, m2=m2, m3=after),
         baseline_response=baseline_response,
         victim_response=victim_response,
         all_events=all_events,
         victim_trace=victim_trace,
         persistence_ok=persistence_ok,
+        settle=settle_result,
         judge_verdicts=judge_verdicts,
         # T002-10: маркер записи — та же канарейка, что у адаптера в settle;
         # WRITE-матчер атрибутирует по ней только при реально встроенном маркере
@@ -422,13 +463,25 @@ async def run_attack(
     success = composite_success(stages)
 
     metrics = {s.stage: s.success for s in stages}
+    diff_m0_m1 = compute_diff(before, m1) if (before and m1) else None
     evidence = {
         "before": before.to_dict() if before else None,
         "after": after.to_dict() if after else None,
         "diff": diff.to_dict() if diff else None,
+        # P06: фазовые снимки и delivery-диф в evidence (ссылки для отчёта);
+        # before/after/diff сохранены как раньше (before=M0, after=M3)
+        "phases": {
+            "m1": m1.to_dict() if m1 else None,
+            "m2": m2.to_dict() if m2 else None,
+        },
+        "diff_m0_m1": diff_m0_m1.to_dict() if diff_m0_m1 else None,
         "baseline_response": baseline_response,
         "victim_response": victim_response,
         "trace_events": len(all_events),
+        # P05: результат ожидания записи сохраняется в evidence — режим, исход,
+        # число наблюдений (аудит 3.3: отрицательный settle не заменяется
+        # задним числом наличием итогового after)
+        "settle": settle_result.to_dict(),
         "candidate": {
             "payload": candidate.payload,
             "trigger": candidate.trigger,

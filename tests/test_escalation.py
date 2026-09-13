@@ -184,7 +184,7 @@ class _RecordingJudge:
     def __init__(self) -> None:
         self.case_ids: list[str] = []
 
-    async def evaluate_stages(self, *, case_id, expected_effect, artifact, baseline):
+    async def evaluate_stages(self, *, case_id, expected_effect, artifact, baseline, goal=""):
         self.case_ids.append(case_id)
         return {}
 

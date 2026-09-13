@@ -109,10 +109,17 @@ class Campaign:
         results: list[AttackResult] = []
         baselines: list[dict] = []
         for attack, ctx, provenance in self._plan_cases(repetitions):
+            # Требование маркера включает и сценарий, и заявку самой записи
+            # корпуса (record.case_marker): токен записи, не дошедший до
+            # доставки, иначе тихо ушёл бы в legacy-settle по первым 60
+            # символам payload (P04). Рукописные атаки не проверяются —
+            # у них предзаданный case_marker не обязан быть в тексте (opt-in
+            # 005, test_system_log_case_marker_is_opt_in).
+            require_marker = self.scenario.require_case_marker or self._record_declares_marker(ctx)
             try:
                 result = await run_attack(
                     attack, ctx, self.target, run_id=run_id, recorder=recorder, judge=self.judge,
-                    require_case_marker=self.scenario.require_case_marker,
+                    require_case_marker=require_marker,
                 )
             except RunnerError:
                 raise  # раннер-ошибка — не глотаем, CLI обязан вернуть exit 1
@@ -122,7 +129,9 @@ class Campaign:
 
             # Онлайн-эскалация (US2): вокруг немодифицированного run_attack. При
             # выключенном онлайн-уровне возвращает result как есть (SC-003).
-            result = await self._maybe_escalate(attack, ctx, result, run_id=run_id, recorder=recorder)
+            result = await self._maybe_escalate(
+                attack, ctx, result, run_id=run_id, recorder=recorder, require_case_marker=require_marker,
+            )
 
             self._persist_case(result, recorder, evidence_dir, cases_path)
             results.append(result)
@@ -208,6 +217,11 @@ class Campaign:
                     run_seed=attempt,
                     case_id=case_id,
                     params={PARAM_RECORD: record.to_dict(), PARAM_CORPUS_ID: corpus_id},
+                    # Маркер, заявленный записью, едет в контекст ДО раннера:
+                    # None → раннер выведет CM-<6hex> из case_id (плейсхолдер
+                    # {case_marker} подставит GeneratedAttack). Раннер требует
+                    # фактического присутствия заявленного маркера в доставке.
+                    case_marker=record.case_marker,
                 )
                 provenance = {
                     "origin": ORIGIN_CORPUS,
@@ -218,6 +232,12 @@ class Campaign:
 
     # ------------------------------------------------------------------ онлайн-эскалация
 
+    @staticmethod
+    def _record_declares_marker(ctx: AttackContext) -> bool:
+        """Запись корпуса в params заявила собственный маркер (P04)."""
+        raw = (ctx.params or {}).get("record")
+        return isinstance(raw, dict) and raw.get("case_marker") is not None
+
     async def _maybe_escalate(
         self,
         attack: AttackBase,
@@ -226,6 +246,7 @@ class Campaign:
         *,
         run_id: str,
         recorder: TraceRecorder,
+        require_case_marker: bool = False,
     ) -> AttackResult:
         """Онлайн-уровень (US2/US3). Реализация цикла — в core/escalation.py; здесь
         только точка вызова при `--online` и `success=False`. При выключенном
@@ -251,6 +272,10 @@ class Campaign:
                 # тот же судья, что судил первую попытку: иначе вердикты попыток
                 # одного случая несопоставимы (см. докстринг core/escalation.py)
                 judge=self.judge,
+                # и то же требование маркера: повтор получает НОВЫЙ маркер
+                # (case_id новый), но наличие его в доставке проверяется так же
+                # строго, как у первой попытки (единый план P04)
+                require_case_marker=require_case_marker,
             )
         except AttackerError as exc:
             # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем

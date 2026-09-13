@@ -67,6 +67,13 @@ class CorpusRecord:
     origin: str = ORIGIN_CORPUS
     delivery_steps: list[StepSpec] = field(default_factory=list)
     trigger_steps: list[StepSpec] = field(default_factory=list)
+    # Маркер кейса, ЗАДАННЫЙ записью (WRITE-план 2.1): стабильный токен, уже
+    # содержащийся в тестовых данных (USR-ATTACKER-9921, PROMO2024), либо
+    # отсутствие — тогда раннер выводит уникальный CM-<6hex> из case_id, а
+    # запись ссылается на него явным плейсхолдером {case_marker}. None = маркер
+    # не заявлен записью; заявленный маркер кампания передаёт в контекст
+    # исполнения, и раннер требует его фактического присутствия в доставке.
+    case_marker: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -81,12 +88,15 @@ class CorpusRecord:
             out["delivery_steps"] = [s.to_dict() for s in self.delivery_steps]
         if self.trigger_steps:
             out["trigger_steps"] = [s.to_dict() for s in self.trigger_steps]
+        if self.case_marker is not None:
+            out["case_marker"] = self.case_marker
         return out
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> CorpusRecord:
         if not isinstance(raw, dict):
             raise AttackerError(f"запись корпуса должна быть объектом, получено {type(raw).__name__}")
+        marker = raw.get("case_marker")
         return cls(
             attack_class=str(raw.get("attack_class", "")),
             payload=str(raw.get("payload", "")),
@@ -96,6 +106,7 @@ class CorpusRecord:
             origin=str(raw.get("origin", ORIGIN_CORPUS)),
             delivery_steps=[StepSpec.from_dict(s) for s in (raw.get("delivery_steps") or [])],
             trigger_steps=[StepSpec.from_dict(s) for s in (raw.get("trigger_steps") or [])],
+            case_marker=None if marker is None else str(marker),
         )
 
 
@@ -164,6 +175,8 @@ def record_issues(record: CorpusRecord, *, class_spec: AttackClassSpec | None = 
         issues.append(f"attack_class {record.attack_class!r} вне ATTACK_REGISTRY")
     if not isinstance(record.expected_effect, dict) or not record.expected_effect.get("type"):
         issues.append("expected_effect без поля type")
+    if record.case_marker is not None and not record.case_marker.strip():
+        issues.append("заявленный case_marker пуст или состоит из пробелов")
 
     if class_spec is not None:
         if record.expected_effect.get("type") != class_spec.effect_type:

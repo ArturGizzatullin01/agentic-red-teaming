@@ -33,10 +33,14 @@ from memnotsafe.generation.errors import AttackerError
 PARAM_RECORD = "record"
 PARAM_CORPUS_ID = "corpus_id"
 
+# Явный плейсхолдер маркера кейса. Подставляется ТОЛЬКО он: другие тексты
+# корпуса не переписываются «чтобы маркер влез» (контракт WRITE-плана 2.1).
+CASE_MARKER_PLACEHOLDER = "{case_marker}"
+
 
 def _substitute_case_marker(text: str, case_marker: str | None) -> str:
     """Исполнить только объявленный шаблон, сохраняя текст при отсутствии маркера."""
-    return text.replace("{case_marker}", case_marker) if case_marker is not None else text
+    return text.replace(CASE_MARKER_PLACEHOLDER, case_marker) if case_marker is not None else text
 
 
 class GeneratedAttack(AttackBase):
@@ -78,6 +82,11 @@ class GeneratedAttack(AttackBase):
         # Подмена metadata на экземпляре: read_attack() в runner прочитает её
         # ПОСЛЕ generate(), поэтому scenario_id/attack_id берутся отсюда.
         self.metadata = self.resolve_metadata(record)
+        # Контракт R0.1 «origin raw»: маркер подставляется в payload и
+        # ДОСТАВОЧНЫЕ (attacker) steps; trigger и trigger_steps (вопросы
+        # жертвы) остаются ЛИТЕРАЛЬНЫМИ — иначе вопрос жертвы сам несёт
+        # канарейку. Запрет {case_marker} в trigger — валидатор K3/P03,
+        # здесь НЕ реализуется.
         return AttackCandidate(
             attack_id=f"{record.attack_class}-{ctx.case_id}",
             family="generated",
@@ -108,6 +117,7 @@ class GeneratedAttack(AttackBase):
     def trigger_steps(self, candidate: AttackCandidate, ctx: AttackContext) -> list[TriggerStep]:
         record = self.read_record(ctx)
         if record.trigger_steps:
+            # R0.1 «origin raw»: реплики жертвы без подстановки маркера
             return [
                 TriggerStep(label=s.label, message=s.message, as_user=s.as_user or ctx.victim_user_id)
                 for s in record.trigger_steps

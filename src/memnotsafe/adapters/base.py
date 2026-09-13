@@ -56,6 +56,41 @@ class SendResult:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SettleResult:
+    """Исход ожидания записи (P05, единый план 2.2/3.4): ТРИ различимых исхода
+    вместо сплющенного bool.
+
+    observed    — критерий (case-marker или legacy-needle) увиден в памяти;
+    timeout     — память читалась, критерий не появился за окно наблюдения
+                  (определённый негатив адаптера);
+    unavailable — память недоступна для чтения: исход не наблюдаем. Это НЕ
+                  негатив и НЕ успех — оракул обязан ответить UNKNOWN.
+
+    Пустой критерий (пустой needle без маркера) успехом не является никогда:
+    «нечего искать» ≠ «запись есть»."""
+
+    outcome: str  # "observed" | "timeout" | "unavailable"
+    reason: str = ""
+    observations: int = 0
+    elapsed_s: float = 0.0
+    hits: int = 0
+
+    @property
+    def success(self) -> bool | None:
+        """Тристейт для оракула: True только у observed; unavailable — None."""
+        return {"observed": True, "timeout": False, "unavailable": None}.get(self.outcome)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "outcome": self.outcome,
+            "reason": self.reason,
+            "observations": self.observations,
+            "elapsed_s": round(self.elapsed_s, 3),
+            "hits": self.hits,
+        }
+
+
 class TargetAdapter(ABC):
     """Единый интерфейс. Стенд-специфика (Mongo-коллекции, auth_mode, схема
     memory-эндпоинтов и т.п.) целиком живёт внутри конкретного адаптера —
@@ -96,7 +131,7 @@ class TargetAdapter(ABC):
     async def snapshot_user(self, user_id: str) -> list[dict[str, Any]] | None:
         return None
 
-    async def wait_until_persistent(self, evidence: dict[str, Any]) -> bool:
+    async def wait_until_persistent(self, evidence: dict[str, Any]) -> SettleResult:
         """По умолчанию — не ждать (синхронный таргет = запись уже персистентна
         к моменту возврата send()). Асинхронные таргеты (см. HANDOFF про Mongo-
         settle на живом стенде) переопределяют polling'ом.
@@ -106,12 +141,14 @@ class TargetAdapter(ABC):
         и `expect_text_contains` (первые 60 символов payload). Финалайзер стенда
         ПЕРЕФРАЗИРУЕТ текст, поэтому адаптер обязан приоритизировать маркерную
         атрибуцию через общую утилиту matching (evidence/matching.py), а не
-        буквальную подстроку: маркер найден ровно у одной записи в слоях
-        global+attacker → True; маркер у нескольких записей → False
-        (неоднозначность без фиктивного успеха); маркера нет → polling до
-        таймаута → False. Буквальная подстрока — legacy-фолбэк при отсутствии
-        case_marker. Хранилищная специфика — только здесь."""
-        return True
+        буквальную подстроку. Возврат — типизированный SettleResult (P05):
+        observed / timeout / unavailable; адаптеры со старым bool-контрактом
+        нормализуются раннером (True→observed, False→timeout). Хранилищная
+        специфика — только здесь."""
+        return SettleResult(
+            outcome="observed",
+            reason="синхронный таргет по умолчанию: запись персистентна к моменту возврата send()",
+        )
 
     async def aclose(self) -> None:
         """Закрыть сетевые ресурсы адаптера (если есть). No-op по умолчанию."""

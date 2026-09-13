@@ -310,7 +310,7 @@ def _ec(*, before: SystemSnapshot | None, after: SystemSnapshot | None, marker: 
     )
     return EvaluationContext(
         candidate=candidate,
-        ctx=AttackContext(attacker_user_id="1001", victim_user_id="1002", run_seed=1, case_id="C1"),
+        ctx=AttackContext(attacker_user_id="1001", victim_user_id="1001", run_seed=1, case_id="C1"),
         capabilities=capabilities or Capabilities(memory_snapshot=True, trace=True),
         before=before, after=after, diff=None, baseline_response="", victim_response="",
         all_events=[], victim_trace=victim_trace, persistence_ok=persistence_ok, case_marker=marker,
@@ -675,6 +675,7 @@ def _event_ec(
     events: list[dict[str, Any]],
     trigger_sessions: tuple[str, ...] = (TRIGGER_SESSION,),
     victim_response: str = "",
+    victim: str = "1002",
 ) -> EvaluationContext:
     candidate = AttackCandidate(
         attack_id="test-case", family="test", payload=PAYLOAD,
@@ -682,7 +683,10 @@ def _event_ec(
     )
     return EvaluationContext(
         candidate=candidate,
-        ctx=AttackContext(attacker_user_id="1001", victim_user_id="1002", run_seed=1, case_id="C1"),
+        # victim="1002" по умолчанию: событийные тесты размечают акторов
+        # ("1002" = жертва) и не зависят от зон памяти — фазовая атрибуция
+        # требует actor == victim_user_id независимо от кросс-юзерности
+        ctx=AttackContext(attacker_user_id="1001", victim_user_id=victim, run_seed=1, case_id="C1"),
         capabilities=Capabilities(memory_snapshot=True, trace=True, tool_calls=True),
         before=snap(), after=snap(), diff=None,
         baseline_response="", victim_response=victim_response,
