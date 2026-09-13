@@ -109,6 +109,11 @@ class InvestmentStandAdapter(TargetAdapter):
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout_s)
         self._session_users: dict[str, str] = {}
         self._session_events: dict[str, list[dict[str, Any]]] = {}
+        # P09-lite: тела ответов HTTP-finalize (episodes/facts) — то, что писатель
+        # реально предложил и сохранил. Стенд сырой вход/выход finalize не логирует
+        # (ASTRA6-пакет, гэп 1); единственное место, где ответ достаётся бесплатно —
+        # HTTP-ответ close_session. Копится по сессиям, уезжает в metadata снимков.
+        self._finalize_log: list[dict[str, Any]] = []
         self._mongo = None
         self._run_id = "unbound"
         self._case_id = "unbound"
@@ -163,6 +168,7 @@ class InvestmentStandAdapter(TargetAdapter):
         self.capabilities.retrieval = False
         self.capabilities.memory_snapshot = bool(self.mongo_uri)
         self._session_events.clear()
+        self._finalize_log = []  # P09-lite: лог тел finalize — свойство прогона
         self._evidence_channel = None
         # Честный reset_state (FR-012): пытаемся очистить Mongo; нет доступа на
         # запись → НЕ падаем, помечаем reset_available=false для metadata отчёта.
@@ -223,6 +229,7 @@ class InvestmentStandAdapter(TargetAdapter):
         try:
             resp = await self._post_finalize(session_id)
             resp.raise_for_status()
+            self._capture_finalize_body(session_id, resp)
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             # Фолбэк в чат-канал ТОЛЬКО когда исход HTTP-финалайза известен и
@@ -242,6 +249,25 @@ class InvestmentStandAdapter(TargetAdapter):
                 await self._finalize_via_chat(session_id)
                 return
             raise
+
+    def _capture_finalize_body(self, session_id: str, resp: httpx.Response) -> None:
+        """P09-lite: сохранить тело ответа finalize (episodes/facts — предложения
+        писателя). Диагностика не должна ломать финализацию: любая ошибка чтения
+        тела гасится; не-JSON сохраняется усечённым сырым текстом (честный
+        unavailable фактуры вместо тишины)."""
+        try:
+            try:
+                body: Any = resp.json()
+            except ValueError:
+                body = {"raw_text": (resp.text or "")[:8000]}
+            self._finalize_log.append({
+                "session_id": session_id,
+                "user_id": self._session_users.get(session_id),
+                "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "body": body,
+            })
+        except Exception:  # noqa: BLE001 — диагностика молчит, finalize важнее
+            pass
 
     async def _post_finalize(self, session_id: str) -> httpx.Response:
         """HTTP-финалайзинг сессии. Seam для офлайн-тестов неоднозначных
@@ -518,7 +544,11 @@ class InvestmentStandAdapter(TargetAdapter):
                 else:
                     users.setdefault(rec["source_user"] or "", []).append(rec)
         return SystemSnapshot(
-            global_memory=global_memory, users=users, metadata={"auth_mode": self.auth_mode}
+            global_memory=global_memory, users=users,
+            # P09-lite: предложенные писателем факты по сессиям — фазовая
+            # привязка бесплатна: снимок M0 несёт baseline-finalize, M1 —
+            # delivery-finalize, M3 — trigger-finalize
+            metadata={"auth_mode": self.auth_mode, "finalize_bodies": list(self._finalize_log)},
         )
 
     # ------------------------------------------------------------------- транспорт

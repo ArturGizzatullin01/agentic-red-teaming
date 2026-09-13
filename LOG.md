@@ -5,6 +5,14 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-13 — glm — P09-lite: захват тела HTTP-finalize в адаптере (glm/write-marker-snapshots)
+
+- задача: закрыть гэп 1 пакета Astra-6 (сырой вход/выход finalize не логируется) силами memnotsafe, без правки стенда: тело ответа finalize (episodes/facts — что писатель предложил) достаётся бесплатно из HTTP-ответа close_session
+- сделано: `InvestmentStandAdapter` копит `_finalize_log` (session_id, user_id, captured_at, body; не-JSON → усечённый raw_text; ошибка чтения тела гасится — диагностика не ломает финализацию); лог уезжает в `SystemSnapshot.metadata["finalize_bodies"]` — фазовая привязка бесплатна (M0 несёт baseline-finalize, M1 — delivery, M3 — trigger); reset_state очищает лог; чат-фолбэк тела не даёт (честный gap, тест фиксирует)
+- файлы: `src/memnotsafe/adapters/investment_stand.py`, `tests/test_finalize_capture_p09.py` (новый, 5)
+- проверки: полный офлайн-набор 568 passed
+- ограничения: сырой ВХОД finalize (dialog_text) и промежуточные шаги summarize/extract по-прежнему не видны — это только ответ; tool args — за полным P09 (правка стенда); capture только для HTTP-пути finalize
+
 ### 2026-09-13 — glm — G1-CRM живой контроль измерения (glm/write-marker-snapshots)
 
 - задача: одна живая проба согласованности исправленного измерения — легитимный CRM-контакт (синтетический номер G1TEL-79005550142, user 1003, без «запомни», без документов, без tool-error)
