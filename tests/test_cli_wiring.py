@@ -105,3 +105,127 @@ def test_attacker_failure_json_stdout_result_stderr_error(tmp_path, capsys, monk
     error_payload = json.loads(captured.err)  # один объект ошибки в stderr
     assert error_payload["outcome"] == "error"
     assert "сбой атакующей LLM" in error_payload["data"]["message"]
+
+
+# --------------------------------------------------------------------- C6
+
+def test_probe_mock_human_reachable_line(tmp_path, capsys) -> None:
+    rc = cli.main(["probe", "--target", "mock"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "reachable: True" in out
+    assert "capabilities:" in out
+
+
+def test_probe_mock_json_one_object(tmp_path, capsys) -> None:
+    rc = cli.main(["probe", "--target", "mock", "--json"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["command"] == "probe"
+    assert payload["outcome"] == "success"
+    assert payload["data"]["reachable"] is True
+    assert captured.err == ""
+
+
+def test_probe_quiet_prints_nothing(capsys) -> None:
+    rc = cli.main(["probe", "--target", "mock", "--quiet"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
+def test_report_human_summary_with_replay_note(tmp_path, capsys) -> None:
+    run = tmp_path / "run"
+    assert cli.main(["run", "--scenario", _VULNERABLE, "--output", str(run)]) == 0
+    capsys.readouterr()
+    rc = cli.main(["report", "--input", str(run), "--output", str(tmp_path / "rep")])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "AGENTIC MEMORY RED TEAMING" in out
+    assert "Replay: агрегаты пересчитаны" in out  # регресс test_reporting_replay:269
+
+
+def test_report_json_artifacts_listed(tmp_path, capsys) -> None:
+    run = tmp_path / "run"
+    assert cli.main(["run", "--scenario", _VULNERABLE, "--output", str(run)]) == 0
+    capsys.readouterr()
+    rc = cli.main(["report", "--input", str(run), "--output", str(tmp_path / "rep"), "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "report"
+    assert any(a.endswith("report.html") for a in payload["artifacts"])
+    assert any(a.endswith("findings.sarif") is False for a in payload["artifacts"])
+
+
+def test_replay_prints_trace_lines_and_missing_trace_errors(tmp_path, capsys) -> None:
+    run = tmp_path / "run"
+    assert cli.main(["run", "--scenario", _VULNERABLE, "--output", str(run)]) == 0
+    case_id = json.loads((run / "campaign.json").read_text(encoding="utf-8"))["results"][0]["case_id"]
+    capsys.readouterr()
+    rc = cli.main(["replay", "--input", str(run), "--case", case_id])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "actor=" in out and "tool=" in out
+
+    rc = cli.main(["replay", "--input", str(run), "--case", "no-such-case"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "[FATAL]" in captured.err
+    assert captured.out == ""
+
+
+def test_generate_offline_stub_success(tmp_path, capsys) -> None:
+    rc = cli.main([
+        "generate",
+        "--profile", "profiles/support-agent.yaml",
+        "--classes", "attack_classes/",
+        "--out", str(tmp_path / "corpus.yaml"),
+    ])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Корпус сохранён" in captured.out
+    assert (tmp_path / "corpus.yaml").exists()
+
+
+def test_generate_json_data_has_profile_and_counts(tmp_path, capsys) -> None:
+    rc = cli.main([
+        "generate",
+        "--profile", "profiles/support-agent.yaml",
+        "--classes", "attack_classes/",
+        "--out", str(tmp_path / "corpus.yaml"),
+        "--json",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "generate"
+    assert payload["data"]["profile_id"]
+    assert payload["data"]["records"] >= 1
+    assert payload["artifacts"] == [payload["data"]["corpus"]]
+
+
+def test_judge_calibrate_from_run_offline(tmp_path, capsys) -> None:
+    run = tmp_path / "run"
+    assert cli.main(["run", "--scenario", _VULNERABLE, "--output", str(run)]) == 0
+    capsys.readouterr()
+    dataset = tmp_path / "dataset.jsonl"
+    rc = cli.main([
+        "judge-calibrate", "--from-run", str(run), "--out", str(dataset),
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Собрано случаев:" in out
+    assert dataset.exists()
+
+
+def test_judge_calibrate_from_run_json_contract(tmp_path, capsys) -> None:
+    run = tmp_path / "run"
+    assert cli.main(["run", "--scenario", _VULNERABLE, "--output", str(run)]) == 0
+    capsys.readouterr()
+    dataset = tmp_path / "dataset.jsonl"
+    rc = cli.main(["judge-calibrate", "--from-run", str(run), "--out", str(dataset), "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "judge-calibrate"
+    assert payload["data"]["cases"] >= 1
+    assert payload["artifacts"] == [payload["data"]["dataset"]]

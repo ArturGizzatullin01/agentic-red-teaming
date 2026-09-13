@@ -16,7 +16,16 @@ from memnotsafe.core.campaign import Campaign
 from memnotsafe.core.config import build_adapter, load_scenario, validate_judge_spec
 from memnotsafe.core.runner import RunnerError
 from memnotsafe.generation.errors import AttackerError
-from memnotsafe.reporting.console import ConsoleReporter, OutputOptions, render_campaign_summary
+from memnotsafe.reporting.console import (
+    ConsoleReporter,
+    OutputOptions,
+    render_calibration,
+    render_campaign_summary,
+    render_dataset_built,
+    render_generate,
+    render_probe,
+    render_replay,
+)
 from memnotsafe.reporting.html_report import write_html_report
 from memnotsafe.reporting.json_report import write_json_reports
 from memnotsafe.reporting.metrics import aggregate_metrics
@@ -51,22 +60,33 @@ def _build_target(target_arg: str | None, scenario_path: str | None):
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
+    reporter = _reporter(args)
     _scenario, target = _build_target(args.target, args.scenario)
 
-    async def _run() -> int:
+    async def _run():
         try:
-            result = await target.probe()
+            return await target.probe()
         finally:
             await target.aclose()
-        print(f"reachable: {result.reachable}")
-        print(f"capabilities: {json.dumps(result.capabilities.to_dict(), ensure_ascii=False)}")
-        if result.detail:
-            print(f"detail: {json.dumps(result.detail, ensure_ascii=False)}")
-        if result.error:
-            print(f"error: {result.error}")
-        return 0 if result.reachable else 1
 
-    return asyncio.run(_run())
+    result = asyncio.run(_run())
+    data = {
+        "reachable": result.reachable,
+        "capabilities": result.capabilities.to_dict(),
+        "detail": result.detail or {},
+        "error": result.error,
+    }
+    if not result.reachable:
+        # Таргет недоступен — отказ операции, а не честный негатив атаки: exit 1.
+        reporter.emit_error(
+            command="probe", message=result.error or "таргет недоступен", data=data,
+        )
+        return 1
+    reporter.emit_result(
+        command="probe", outcome="success", exit_code=0, data=data, artifacts=[],
+        render=lambda rep: render_probe(rep, result),
+    )
+    return 0
 
 
 def _resolve_report_dir(output: str) -> tuple[Path, str]:
@@ -303,10 +323,14 @@ def load_campaign(input_dir: Path):
 
 
 def cmd_report(args: argparse.Namespace) -> int:
+    reporter = _reporter(args)
     input_dir = Path(args.input)
     campaign_json = input_dir / "campaign.json"
     if not campaign_json.exists():
-        print(f"[FATAL] {campaign_json} не найден — сначала запусти run/campaign", file=sys.stderr)
+        reporter.emit_error(
+            command="report",
+            message=f"{campaign_json} не найден — сначала запусти run/campaign",
+        )
         return 1
 
     campaign = load_campaign(input_dir)
@@ -332,7 +356,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     except ValueError as exc:
         # диагностическая ошибка отчёта (семейство не восстановимо) — не краш,
         # а управляемый отказ с сообщением (принцип VII: контрактная ошибка → exit 1)
-        print(f"[FATAL] {exc}", file=sys.stderr)
+        reporter.emit_error(command="report", message=str(exc))
         return 1
     write_sarif(findings, report_dir / "findings.sarif")
     events = read_events_jsonl(input_dir / "events.jsonl")
@@ -340,8 +364,17 @@ def cmd_report(args: argparse.Namespace) -> int:
     for e in events:
         by_case.setdefault(e.get("case_id", ""), []).append(e)
     html_path = write_html_report(campaign, report_dir / html_name, by_case)
-    _print_summary(campaign, html_path)
-    print("Replay: агрегаты пересчитаны по сохранённым результатам; стадии не переоценивались.")
+    reporter.emit_result(
+        command="report",
+        outcome="success",
+        exit_code=0,
+        data=_campaign_data(campaign, findings),
+        artifacts=[str(html_path), str(report_dir / "report.json"), str(report_dir / "findings.json")],
+        render=lambda rep: render_campaign_summary(
+            rep, campaign, html_path,
+            replay_note="Replay: агрегаты пересчитаны по сохранённым результатам; стадии не переоценивались.",
+        ),
+    )
     return 0
 
 
@@ -350,7 +383,9 @@ def cmd_judge_calibrate(args: argparse.Namespace) -> int:
 
     Команда НЕ поднимает адаптер и не пишет в runs/: таргет ей не нужен, она
     работает по сохранённым текстам. `exit 1` при `--gate` — не сбой
-    инструмента, а вердикт «этому судье нельзя доверять боевой прогон»."""
+    инструмента, а вердикт «этому судье нельзя доверять боевой прогон»
+    (outcome=gate_failed, stdout «как success», stderr пуст)."""
+    reporter = _reporter(args)
     from memnotsafe.core.config import JudgeSpec
     from memnotsafe.judge.calibration import (
         build_dataset_from_run,
@@ -362,20 +397,25 @@ def cmd_judge_calibrate(args: argparse.Namespace) -> int:
     # Режим сборки набора из завершённого офлайн-прогона — сети не требует.
     if args.from_run:
         if not args.out:
-            print("[FATAL] --from-run требует --out <jsonl>", file=sys.stderr)
+            reporter.emit_error(command="judge-calibrate", message="--from-run требует --out <jsonl>")
             return 1
         cases = build_dataset_from_run(Path(args.from_run))
         path = write_dataset(cases, Path(args.out))
-        print(f"Собрано случаев: {len(cases)} -> {path}")
         by_stage: dict[str, int] = {}
         for c in cases:
             by_stage[c.stage] = by_stage.get(c.stage, 0) + 1
-        for stage, n in sorted(by_stage.items()):
-            print(f"  {stage:<16} {n}")
+        reporter.emit_result(
+            command="judge-calibrate", outcome="success", exit_code=0,
+            data={"cases": len(cases), "dataset": str(path), "by_stage": by_stage},
+            artifacts=[str(path)],
+            render=lambda rep: render_dataset_built(rep, len(cases), path, by_stage),
+        )
         return 0
 
     if not args.dataset:
-        print("[FATAL] нужен --dataset <jsonl> или --from-run <runs/dir>", file=sys.stderr)
+        reporter.emit_error(
+            command="judge-calibrate", message="нужен --dataset <jsonl> или --from-run <runs/dir>",
+        )
         return 1
 
     spec = JudgeSpec(
@@ -386,7 +426,7 @@ def cmd_judge_calibrate(args: argparse.Namespace) -> int:
     try:
         validate_judge_spec(spec, "judge-calibrate")
     except RunnerError as exc:
-        print(f"[FATAL] {exc}", file=sys.stderr)
+        reporter.emit_error(command="judge-calibrate", message=str(exc))
         return 1
 
     cases = load_dataset(args.dataset)
@@ -410,57 +450,34 @@ def cmd_judge_calibrate(args: argparse.Namespace) -> int:
     output = Path(args.output or "reports/judge-calibration.json")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    _print_calibration(report, output)
 
-    # --gate: exit 1 — это вердикт о судье, а не падение инструмента.
-    if args.gate and not report["gate_passed"]:
-        print("\n[GATE] Судья не допущен к боевому прогону.", file=sys.stderr)
-        return 1
-    return 0
-
-
-def _print_calibration(r: dict, output: Path) -> None:
-    print("=" * 50)
-    print("JUDGE CALIBRATION")
-    print("=" * 50)
-    print(f"Модель:  {r['model']}")
-    print(f"Набор:   {r['dataset']}  (случаев: {r['total']}, порог: {r['min_confidence']})")
-    rate = r["agreement_rate"]
-    print(f"\nСОГЛАСИЕ         {rate if rate is not None else 'н/д'}"
-          f"  (нужно >= {0.90})")
-    print(f"ЛОЖНОПОЛОЖИТ.    {r['false_positives']}  (нужно 0)")
-    print(f"ЛОЖНООТРИЦАТ.    {r['false_negatives']}")
-    print(f"БЕЗ ВЕРДИКТА     {r['undecided']}")
-    print(f"INJECTION FLIPS  {r['injection_flips']}  (нужно 0)")
-    print("\nПо стадиям:")
-    for stage, c in r["by_stage"].items():
-        print(f"  {stage:<16} согласие {c['agreement_rate']}  fp={c['false_positives']}  "
-              f"fn={c['false_negatives']}  без вердикта={c['undecided']}  (n={c['total']})")
-    if r["disagreements"]:
-        print(f"\nРасхождения ({len(r['disagreements'])}):")
-        for d in r["disagreements"][:10]:
-            print(f"  {d['case_id']:<40} {d['stage']:<16} истина={d['truth']} "
-                  f"вердикт={d['outcome']} conf={d['confidence']}"
-                  + (f" [{d['error']}]" if d["error"] else ""))
-    if r["injection_details"]:
-        print(f"\nПеревороты под инъекцией ({len(r['injection_details'])}):")
-        for f in r["injection_details"]:
-            print(f"  {f['case_id']:<40} {f['injection_class']:<22} "
-                  f"{f['clean_outcome']} -> {f['injected_outcome']}")
-    print(f"\nГЕЙТ: {'ПРОЙДЕН' if r['gate_passed'] else 'НЕ ПРОЙДЕН'}")
-    print(f"Отчёт: {output}")
-    print("=" * 50)
+    # --gate: exit 1 — это вердикт о судье, а не падение инструмента: stdout
+    # «как success» (таблица/JSON с outcome=gate_failed), stderr пуст.
+    gate_failed = bool(args.gate) and not report["gate_passed"]
+    reporter.emit_result(
+        command="judge-calibrate",
+        outcome="gate_failed" if gate_failed else "success",
+        exit_code=1 if gate_failed else 0,
+        data=report,
+        artifacts=[str(output)],
+        render=lambda rep: render_calibration(rep, report, output, gate_failed=gate_failed),
+    )
+    return 1 if gate_failed else 0
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
+    reporter = _reporter(args)
     input_dir = Path(args.input)
     trace_path = input_dir / "traces" / f"{args.case}.json"
     if not trace_path.exists():
-        print(f"[FATAL] трасса не найдена: {trace_path}", file=sys.stderr)
+        reporter.emit_error(command="replay", message=f"трасса не найдена: {trace_path}")
         return 1
     events = json.loads(trace_path.read_text(encoding="utf-8"))
-    for e in events:
-        print(f"{e['timestamp']}  {e['event']:<18} actor={e['actor']:<8} tool={e.get('tool') or '-':<32} args={e.get('arguments')}")
+    reporter.emit_result(
+        command="replay", outcome="success", exit_code=0,
+        data={"events": events}, artifacts=[],
+        render=lambda rep: render_replay(rep, events),
+    )
     return 0
 
 
@@ -499,6 +516,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
     """Precompute-генерация корпуса атак под профиль (US1). Коды возврата:
     0 — корпус собран и сохранён (даже если часть записей отбракована, FR-012);
     1 — config-ошибка профиля/классов или сбой атакующей LLM (AttackerError)."""
+    reporter = _reporter(args)
     from memnotsafe.generation.attack_classes import load_attack_classes
     from memnotsafe.generation.attacker_client import build_attacker_client
     from memnotsafe.generation.budget import CallBudget
@@ -513,7 +531,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         profile = load_profile(args.profile)
         classes = load_attack_classes(args.classes or "attack_classes/")
     except AttackerError as exc:
-        print(f"[FATAL] {exc}", file=sys.stderr)
+        reporter.emit_error(command="generate", message=str(exc))
         return 1
 
     config = _attacker_config_from_args(args)
@@ -537,15 +555,24 @@ def cmd_generate(args: argparse.Namespace) -> int:
     try:
         corpus = asyncio.run(_run())
     except AttackerError as exc:
-        print(f"[FATAL] {exc}", file=sys.stderr)
+        reporter.emit_error(command="generate", message=str(exc))
         return 1
 
     out = write_corpus(corpus, args.out)
     prov = corpus.provenance
-    print(f"Корпус сохранён: {out}")
-    print(f"  профиль: {prov.profile_id} (sha256 {prov.profile_sha256[:12]}…)")
-    print(f"  классы:  {', '.join(prov.attack_classes) or '—'}")
-    print(f"  записей: {len(corpus.records)}; вызовов атакующей LLM: {prov.attacker_calls}")
+    reporter.emit_result(
+        command="generate", outcome="success", exit_code=0,
+        data={
+            "corpus": str(out),
+            "profile_id": prov.profile_id,
+            "profile_sha256": prov.profile_sha256,
+            "attack_classes": list(prov.attack_classes),
+            "records": len(corpus.records),
+            "attacker_calls": prov.attacker_calls,
+        },
+        artifacts=[str(out)],
+        render=lambda rep: render_generate(rep, out, prov, len(corpus.records)),
+    )
     return 0
 
 

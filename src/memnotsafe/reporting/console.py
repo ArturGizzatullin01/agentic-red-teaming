@@ -268,3 +268,71 @@ def render_campaign_summary(
     if replay_note:
         rep.line(replay_note)
     rep.rule()
+
+
+def render_probe(rep: "ConsoleReporter", result: Any) -> None:
+    """Human-вывод probe — формат прежний (reachable/capabilities/detail)."""
+    rep.line(f"reachable: {result.reachable}")
+    rep.line(f"capabilities: {json.dumps(result.capabilities.to_dict(), ensure_ascii=False)}")
+    if result.detail:
+        rep.line(f"detail: {json.dumps(result.detail, ensure_ascii=False)}")
+    if result.error:
+        rep.line(f"error: {result.error}", role="error")
+
+
+def render_replay(rep: "ConsoleReporter", events: list[dict]) -> None:
+    for e in events:
+        rep.line(
+            f"{e['timestamp']}  {e['event']:<18} actor={e['actor']:<8} "
+            f"tool={e.get('tool') or '-':<32} args={e.get('arguments')}"
+        )
+
+
+def render_calibration(rep: "ConsoleReporter", r: dict, output: Any, *, gate_failed: bool = False) -> None:
+    """Human-отчёт калибровки судьи. Гейт-фейл НЕ выводится в stderr: по
+    контракту console-output stdout «как success», только outcome=gate_failed
+    и exit 1 — поэтому строка [GATE] печатается в общий вывод, и только при
+    --gate (без флага это просто измерение, а не вердикт о допуске)."""
+    rep.heading("JUDGE CALIBRATION")
+    rep.kv("Модель:", str(r["model"]))
+    rep.kv("Набор:", f"{r['dataset']}  (случаев: {r['total']}, порог: {r['min_confidence']})")
+    rate = r["agreement_rate"]
+    rep.line(f"\nСОГЛАСИЕ         {rate if rate is not None else 'н/д'}"
+             f"  (нужно >= {0.90})")
+    rep.kv("ЛОЖНОПОЛОЖИТ.", f"{r['false_positives']}  (нужно 0)")
+    rep.kv("ЛОЖНООТРИЦАТ.", str(r["false_negatives"]))
+    rep.kv("БЕЗ ВЕРДИКТА", str(r["undecided"]))
+    rep.kv("INJECTION FLIPS", f"{r['injection_flips']}  (нужно 0)")
+    rep.line("\nПо стадиям:")
+    for stage, c in r["by_stage"].items():
+        rep.line(f"  {stage:<16} согласие {c['agreement_rate']}  fp={c['false_positives']}  "
+                 f"fn={c['false_negatives']}  без вердикта={c['undecided']}  (n={c['total']})")
+    if r["disagreements"]:
+        rep.line(f"\nРасхождения ({len(r['disagreements'])}):")
+        for d in r["disagreements"][:10]:
+            rep.line(f"  {d['case_id']:<40} {d['stage']:<16} истина={d['truth']} "
+                     f"вердикт={d['outcome']} conf={d['confidence']}"
+                     + (f" [{d['error']}]" if d["error"] else ""))
+    if r["injection_details"]:
+        rep.line(f"\nПеревороты под инъекцией ({len(r['injection_details'])}):")
+        for f in r["injection_details"]:
+            rep.line(f"  {f['case_id']:<40} {f['injection_class']:<22} "
+                     f"{f['clean_outcome']} -> {f['injected_outcome']}")
+    rep.line(f"\nГЕЙТ: {'ПРОЙДЕН' if r['gate_passed'] else 'НЕ ПРОЙДЕН'}")
+    rep.kv("Отчёт:", str(output))
+    rep.rule()
+    if gate_failed:
+        rep.line("[GATE] Судья не допущен к боевому прогону.", role="error")
+
+
+def render_generate(rep: "ConsoleReporter", out: Any, prov: Any, n_records: int) -> None:
+    rep.line(f"Корпус сохранён: {out}")
+    rep.line(f"  профиль: {prov.profile_id} (sha256 {prov.profile_sha256[:12]}…)")
+    rep.line(f"  классы:  {', '.join(prov.attack_classes) or '—'}")
+    rep.line(f"  записей: {n_records}; вызовов атакующей LLM: {prov.attacker_calls}")
+
+
+def render_dataset_built(rep: "ConsoleReporter", n_cases: int, path: Any, by_stage: dict) -> None:
+    rep.line(f"Собрано случаев: {n_cases} -> {path}")
+    for stage, count in sorted(by_stage.items()):
+        rep.line(f"  {stage:<16} {count}")
