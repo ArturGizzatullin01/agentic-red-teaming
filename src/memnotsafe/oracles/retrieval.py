@@ -32,7 +32,7 @@ from memnotsafe.core.models import (
     StageResult,
 )
 from memnotsafe.evidence.matching import match_candidate_record
-from memnotsafe.oracles.base import EvaluationContext, events_by_type, unknown
+from memnotsafe.oracles.base import EvaluationContext, events_by_type, memory_zone_owner, unknown
 
 
 def evaluate_retrieval(ec: EvaluationContext) -> StageResult:
@@ -43,12 +43,16 @@ def evaluate_retrieval(ec: EvaluationContext) -> StageResult:
             evidence_kind=EVIDENCE_KIND_UNAVAILABLE,
         )
 
+    # K4-fin (R0.3): matcher ищет в ЗОНЕ ПОРАЖЕНИЯ — при attacker != victim
+    # запись, важная для retrieval жертвы, лежит в global или user:victim;
+    # поиск в слое атакующего давал not-found и ложный False до взгляда в trace.
     match = match_candidate_record(
         payload=ec.candidate.payload,
         attacker_user_id=ec.ctx.attacker_user_id,
         before=ec.before,
         after=ec.after,
         marker=ec.case_marker,
+        memory_owner_user_id=memory_zone_owner(ec),
     )
     if match.matched is None:
         return StageResult(
