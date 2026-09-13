@@ -40,16 +40,17 @@ async def rewrite(feedback: EscalationFeedback, client: AttackerClient, budget: 
     if not record.expected_effect:
         record.expected_effect = dict(feedback.previous.expected_effect)
     else:
-        # K3/P03: rewrite меняет ТЕКСТ, но не СМЫСЛ ЦЕЛИ. Смена type или
-        # ключевых значений («совершить эффект» → «упомянуть», подмена
-        # injected/cus) отбраковывает попытку ДО target (FR-012), а не тихо
-        # подменяет цель. Равенство всего словаря не требуется.
-        previous = feedback.previous.expected_effect or {}
-        if record.expected_effect.get("type") != previous.get("type"):
+        # P10a (фича 007): сверка цели через GoalContract — digest из типа
+        # эффекта, значений-инвариантов и обязательных доказательств. Смена
+        # типа или любого значения («совершить эффект» → «упомянуть эффект»)
+        # отбраковывает попытку ДО target (FR-012), а не тихо подменяет цель.
+        # Привязки попытки (маркер) в digest не входят: их смена легальна.
+        from memnotsafe.core.goal_contract import GoalContract
+
+        previous_contract = GoalContract.from_effect(feedback.previous.expected_effect)
+        new_contract = GoalContract.from_effect(record.expected_effect)
+        if not previous_contract.same_goal(new_contract):
             return None
-        for key in ("tool", "field", "injected", "attacker_user_id", "victim_user_id"):
-            if key in previous and record.expected_effect.get(key) != previous[key]:
-                return None
     if record_issues(record):
         return None  # нарушены внутренние инварианты записи (FR-012)
     return record
