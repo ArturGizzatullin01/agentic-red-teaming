@@ -149,7 +149,7 @@ def _attack_ctx(marker: str) -> tuple[GeneratedAttack, AttackContext]:
         "expected_effect": {"type": "response_reflects_adoption"},
     }
     ctx = AttackContext(
-        attacker_user_id="1001", victim_user_id="1002", run_seed=1,
+        attacker_user_id="1001", victim_user_id="1001", run_seed=1,
         case_id="CASE-p05-001-aaa111", case_marker=marker,
         params={PARAM_RECORD: record, "corpus_id": "p05"},
     )

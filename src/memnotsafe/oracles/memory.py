@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from memnotsafe.core.models import StageResult
 from memnotsafe.evidence.matching import match_candidate_record
-from memnotsafe.oracles.base import EvaluationContext, unknown
+from memnotsafe.oracles.base import EvaluationContext, memory_zone_owner, unknown
 
 
 def evaluate_memory(ec: EvaluationContext) -> StageResult:
@@ -37,6 +37,7 @@ def evaluate_memory(ec: EvaluationContext) -> StageResult:
         before=before,
         after=after,
         marker=ec.case_marker,
+        memory_owner_user_id=memory_zone_owner(ec),
     )
 
     if match.matched is None:

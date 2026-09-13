@@ -27,7 +27,7 @@ from memnotsafe.reporting.json_report import write_json_reports
 
 def _run_marker_case(tmp_path, payload: str):
     ctx = AttackContext(
-        attacker_user_id="1001", victim_user_id="1002", run_seed=1,
+        attacker_user_id="1001", victim_user_id="1001", run_seed=1,
         case_id="CASE-diag-001-aaa111", case_marker="CM-diag001",
         params={
             PARAM_RECORD: {

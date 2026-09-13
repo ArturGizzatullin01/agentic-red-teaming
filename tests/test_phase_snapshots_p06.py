@@ -39,7 +39,7 @@ def _snap(user=None, glob=None) -> SystemSnapshot:
 
 
 def _write_ctx() -> AttackContext:
-    return AttackContext(attacker_user_id=ATTACKER, victim_user_id="1002", run_seed=1, case_id="c")
+    return AttackContext(attacker_user_id=ATTACKER, victim_user_id=ATTACKER, run_seed=1, case_id="c")
 
 
 def _ec(*, m0, m1, m2, m3=None, marker=MARKER) -> EvaluationContext:
@@ -193,7 +193,7 @@ class SessionGapMock(MockTarget):
 def test_runner_e2e_delivery_write_true_but_session_gap_persistence_false():
     attack = GeneratedAttack()
     ctx = AttackContext(
-        attacker_user_id="1001", victim_user_id="1002", run_seed=1,
+        attacker_user_id="1001", victim_user_id="1001", run_seed=1,
         case_id="CASE-p6-001-aaa111", case_marker=MARKER,
         params={PARAM_RECORD: {
             "attack_class": "direct_poisoning",
@@ -214,7 +214,7 @@ def test_runner_e2e_delivery_write_true_but_session_gap_persistence_false():
 def test_runner_e2e_happy_path_persistence_true():
     attack = GeneratedAttack()
     ctx = AttackContext(
-        attacker_user_id="1001", victim_user_id="1002", run_seed=1,
+        attacker_user_id="1001", victim_user_id="1001", run_seed=1,
         case_id="CASE-p6-002-bbb222", case_marker=MARKER,
         params={PARAM_RECORD: {
             "attack_class": "direct_poisoning",

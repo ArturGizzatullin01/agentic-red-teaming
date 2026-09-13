@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from memnotsafe.core.models import StageResult
 from memnotsafe.evidence.matching import find_record_by_identity, match_candidate_record, match_marker
-from memnotsafe.oracles.base import EvaluationContext
+from memnotsafe.oracles.base import EvaluationContext, memory_zone_owner
 
 
 def _write_identity(write_stage: StageResult) -> tuple[str, str] | None:
@@ -122,7 +122,8 @@ def evaluate_persistence(ec: EvaluationContext, write_stage: StageResult) -> Sta
         persistence_after = ec.after
         before_for_signature = ec.before
 
-    confirmed = find_record_by_identity(persistence_after, ec.ctx.attacker_user_id, record_id, layer)
+    zone_owner = memory_zone_owner(ec)
+    confirmed = find_record_by_identity(persistence_after, zone_owner, record_id, layer)
     evidence[0]["present_after_boundary"] = confirmed.state == "found"
     if confirmed.state == "ambiguous":
         return StageResult(
@@ -162,6 +163,7 @@ def evaluate_persistence(ec: EvaluationContext, write_stage: StageResult) -> Sta
         before=before_for_signature,
         after=persistence_after,
         marker=ec.case_marker,
+        memory_owner_user_id=zone_owner,
     )
     if state.matched is True:
         return StageResult(

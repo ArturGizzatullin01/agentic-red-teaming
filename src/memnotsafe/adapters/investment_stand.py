@@ -298,7 +298,8 @@ class InvestmentStandAdapter(TargetAdapter):
             )
         marker = evidence.get("case_marker")
         needle = (evidence.get("expect_text_contains") or "").strip()
-        owner = evidence.get("attacker_user_id") or ""
+        # зона поражения: кросс-юзерный кейс ищет в global+user:victim (P-scope)
+        owner = evidence.get("memory_owner_user_id") or evidence.get("attacker_user_id") or ""
         marker_normalized = normalize_text(marker) if marker else ""
         started = time.monotonic()
         deadline = started + self.settle_timeout_s

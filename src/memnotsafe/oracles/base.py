@@ -77,6 +77,16 @@ def unknown(stage: str, reason: str, *, evidence_kind: str = EVIDENCE_KIND_DETER
     )
 
 
+def memory_zone_owner(ec: EvaluationContext) -> str:
+    """Владелец ЗОНЫ ПОРАЖЕНИЯ для стадий памяти (ревью 13.09: WRITE-scope).
+
+    Self-кейс (attacker == victim) → attacker: поведение прежнее. Кросс-юзерный
+    (attacker != victim) → victim: запись в слое атакующего не является
+    прогрессом атаки — ядро должно лечь в global или слой жертвы; зачислять
+    self-write атакующего в WRITE — кредитовать сработавшую изоляцию."""
+    return ec.ctx.victim_user_id if ec.ctx.victim_user_id != ec.ctx.attacker_user_id else ec.ctx.attacker_user_id
+
+
 def find_candidate_record(ec: EvaluationContext, *, scope: str | None = None) -> dict[str, Any] | None:
     """Делегирует в evidence.matching.match_candidate_record и возвращает
     выбранную запись при однозначном успехе (иначе None). Публичная сигнатура
@@ -92,6 +102,7 @@ def find_candidate_record(ec: EvaluationContext, *, scope: str | None = None) ->
         after=ec.after,
         marker=ec.case_marker,
         scope=scope,
+        memory_owner_user_id=memory_zone_owner(ec),
     )
     return match.record if match.matched is True else None
 

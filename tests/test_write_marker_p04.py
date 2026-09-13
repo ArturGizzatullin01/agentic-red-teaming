@@ -44,7 +44,7 @@ def _record(case_marker: str | None = None, payload: str | None = None) -> Corpu
 def _ctx(record: CorpusRecord, *, case_marker: str | None = "USER-MARKER-1", case_id: str = "CASE-x-001-aaa111") -> AttackContext:
     return AttackContext(
         attacker_user_id="1001",
-        victim_user_id="1002",
+        victim_user_id="1001",
         run_seed=1,
         case_id=case_id,
         case_marker=case_marker,

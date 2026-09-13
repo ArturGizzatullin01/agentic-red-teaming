@@ -161,7 +161,7 @@ class MockTarget(TargetAdapter):
 
     async def wait_until_persistent(self, evidence: dict[str, Any]) -> SettleResult:
         marker = evidence.get("case_marker")
-        owner = evidence.get("attacker_user_id")
+        owner = evidence.get("memory_owner_user_id") or evidence.get("attacker_user_id")
         pool = list(self._global_memory) + list(self._user_memory.get(owner, []))
         if marker:
             # marker-aware (T002-10): ровно одна запись с маркером — успех,

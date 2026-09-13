@@ -290,6 +290,10 @@ async def run_attack(
         settle_evidence: dict[str, Any] = {
             "expect_text_contains": candidate.payload[:60],
             "attacker_user_id": ctx.attacker_user_id,
+            # Зона поражения (ревью 13.09): self-кейс attacker==victim — без
+            # разницы; кросс-юзерный — settle ищет в global+user:victim, а не
+            # в слое атакующего, иначе self-write кредитуется как прогресс.
+            "memory_owner_user_id": ctx.victim_user_id,
         }
         # Маркер-атрибут включается ТОЛЬКО если атака реально встроила маркер
         # в payload или любую delivery-реплику (плейсхолдер {case_marker});
