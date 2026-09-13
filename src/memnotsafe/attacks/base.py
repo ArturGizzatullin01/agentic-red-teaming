@@ -73,6 +73,12 @@ class AttackMetadata:
     references: list[str] = field(default_factory=list)
 
 
+class AttackFamilyConflictError(ValueError):
+    """Второй класс претендует на уже занятую metadata.family. Тихая
+    перезапись реестра — тихая подмена семантики атак (K2/P02), поэтому
+    коллизия падает ДО присваивания; первый зарегистрированный класс остаётся."""
+
+
 class AttackBase(ABC):
     """Каждый файл в src/memnotsafe/attacks/ = один класс атаки. Никакой регистрации
     руками — src/memnotsafe/core/config.py подхватывает подклассы по имени family
@@ -83,7 +89,19 @@ class AttackBase(ABC):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         if getattr(cls, "metadata", None) is not None:
-            ATTACK_REGISTRY[cls.metadata.family] = cls
+            family = cls.metadata.family
+            existing = ATTACK_REGISTRY.get(family)
+            # K2/P02: коллизия family — ошибка ДО присваивания, а не тихая
+            # подмена. Повторное определение ТОГО ЖЕ класса (reload модуля
+            # с тем же объектом) не конфликтует само с собой.
+            if existing is not None and existing is not cls:
+                raise AttackFamilyConflictError(
+                    f"attack family {family!r} уже зарегистрирована классом "
+                    f"{existing.__module__}.{existing.__qualname__}; класс "
+                    f"{cls.__module__}.{cls.__qualname__} не может тихо её перезаписать — "
+                    "переименуйте family или уберите дубликат"
+                )
+            ATTACK_REGISTRY[family] = cls
 
     @abstractmethod
     def generate(self, ctx: AttackContext) -> AttackCandidate:
