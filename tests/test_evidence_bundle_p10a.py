@@ -16,6 +16,7 @@ import pytest
 
 from memnotsafe.evidence.bundle import (
     BUNDLE_SLOTS,
+    BUNDLE_SLOTS_OPTIONAL,
     STATUS_ABSENT,
     STATUS_PRESENT,
     STATUS_UNAVAILABLE,
@@ -47,8 +48,12 @@ def test_write_read_roundtrip_with_checksums(tmp_path) -> None:
     assert read.present("m0") and read.present("transcript")
     assert read.slots["m0"].sha256  # checksum зафиксирован
     assert read.slots["tool_events"].status == STATUS_ABSENT  # слот не упоминался
-    # все слоты пакета перечислены, никаких безымянных
-    assert set(read.slots) == set(BUNDLE_SLOTS)
+    # все ОБЯЗАТЕЛЬНЫЕ слоты пакета перечислены, никаких безымянных.
+    # (фича 010: опциональные слоты вроде context_tool_evidence добавляются
+    # аддитивно и не сужают обязательное ядро; гарантия исходного теста
+    # сохранена — ядро обязано присутствовать целиком)
+    assert set(BUNDLE_SLOTS) <= set(read.slots)
+    assert set(read.slots) <= set(BUNDLE_SLOTS) | set(BUNDLE_SLOTS_OPTIONAL)
 
 
 def test_unavailable_is_not_absent(tmp_path) -> None:

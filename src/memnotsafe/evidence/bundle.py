@@ -50,6 +50,13 @@ BUNDLE_SLOTS = (
     "transcript", "settle", "candidate", "memory_diff", "tool_events", "trace",
 )
 
+# Опциональные слоты (P09-full, фича 010): новый пакет перечисляет их всегда,
+# но ИСТОРИЧЕСКИЙ манифест без них остаётся валидным — при чтении такой слот
+# нормализуется в `absent` («не предусмотрен», не утверждение о телеметрии).
+# Семантика present/absent/unavailable — та же, что у обязательных слотов;
+# present обязан иметь path/sha256/bytes.
+BUNDLE_SLOTS_OPTIONAL = ("context_tool_evidence",)
+
 STATUS_PRESENT = "present"
 STATUS_ABSENT = "absent"
 STATUS_UNAVAILABLE = "unavailable"
@@ -163,14 +170,24 @@ def write_bundle(
 
     slots: dict[str, SlotRecord] = {}
     mentioned = set(payloads) | set(files)
+    known_slots = tuple(BUNDLE_SLOTS) + tuple(BUNDLE_SLOTS_OPTIONAL)
     for slot in sorted(mentioned):
-        if slot not in BUNDLE_SLOTS:
-            raise BundleError(f"неизвестный слот пакета: {slot!r} (известные: {list(BUNDLE_SLOTS)})")
+        if slot not in known_slots:
+            raise BundleError(f"неизвестный слот пакета: {slot!r} (известные: {list(known_slots)})")
         name = f"{slot}.json"
         rel = f"artifacts/{name}"
         target = bundle_dir / rel
         payload = payloads.get(slot)
         source = files.get(slot)
+        if slot == "context_tool_evidence" and payload is not None:
+            # fail-fast: структурно неверную запись телеметрии не оставляем в
+            # пакете — она стала бы «доказательством», которое replay отвергнет
+            from memnotsafe.evidence.telemetry import TelemetryError, parse_context_tool_evidence
+
+            try:
+                payload = parse_context_tool_evidence(payload)
+            except TelemetryError as exc:
+                raise BundleError(f"слот context_tool_evidence нарушает контракт телеметрии: {exc}") from exc
         if payload is not None:
             target.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8",
@@ -190,6 +207,9 @@ def write_bundle(
             bytes=target.stat().st_size,
         )
     for slot in BUNDLE_SLOTS:
+        slots.setdefault(slot, SlotRecord(status=STATUS_ABSENT))
+    # опциональные слоты новый пакет перечисляет всегда (единообразие манифеста)
+    for slot in BUNDLE_SLOTS_OPTIONAL:
         slots.setdefault(slot, SlotRecord(status=STATUS_ABSENT))
 
     bundle = EvidenceBundle(
@@ -229,7 +249,8 @@ def _validate_slot_record(bundle_dir: Path, name: str, rec: SlotRecord) -> None:
     слота — контрактное нарушение, а не «пропуск проверки checksum».
     Фикс приёмки P2: строгие типы и диапазоны — sha256 только нижний hex-64,
     bytes только неотрицательное целое."""
-    if name not in BUNDLE_SLOTS:
+    known_slots = tuple(BUNDLE_SLOTS) + tuple(BUNDLE_SLOTS_OPTIONAL)
+    if name not in known_slots:
         raise BundleError(f"пакет {bundle_dir}: неизвестный слот {name!r} в манифесте")
     if rec.status not in (STATUS_PRESENT, STATUS_ABSENT, STATUS_UNAVAILABLE):
         raise BundleError(f"пакет {bundle_dir}: слот {name!r}: неизвестный статус {rec.status!r}")
@@ -309,12 +330,36 @@ def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundl
                         f"пакет {bundle_dir}: артефакт слота {name!r} повреждён или подменён "
                         f"(sha256 не совпал: {rec.path})"
                     )
+            if rec.status == STATUS_PRESENT and verify and name == "context_tool_evidence":
+                # P09-full: структурная проверка содержимого телеметрии ПОСЛЕ
+                # checksum — ловит нарушение контракта (пустой/дублирующийся
+                # call_id, чужую фазу, неизвестные ключи) даже при пересчитанном
+                # манифесте; это структурный контракт, не криптографическая
+                # подлинность (её граница — в докстринге модуля).
+                from memnotsafe.evidence.telemetry import TelemetryError, parse_context_tool_evidence
+
+                try:
+                    parsed = json.loads(artifact.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise BundleError(
+                        f"пакет {bundle_dir}: артефакт слота {name!r} не читается как JSON: {exc}"
+                    ) from exc
+                try:
+                    parse_context_tool_evidence(parsed)
+                except TelemetryError as exc:
+                    raise BundleError(
+                        f"пакет {bundle_dir}: артефакт слота {name!r} нарушает контракт телеметрии: {exc}"
+                    ) from exc
         slots[name] = rec
     missing_required = [s for s in BUNDLE_SLOTS if s not in slots]
     if missing_required:
         raise BundleError(
             f"пакет {bundle_dir}: слоты не перечислены в манифесте: {missing_required} — манифест неполон"
         )
+    # Исторический пакет без опционального слота валиден: слот «не предусмотрен».
+    # Это нормализация читателя, не утверждение о телеметрии (≠ unavailable).
+    for slot in BUNDLE_SLOTS_OPTIONAL:
+        slots.setdefault(slot, SlotRecord(status=STATUS_ABSENT))
 
     return EvidenceBundle(
         schema_version=BUNDLE_SCHEMA_VERSION,
