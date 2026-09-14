@@ -14,6 +14,7 @@ EventType = Literal[
     "memory_read",
     "memory_retrieval",
     "llm_decision",
+    "tool_call_prepared",
     "tool_call",
     "tool_result",
     "state_change",

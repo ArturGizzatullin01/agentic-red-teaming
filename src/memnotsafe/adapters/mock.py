@@ -98,6 +98,12 @@ class MockTarget(TargetAdapter):
         self._user_memory: dict[str, list[dict[str, Any]]] = {}
         self._sessions: dict[str, dict[str, Any]] = {}
         self._session_events: dict[str, list[dict[str, Any]]] = {}
+        # P09-full (фича 010): телеметрические факты — аддитивны, поведение
+        # агента не меняют. _effective_context — что РЕАЛЬНО попало в контекст
+        # запроса (факт выборки, не интенция модели); heartbeat — счётчик
+        # живости канала телеметрии (обнуляется reset'ом, инкремент на reset).
+        self._effective_context: dict[str, list[dict[str, Any]]] = {}
+        self._heartbeat_counter = 0
 
     def set_context(self, run_id: str, case_id: str) -> None:
         self._run_id, self._case_id = run_id, case_id
@@ -113,6 +119,7 @@ class MockTarget(TargetAdapter):
 
     async def reset_state(self) -> None:
         self._reset_state_sync()
+        self._heartbeat_counter += 1
 
     async def new_session(self, user_id: str) -> str:
         session_id = f"sess-{user_id}-{uuid.uuid4().hex[:8]}"
@@ -158,6 +165,45 @@ class MockTarget(TargetAdapter):
 
     async def snapshot_user(self, user_id: str) -> list[dict[str, Any]] | None:
         return [dict(r) for r in self._user_memory.get(user_id, [])]
+
+    def context_tool_evidence(self) -> dict[str, Any]:
+        """P09-full: сырые ФАКТЫ канала телеметрии (duck-typed контракт
+        evidence/telemetry.build_context_tool_evidence). Mock наблюдает всё,
+        что сам делает: tool_log_complete=True обосновано; у реального стенда
+        этот флаг — обязанность его собственного tool-лога. Фазовую
+        атрибуцию сессий адаптер НЕ делает — её знает только раннер."""
+        facts: dict[str, Any] = {
+            "effective_context_by_session": {},
+            "actual_tool_calls_by_session": {},
+            "prepared_tool_calls_by_session": {},
+            "tool_log_complete": True,
+            "heartbeat_alive": True,
+            "heartbeat_counter": self._heartbeat_counter,
+            "stand_version": "mock",
+            "chat_prompt_revision": None,
+        }
+        for sid, actor in self._sessions.items():
+            records = self._effective_context.get(sid)
+            if records is not None:
+                facts["effective_context_by_session"][sid] = {"actor_user_id": actor["user_id"], "records": records}
+        for sid, events in self._session_events.items():
+            for e in events:
+                kind = e.get("event")
+                if kind == "tool_call":
+                    bucket = facts["actual_tool_calls_by_session"]
+                elif kind == "tool_call_prepared":
+                    bucket = facts["prepared_tool_calls_by_session"]
+                else:
+                    continue
+                bucket.setdefault(sid, []).append(
+                    {
+                        "call_id": e.get("call_id"),
+                        "tool": e.get("tool"),
+                        "args": e.get("arguments"),
+                        "actor_user_id": e.get("actor"),
+                    }
+                )
+        return facts
 
     async def wait_until_persistent(self, evidence: dict[str, Any]) -> SettleResult:
         marker = evidence.get("case_marker")
@@ -272,6 +318,20 @@ class MockTarget(TargetAdapter):
                 parent=parent,
                 memory_refs=[r["id"] for r in retrieved],
             )
+        # P09-full: ФАКТ эффективного контекста — что реально увидел запрос
+        # (полная выборка стенда; mock не обрезает, truncated=False честно).
+        # Это наблюдение канала, не декларация модели: в слот
+        # context_tool_evidence попадает только оно.
+        self._effective_context[session_id] = [
+            {
+                "record_id": r["id"],
+                "fragment": r["text"],
+                "truncated": False,
+                "scope": r["scope"],
+                "source_user": r["source_user"],
+            }
+            for r in retrieved
+        ]
 
         # llm_decision: последняя (самая свежая) запись с директивой "выигрывает" —
         # моделирует recency-bias при разрешении конфликтующих инструкций.
@@ -330,6 +390,12 @@ class MockTarget(TargetAdapter):
         resolved_cus = cus_directive or user_id
         blocked = self.auth_mode == "protected" and resolved_cus != user_id
         call_id = f"call-{uuid.uuid4().hex[:8]}"
+        # P09-full: ПОДГОТОВЛЕННЫЕ адаптером аргументы — отдельным событием ДО
+        # вызова, с тем же call_id. Это НЕ фактические аргументы инструмента:
+        # расхождение подготовленных и фактических фиксируется слоем телеметрии.
+        self._emit_tool(session_id, "tool_call_prepared", parent=parent,
+                        tool="portfolio_get_positions_valuation", call_id=call_id,
+                        detail={}, arguments={"cus": resolved_cus})
         self._emit_tool(session_id, "tool_call", parent=parent, tool="portfolio_get_positions_valuation",
                         call_id=call_id, detail={"blocked": blocked}, arguments={"cus": resolved_cus})
         if blocked:
@@ -343,6 +409,10 @@ class MockTarget(TargetAdapter):
 
     def _tool_booking(self, session_id: str, user_id: str, promo_directive: str | None, *, parent: str) -> str:
         call_id = f"call-{uuid.uuid4().hex[:8]}"
+        # P09-full: подготовленные аргументы отдельным событием (см. _tool_portfolio)
+        self._emit_tool(session_id, "tool_call_prepared", parent=parent,
+                        tool="book_transaction", call_id=call_id,
+                        detail={}, arguments={"user_id": user_id, "promo_code": promo_directive})
         self._emit_tool(session_id, "tool_call", parent=parent, tool="book_transaction",
                         call_id=call_id, detail={}, arguments={"user_id": user_id, "promo_code": promo_directive})
         self._emit_tool(session_id, "tool_result", parent=parent, tool="book_transaction",
