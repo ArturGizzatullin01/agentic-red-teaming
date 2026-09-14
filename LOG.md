@@ -5,6 +5,34 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-15 — glm — RETURN_FOR_FIX по 1a6f633 закрыт (D1/D2 сборщика телеметрии)
+
+- вердикт Codex: 2 P1-дефекта `build_context_tool_evidence`, воспроизведённые
+  на самом `1a6f633`; полный suite 815 их НЕ ловил (ассерты индексировали
+  effective_context по session_id: dict съедал дубль, set дедуплицировал)
+  - D2 (1233b12): задвоенный eff_sections.append — одна сессия → две
+    идентичные секции; удалён второй append
+  - D1 (e8e2e02): `facts.get(field) or {}` молча превращал отсутствующий
+    ключ `*_by_session` в пустой — при tool_log_complete=True и живом
+    heartbeat это давало proven_no_call=True из потерянных данных; сборщик
+    теперь требует явные ключи (паритет с wire-парсером), явный пустой {}
+    легитимен
+  - F1 (6e5d72e) RED-тесты: D2, D1-missing, truth-table proven_no_call
+    (6 строк, включая missing → error), позитивный контроль пустого {}
+  - F4 (2f0c03b): явные счётчики секций в dict/set-ассертах (закрыто
+    слепое пятно) + кампанийный тест: битые факты → слот unavailable +
+    context_tool_evidence_error в provenance, прогон выживает
+- D3 не трогался (вне карточки): L2-драйвер scripts/live_clean_control.py
+  строит outcome мимо штатного расчёта — live-gated, отдельная карточка
+  (MASTER-PLAN §9 п.5)
+- проверки (профиль P09: full_offline + negative_controls + bundle_slot):
+  RED 4 failed / 54 passed → после F2 55 → после F3 58 → после F4 59 passed;
+  полный suite ОДИН раз на 2f0c03b: **825 passed / 0 failed / 0 skipped**
+  (24.6s) = 815 + 10 новых
+- allowlist: только evidence/telemetry.py + тесты P09 + docs; campaign/
+  mock/investment_stand/oracles/cli/scripts не тронуты
+- LIVE: 0/2, не запускался (запрещён карточкой)
+
 ### 2026-09-15 — glm — RETURN_FOR_FIX по d09299a закрыт (фиксы телеметрии/CLI/live-конфигов)
 
 - вердикт Codex: 6 пунктов; все закрыты, каждый RED→GREEN:

@@ -46,3 +46,12 @@ Allowlist: `specs/010-p09-full/*`, `specs/007-evidence-foundation/offline-instal
 - [x] T6.1 Профильный P09-suite зелёный
 - [x] T6.2 ОДИН полный suite на финальном production SHA
 - [x] T6.3 LOG/MAP/checkpoint/handoff владельцу стенда; live-бюджет — предложение (не утверждение)
+
+## Phase 7 — remediation RETURN_FOR_FIX 1a6f633 (D1/D2, offline)
+
+- [x] T7.1 F1 RED: тесты, пинующие D1 (missing key → TelemetryError, а не proven_no_call) и D2 (одна сессия → одна секция) + truth-table proven_no_call + позитивный контроль пустого {}; коммит `6e5d72e` (4 failed / 54 passed)
+- [x] T7.2 F2 GREEN D2: удалён задвоенный `eff_sections.append`; коммит `1233b12` (55 passed)
+- [x] T7.3 F3 GREEN D1: сборщик требует явные `*_by_session`-ключи (отсутствие ≠ пусто, паритет с wire-парсером); коммит `e8e2e02` (58 passed)
+- [x] T7.4 F4: явные счётчики секций в dict/set-ассертах (слепое пятно) + кампанийный тест: битые факты → слот unavailable + причина, прогон выживает; коммит `2f0c03b` (59 passed)
+- [x] T7.5 F5: docs + полный suite на production SHA: **825 passed / 0 failed / 0 skipped** (24.6s)
+- [ ] D3 (L2-драйвер, outcome мимо штатного расчёта) — НЕ в этой карточке: live-gated, отдельная карточка (MASTER-PLAN §9 п.5)

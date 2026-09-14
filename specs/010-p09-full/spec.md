@@ -39,7 +39,9 @@
   tool-лога, heartbeat канала, версии стенда, chat-prompt revision (None =
   неизвестно, не реконструируется). Неизвестные ключи/типы/фазы — контректная
   ошибка. Стенд молча не меняется; handoff владельцу стенда — отдельно.
-  До появления канала live-статус = unavailable/UNKNOWN.
+  До появления канала live-статус = unavailable/UNKNOWN. Строгость
+  симметрична на обеих сторонах: и wire-запись, и сырые факты адаптера
+  обязаны нести ключи явно — отсутствие ключа ≠ пусто (пустой {} легитимен).
 - **FR-6 Экспериментальные метаданные**: версия стенда — в `volatile`
   секции ExperimentSpec (digest не меняется для той же конфигурации);
   чтение исторических v1/v2 сохраняется; usage tokens остаются null без
@@ -60,3 +62,33 @@
 Live-прогоны, PROMO2024, изменения стенда/адаптера investment_stand,
 новые attack families, изменение composite/UNKNOWN-семантики, правки
 CLI-контракта.
+
+## Remediation RETURN_FOR_FIX 1a6f633 (D1/D2, offline)
+
+Повторная приёмка воспроизвела на этом же SHA два P1-дефекта сборщика
+`build_context_tool_evidence` (полный suite 815 их НЕ ловил — негативные
+контроли были слепы к дублю из-за dict/set-индексации по `session_id`):
+
+- **D1 — proven_no_call из отсутствующего ключа фактов.** `adapter_facts.get(
+  field) or {}` молча превращал потерянный ключ `*_by_session` в пустой словарь;
+  при `tool_log_complete=True` + живом heartbeat это давало «доказано: вызовов
+  не было» из отсутствующих данных. Закрыто: сборщик требует явные ключи
+  `effective_context_by_session` / `actual_tool_calls_by_session` /
+  `prepared_tool_calls_by_session` (паритет с wire-парсером); явный пустой {}
+  остаётся легитимным. Тесты: `test_d1_missing_facts_key_is_contract_error_
+  not_proven_no_call`, truth-table `test_d1_proven_no_call_truth_table_from_
+  builder`, позитивный контроль `test_d1_explicit_empty_dict_is_legitimate_
+  proven_no_call`, кампанийный путь `test_d1_campaign_broken_facts_slot_
+  unavailable_not_proven_no_call` (TelemetryError → слот unavailable +
+  причина в provenance, прогон выживает).
+- **D2 — дубль секций effective_context.** Задвоенный `eff_sections.append`
+  давал две идентичные секции на одну сессию. Закрыто: удалён второй append;
+  одна сессия → ровно одна секция. Тесты: `test_d2_one_session_exactly_one_
+  effective_context_section` + явные счётчики секций в тестах, где dict/set-
+  индексация съедала повтор (`test_build_maps_phases_and_rejects_unattributed_
+  call`, `test_fix1_baseline_sessions_excluded_explicitly_by_runner_authority`).
+
+- **D3 (вне этой карточки):** L2-драйвер `scripts/live_clean_control.py`
+  строит outcome вручную мимо штатного расчёта — live-концерн, офлайн без
+  стенда не верифицируется; вынесен в отдельную live-gated карточку
+  (MASTER-PLAN §9 п.5). Скрипт не трогался.

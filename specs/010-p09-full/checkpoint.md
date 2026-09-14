@@ -18,6 +18,29 @@
 
 ## Журнал
 
+### 2026-09-15 — RETURN_FOR_FIX по 1a6f633 закрыт (D1/D2 телеметрии, новый кандидат)
+
+Повторная приёмка: два P1-дефекта сборщика `build_context_tool_evidence`
+воспроизведены на самом `1a6f633` (фиксы `a90f737`/`917bd9e` их не закрыли);
+полный suite 815 их не ловил — ассерты тестов индексировали
+`effective_context` по `session_id` (dict перезатирал дубль, set
+дедуплицировал). Каждый фикс RED→GREEN, коммиты поверх `1a6f633`:
+
+| # | Дефект | Исправление | Коммит | RED → GREEN |
+|---|---|---|---|---|
+| F1 | — | тесты: D2-дубль, D1-missing → TelemetryError, truth-table proven_no_call (6 строк), позитивный контроль явного `{}` | `6e5d72e` | **4 failed / 54 passed** (RED: d2, d1-missing, truth-table[missing]×2) |
+| F2 | D2: задвоенный `eff_sections.append` — одна сессия давала две идентичные секции | удалён второй append | `1233b12` | 55 passed (d2 → GREEN) |
+| F3 | D1: `facts.get(field) or {}` молча превращал отсутствующий ключ в пустой — при полном логе и живом heartbeat давал proven_no_call=True из потерянных данных | сборщик требует явные `effective_context_by_session`/`actual_tool_calls_by_session`/`prepared_tool_calls_by_session` (паритет с wire-парсером); явный пустой `{}` легитимен | `e8e2e02` | 58 passed (d1 → GREEN; существующие тесты не сломались — mock отдаёт все ключи явно) |
+| F4 | слепое пятно: dict/set-ассерты съедали дубль | явные счётчики `len(effective_context)` рядом со старыми ассертами; кампанийный тест: битые факты → слот unavailable + `context_tool_evidence_error` в provenance, прогон выживает, proven_no_call не возникает | `2f0c03b` | 59 passed |
+| F5 | — | spec/tasks/checkpoint/LOG; полный suite | (этот) | полный suite на `2f0c03b`: **825 passed / 0 failed / 0 skipped** (24.6s) = 815 + 10 новых |
+
+**D3 не трогался:** L2-драйвер `scripts/live_clean_control.py` строит outcome
+вручную мимо штатного расчёта — live-концерн, офлайн без стенда не
+верифицируется; вынесен в отдельную live-gated карточку (MASTER-PLAN §9 п.5).
+Allowlist соблюдён: только `evidence/telemetry.py`, тесты P09, docs.
+
+**Live: 0/2, не запускался** (ограничение карточки: live запрещён).
+
 ### 2026-09-15 — RETURN_FOR_FIX по d09299a закрыт (новый кандидат 1b77a66)
 
 Вердикт Codex и его пункты → исправления (каждый RED→GREEN, коммиты):
