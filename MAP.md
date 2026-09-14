@@ -32,7 +32,7 @@ python3 -m pytest tests/ -q
 | `attacks/` | семьи атак, регистрация по `metadata.family` |
 | `adapters/` | `mock.py` (офлайн канон), `investment_stand.py` (live) |
 | `oracles/` | успех/провал по evidence |
-| `evidence/` | снапшот памяти, matching; EvidenceBundle — пакеты доказательств (фича 007) |
+| `evidence/` | снапшот памяти, matching; EvidenceBundle — пакеты доказательств (фича 007); `telemetry.py` — контракт context_tool_evidence (фича 010) |
 | `judge/` | LLM-as-judge, бюджет, калибровка |
 | `generation/` | автогенерация слабосигнальных атак |
 | `tracing/` | трасса |

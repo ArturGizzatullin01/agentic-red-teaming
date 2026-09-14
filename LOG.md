@@ -5,6 +5,46 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14/15 — glm — R1 завершён + C10 PASS + P09-full offline (feature/p09-full)
+
+- R1: по решению пользователя считается завершённым на локальном `main=f3b4e02`
+  (чистый fast-forward от cbd7e6b через принятую цепочку; push на GitHub
+  заблокирован suspended-аккаунтом — 403, origin выведен из контура решением
+  пользователя; gh-CLI отсутствует, PR-маршрут недоступен)
+- C10 = PASS (сетевая сессия разрешена пользователем явно): wheelhouse 12 колёс
+  в $TEMP\c10-preview (вне репо), wheel memnotsafe-0.1.0 (sha256 270c73a2…),
+  чистый venv вне репо, установка строго --no-index --find-links, pip check
+  зелёный, memnotsafe.__file__ в site-packages, installed-CLI smoke: все 7
+  команд, human/json/quiet/json+quiet/no-color, exit 0/1/2, честный негатив
+  NOT_EXPLOITABLE exit 0, 0 ANSI-байт в JSON, артефакты (experiment/bundles/
+  attempts/ledger) пишет установленный пакет. Известная грань: generate без
+  --classes вне репо даёт сырой traceback exit 1 — байт-в-байт как в принятом
+  исходнике (cwd-относительный дефолт), правка — отдельная карточка CLI
+- P09-full offline (карточка 010, ветка feature/p09-full от main=f3b4e02):
+  - evidence/telemetry.py — контракт v1: 4 сущности (expected_effect-намерение
+    НЕ входит в факт-слот; effective_context-факт; adapter args; actual args),
+    call_id — первичный ключ корреляции, фазы m1-delivery/m2-pretrigger/
+    m3-trigger-finalize, proven_no_call только при полном логе + живом
+    heartbeat, adapter/actual divergence по call_id
+  - EvidenceBundle: ОПЦИОНАЛЬНЫЙ слот context_tool_evidence — исторические
+    манифесты валидны (auto-absent при чтении), present=path+sha256+bytes,
+    fail-fast на неверный payload при записи, структурная ревалидация при
+    verify (ловит нарушение контракта даже с пересчитанным checksum)
+  - mock: tool_call_prepared события (тот же call_id, ДО вызова, аддитивно),
+    факты эффективного контекста запроса, context_tool_evidence()
+  - campaign: слот пишется при каждой попытке; канал отсутствует → absent;
+    канал не отдаёт данные/сломан → unavailable + причина в provenance;
+    фазы — только из транскрипта раннера; ExperimentSpec: stand_version в
+    volatile (digest стабилен, v1/v2-чтение сохранено)
+  - Runner/Oracle/composite/cli.py НЕ тронуты; UNKNOWN-семантика не менялась
+- проверки: RED 4 failed/26 passed до изменения bundle (честно воспроизведён);
+  профильный P09-suite 100 passed; 10/10 negative controls; полный suite
+  ОДИН раз на финальном дереве: 805 passed / 0 failed / 0 skipped (24.5s)
+  = 759 принятых + 46 новых тестов; старые assertions не ослаблены
+- live НЕ запускался; PROMO2024 не начиналась; handoff владельцу стенда
+  (схема канала, критерии готовности) и предложение live-бюджета (НЕ
+  утверждён) — specs/010-p09-full/checkpoint.md
+
 ### 2026-09-14 — glm — integration/full-stack-rc1: единый release candidate принятых слоёв (подготовка R1/C10)
 
 - состояние: ancestry перепроверен — origin/main(6f0c4a7) → b1926e0 → c7fd325 →
