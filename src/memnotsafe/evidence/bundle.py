@@ -392,14 +392,31 @@ def verify_run_evidence(run_dir: str | Path) -> int:
         raise BundleError(
             f"пакет доказательств не записан для {failed[0].candidate_id}: {failed[0].error}"
         )
-    missing = [
-        e.candidate_id
-        for e in entries
+    completed = [
+        e for e in entries
         if e.attempt_no >= 1 and e.outcome in COMPLETED_OUTCOMES
-        and not (Path(run_dir) / "bundles" / e.candidate_id / "manifest.json").exists()
+    ]
+    missing = [
+        e.candidate_id for e in completed
+        if not (Path(run_dir) / "bundles" / e.candidate_id / "manifest.json").exists()
     ]
     if missing:
         raise BundleError(
             f"у завершённой попытки нет пакета доказательств: bundles/{missing[0]}"
         )
+    # Согласованность манифеста с историей (Этап 3, фикс аудита): не только
+    # существование файла — идентификаторы и номер попытки обязаны совпадать.
+    for rec in completed:
+        bundle = read_bundle(Path(run_dir) / "bundles" / rec.candidate_id)
+        if (
+            bundle.candidate_id != rec.candidate_id
+            or bundle.case_id != rec.case_id
+            or bundle.attempt_no != rec.attempt_no
+        ):
+            raise BundleError(
+                f"манифест bundles/{rec.candidate_id} не согласован с attempts.jsonl "
+                f"(manifest: case={bundle.case_id!r} candidate={bundle.candidate_id!r} "
+                f"attempt_no={bundle.attempt_no}; history: case={rec.case_id!r} "
+                f"attempt_no={rec.attempt_no})"
+            )
     return count

@@ -349,6 +349,27 @@ def test_corrupt_attempts_jsonl_replay_exit_1(tmp_path, capsys) -> None:
     assert "attempts.jsonl" in json.loads(captured.err)["data"]["message"]
 
 
+def test_manifest_history_mismatch_detected(tmp_path, capsys) -> None:
+    """Негативный E2E: манифест существует и цел, но НЕ согласован с историей
+    (attempt_no подменён) — replay обязан это поймать, а не проверить «файл
+    существует» (фикс аудита Этапа 3)."""
+    rc = cli.main(["run", "--scenario", str(_SCENARIOS / "cross_user_bac.yaml"),
+                   "--output", str(tmp_path / "run")])
+    assert rc == 0
+    capsys.readouterr()
+    out = tmp_path / "run"
+    case_dir = next(iter(find_bundles(out).values()))
+    manifest_path = case_dir / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["attempt_no"] = 7
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "не согласован" in json.loads(captured.err)["data"]["message"]
+
+
 # ------------------------------------------------- 9) исторический run
 
 def test_historical_run_without_new_artifacts(tmp_path, capsys) -> None:
