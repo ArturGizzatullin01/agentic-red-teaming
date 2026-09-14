@@ -373,6 +373,22 @@ def build_context_tool_evidence(
             f"факты адаптера обязаны быть JSON-объектом, получено {type(adapter_facts).__name__}"
         )
 
+    # D1 (фикс приёмки RETURN_FOR_FIX 1a6f633): отсутствие ключа фактов НЕ
+    # равно пустому словарю. Сборка с потерянным ключом могла объявить
+    # «вызовов не было» (proven_no_call) при tool_log_complete=True — вывод
+    # из отсутствующих данных. Паритет с wire-парсером: ключи обязаны быть
+    # явными, пустой {} легитимен, отсутствие — контрактная ошибка.
+    missing = [
+        k
+        for k in ("effective_context_by_session", "actual_tool_calls_by_session", "prepared_tool_calls_by_session")
+        if k not in adapter_facts
+    ]
+    if missing:
+        raise TelemetryError(
+            f"факты адаптера неполны: отсутствуют ключи {sorted(missing)}; "
+            "отсутствие ≠ пусто — адаптер обязан передать явный словарь (пустой {} легитимен)"
+        )
+
     # --- консервативная проверка атрибуции ДО всякой сборки
     known = set(session_phase) | set(excluded_sessions)
     unattributed: list[str] = []
