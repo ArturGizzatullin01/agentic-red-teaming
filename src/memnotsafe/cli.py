@@ -548,6 +548,19 @@ def cmd_generate(args: argparse.Namespace) -> int:
     except AttackerError as exc:
         reporter.emit_error(command="generate", message=str(exc))
         return 1
+    except (OSError, ValueError) as exc:
+        # фикс приёмки (RETURN_FOR_FIX d09299a): дефолт `attack_classes/`
+        # cwd-относителен — вне репозитория его нет; отсутствие профиля или
+        # классов обязано быть ЧИСТОЙ config-ошибкой (stderr, exit 1,
+        # с --json — один JSON-объект ошибки), а не сырым traceback'ом
+        reporter.emit_error(
+            command="generate",
+            message=(
+                f"{exc} — укажите существующие --classes <dir> (дефолт "
+                "`attack_classes/` ищется в текущем каталоге) и --profile <файл>"
+            ),
+        )
+        return 1
 
     config = _attacker_config_from_args(args)
     # Офлайн-заглушка без явного скрипта → детерминированные эталонные ответы под

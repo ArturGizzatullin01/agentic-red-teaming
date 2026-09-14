@@ -205,3 +205,46 @@ def test_missing_required_arg_stderr_exit_2(capsys) -> None:
     assert excinfo.value.code == 2
     assert captured.out == ""
     assert "required" in captured.err or "unrecognized" in captured.err
+
+
+# ============ RETURN_FOR_FIX d09299a: generate вне репозитория — чистый config-error
+
+
+_MIN_PROFILE = (
+    "id: support-agent\n"
+    "purpose: тестовый профиль\n"
+    "interface:\n"
+    "  language: ru\n"
+    "  message_format: plain_text\n"
+    "  identity_field: user_id\n"
+)
+
+_REPO = Path(__file__).resolve().parents[1]
+_VALID_PROFILE = _REPO / "profiles" / "support-agent.yaml"
+
+
+def test_fix5_generate_default_classes_missing_clean_error(tmp_path, capsys, monkeypatch) -> None:
+    # установленная команда из cwd вне репозитория без --classes: раньше —
+    # сырой FileNotFoundError traceback; контракт runtime/config error —
+    # stderr-сообщение, exit 1, без traceback
+    monkeypatch.chdir(tmp_path)
+    rc = cli.main(["generate", "--profile", str(_VALID_PROFILE), "--out", str(tmp_path / "gen.jsonl")])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert "attack_classes" in captured.err
+
+
+def test_fix5_generate_missing_profile_json_error(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    rc = cli.main(["generate", "--profile", str(tmp_path / "nope.yaml"),
+                   "--out", str(tmp_path / "g.jsonl"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    payload = json.loads(captured.err)
+    assert payload["command"] == "generate"
+    assert payload["outcome"] == "error"
+    assert payload["exit_code"] == 1
