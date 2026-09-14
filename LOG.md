@@ -5,6 +5,33 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14 — glm — evidence/foundation: блок подготовки к интеграции (воспроизводимость + аудит + gate-доки)
+
+- воспроизводимость: тесты эскалации переведены с фиксированного /tmp/esc-unit (PermissionError
+  и остаточные артефакты у приёмщика) на pytest tmp_path — 6 call sites, каталог пользователя
+  не тронут; TTY-тесты герметичны от TERM (TERM=dumb воспроизведён и закрыт в тесте — rich
+  корректно гасит цвет на «глупом» терминале, production-контракт цел); полный suite 746×2
+  на свежих basetemp
+- аудит полноты A–E (specs/007): подтверждены и закрыты — read_bundle крашился на
+  attempt_no="x"/слотах-не-объектах (теперь BundleError); read_history/read_ledger крашились
+  на повреждённой строке (теперь контрактная ошибка с номером строки, для replay — BundleError);
+  ExperimentSpec не включал runner-оверрайды (stop_on_success/trigger_override/oracle_overrides/
+  require_case_marker) вопреки собственному докстрингу — добавлена runner-секция, их изменение
+  создаёт новый experiment_id; verify_run_evidence проверял только существование пакета — теперь
+  сверяет attempt_no/case_id/candidate_id манифеста с историей (негативный e2e на подмену);
+  документная честность: sha256 ловит случайную порчу/наивную подмену, НЕ криптографическую
+  подлинность (спека и докстринг bundle поправлены); единицы учёта леджера зафиксированы
+  (target_call = логическая попытка, не HTTP-вызовы; usage=None)
+- офлайн-установка CLI: BLOCKED объективно — setuptools>=68 нет ни в одном интерпретаторе
+  машины, колёс зависимостей локально нет, сеть без разрешения запрещена; точный wheelhouse-
+  список + команды + smoke-чеклист: specs/007/offline-install-gate.md; C10 не закрывается
+- карточка P09-full подготовлена (specs/008-p09-full/card.md): gates, UNKNOWN-таблица, три
+  источника доказательств (effective context / adapter args / фактические tool args),
+  корреляция call_id, negative controls, UNKNOWN vs доказанное отсутствие, поля бюджетов
+  live-прогонов — на утверждение владельца; live не начинался
+- проверки: 753 passed ×2 (свежие basetemp), секрет-скан и скан ослабления assertions чистые
+
+
 ### 2026-09-14 — glm — evidence/foundation: второй RETURN_FOR_FIX закрыт (хвосты P1-2 и P2)
 
 - P1-2 хвост (сбой пакета ДО mkdir был невидим replay): verify_run_evidence(run_dir) —
