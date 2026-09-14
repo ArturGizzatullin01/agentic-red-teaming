@@ -5,6 +5,33 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14 — glm — integration/full-stack-rc1: единый release candidate принятых слоёв (подготовка R1/C10)
+
+- состояние: ancestry перепроверен — origin/main(6f0c4a7) → b1926e0 → c7fd325 →
+  052467c → 03832ee, линейно, 6/6 `--is-ancestor`; ветки-слои стоят ровно на
+  принятых SHA; diff origin/main..03832ee — 65 файлов +8256/−240, без
+  runs/reports/cache/секретов (скан: только имена env-переменных и dummy-фикстуры)
+- worktree/ветка: `worktrees/full-stack-rc1`, `integration/full-stack-rc1` от
+  `03832ee` — БЕЗ cherry-pick реконструкции; принятые ветки/team-publish/main не тронуты
+- карточка 009 (spec/plan/tasks/checkpoint/release-manifest) — не заменяет MASTER-PLAN
+- границы слоёв (узкие прогоны на финальном дереве): A measurement 183, B P02/P03 59,
+  C CLI v1 63, D Evidence Foundation 106 — все passed; отменяющих коммитов нет
+  (oracles/adapters/snapshot/judge/runner не трогались после b1926e0)
+- интеграционные инварианты: матрица 11 сценариев сведена к существующим тестам
+  (маппинг в release-manifest §5), прогон — 98 passed; дефектов нет, новые тесты
+  не добавлялись, production-код карточкой не менялся
+- C10 wheel-gate: NEEDS_AUTHORITY — setuptools/wheel в .venv-integration нет
+  (import-проверка), pip cache 0 колёс, wheelhouse нет; точная PowerShell-команда
+  в release-manifest §7; сетевого скачивания не было
+- полный suite ОДИН раз на производственном дереве (c60aba7): 759 passed /
+  0 failed / 0 skipped, 21.1s — совпадает с принятым числом
+- манифест: candidate = HEAD integration/full-stack-rc1 (коммит этого блока);
+  стратегия истории — линейный стек с документированным непроходным C5 39458fa,
+  squash — опция будущего PR; команда ff/PR и rollback — для владельца;
+  acceptance.md НЕ помечается слитым, main нигде не ✅
+- следующая карточка (не запускалась): P09-full offline-подготовка — handoff в
+  specs/009-integration-rc1/checkpoint.md
+
 ### 2026-09-14 — glm — evidence/foundation: третий RETURN_FOR_FIX закрыт (совместимость v1, JSON-типы, карточка P09)
 
 - P1 (совместимость ExperimentSpec): введён digest_version (v1 = payload без runner, спеки
