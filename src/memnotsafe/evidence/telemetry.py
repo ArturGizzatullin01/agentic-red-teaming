@@ -150,10 +150,17 @@ def _parse_context_section(raw: object, what: str) -> dict:
         unknown = [k for k in rec if k not in _RECORD_KEYS]
         if unknown:
             raise TelemetryError(f"телеметрия: {what}.records[{idx}]: неизвестные ключи {sorted(unknown)}")
+        # фикс приёмки: неправильный тип fragment НЕ приводится к пустой строке —
+        # обрезанный/нечитаемый фрагмент обязан остаться фактом источника
+        fragment = rec.get("fragment")
+        if not isinstance(fragment, str):
+            raise TelemetryError(
+                f"телеметрия: {what}.records[{idx}].fragment обязан быть строкой, получено {type(fragment).__name__}"
+            )
         records.append(
             {
                 "record_id": _non_empty_str(rec.get("record_id"), f"{what}.records[{idx}].record_id"),
-                "fragment": rec.get("fragment") if isinstance(rec.get("fragment"), str) else "",
+                "fragment": fragment,
                 "truncated": _strict_bool(rec.get("truncated"), f"{what}.records[{idx}].truncated"),
                 "scope": _str_or_none(rec.get("scope"), f"{what}.records[{idx}].scope"),
                 "source_user": _str_or_none(rec.get("source_user"), f"{what}.records[{idx}].source_user"),
@@ -171,7 +178,14 @@ def _parse_context_section(raw: object, what: str) -> dict:
 def parse_context_tool_evidence(raw: object) -> dict:
     """Валидирует запись телеметрии по строгой схеме v1 и возвращает
     нормализованный dict. Любое отклонение — TelemetryError (контрактная
-    ошибка, видная replay), а не тихий пропуск и не сырой краш."""
+    ошибка, видная replay), а не тихий пропуск и не сырой краш.
+
+    Строгость (фикс приёмки RETURN_FOR_FIX d09299a): ВСЕ ключи верхнего
+    уровня обязательны — отсутствующий ключ ОТЛИЧАЕТСЯ от явного null.
+    Явный null легитимен только там, где он означает честное «недоступно/
+    неизвестно» (effective_context, stand_version, chat_prompt_revision,
+    args, case_marker, scope, source_user); неправильный тип fragment
+    НЕ превращается в пустую строку."""
     if not isinstance(raw, dict):
         raise TelemetryError(
             f"телеметрия: запись обязана быть JSON-объектом, получено {type(raw).__name__}"
@@ -179,6 +193,11 @@ def parse_context_tool_evidence(raw: object) -> dict:
     unknown = [k for k in raw if k not in _TOP_KEYS]
     if unknown:
         raise TelemetryError(f"телеметрия: неизвестные ключи верхнего уровня {sorted(unknown)}")
+    missing = [k for k in _TOP_KEYS if k not in raw]
+    if missing:
+        # отсутствующее поле — не «неизвестно», а неполная запись: канал
+        # обязан сказать явный null, если значение недоступно
+        raise TelemetryError(f"телеметрия: отсутствуют обязательные ключи {sorted(missing)}")
     version = raw.get("schema_version")
     if isinstance(version, bool) or version != TELEMETRY_SCHEMA_VERSION:
         raise TelemetryError(
@@ -250,11 +269,11 @@ def proven_no_call(record: dict) -> bool:
 
 def adapter_actual_divergence(record: dict) -> list[dict]:
     """Явные расхождения подготовленных и фактических аргументов по call_id:
-    args_mismatch (оба есть, args различаются), actual_without_adapter
-    (фактический вызов без подготовленной записи), prepared_without_actual
-    (подготовили, но вызова нет — при полном логе это содержательный факт,
-    при неполном — не основание для выводов). Список может быть пуст —
-    расхождений нет; отсутствие секций НЕ сглаживается."""
+    context_mismatch (совпал call_id, но разошлись session_id/actor_user_id/
+    phase/tool — фикс приёмки: call_id-совпадение обязан также Согласовать
+    контекстные поля), args_mismatch (контекст сошёлся, args различаются),
+    actual_without_adapter / prepared_without_actual. Список может быть
+    пуст — расхождений нет; отсутствие секций НЕ сглаживается."""
     if not isinstance(record, dict):
         return []
     prepared = {c["call_id"]: c for c in record.get("adapter_tool_calls") or [] if isinstance(c, dict)}
@@ -264,6 +283,13 @@ def adapter_actual_divergence(record: dict) -> list[dict]:
         p = prepared.get(call_id)
         if p is None:
             out.append({"kind": "actual_without_adapter", "call_id": call_id})
+            continue
+        context_fields = ("session_id", "actor_user_id", "phase", "tool")
+        mismatched = [f for f in context_fields if p.get(f) != a.get(f)]
+        if mismatched:
+            # совпал только call_id — этого недостаточно: вызов с тем же id,
+            # но в другой сессии/фазе/у актёра/у другого инструмента — РАЗНЫЙ вызов
+            out.append({"kind": "context_mismatch", "call_id": call_id, "fields": mismatched})
         elif p.get("args") != a.get("args"):
             out.append(
                 {
@@ -288,8 +314,8 @@ _TRANSCRIPT_PHASE_MAP = {
 
 def session_phases_from_transcript(transcript: dict | None) -> dict[str, str]:
     """session_id → фаза телеметрии по wire-транскрипту раннера.
-    baseline-сессии в телеметрию не попадают (не атака); сессии без
-    атрибуции не выдумываются."""
+    baseline-сессии сюда не попадают (их место — excluded_sessions_from_transcript);
+    сессии без атрибуции не выдумываются."""
     out: dict[str, str] = {}
     for message in (transcript or {}).get("messages") or []:
         if not isinstance(message, dict):
@@ -301,7 +327,24 @@ def session_phases_from_transcript(transcript: dict | None) -> dict[str, str]:
     return out
 
 
-def build_context_tool_evidence(adapter_facts: dict, *, session_phase: dict[str, str]) -> dict:
+def baseline_sessions_from_transcript(transcript: dict | None) -> frozenset[str]:
+    """session_id baseline-сессий: раннер знает их не-атакующую роль;
+    сборщик исключает их ЯВНО (по решению раннера), а не молча."""
+    out: set[str] = set()
+    for message in (transcript or {}).get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("phase") == "baseline" and message.get("session_id"):
+            out.add(message["session_id"])
+    return frozenset(out)
+
+
+def build_context_tool_evidence(
+    adapter_facts: dict,
+    *,
+    session_phase: dict[str, str],
+    excluded_sessions: frozenset[str] = frozenset(),
+) -> dict:
     """Собирает parse-ready запись из сырых фактов адаптера. Формат фактов
     (duck-typed контракт адаптеров, mock — эталонная реализация):
 
@@ -316,14 +359,36 @@ def build_context_tool_evidence(adapter_facts: dict, *, session_phase: dict[str,
           "chat_prompt_revision": str|None,
         }
 
-    Сессии без фазовой атрибуции из транскрипта ПРОПУСКАЮТСЯ (их фазу
-    выдумать нельзя); секция effective_context остаётся None, если
-    атрибутированных наблюдений контекста нет — unavailable, не пустой факт.
-    Результат проходит parse_context_tool_evidence: сборщик не может
-    выдать схему, которую читатель отвергнет."""
+    Консерватизм (фикс приёмки RETURN_FOR_FIX d09299a): наблюдения сессий,
+    у которых НЕТ фазовой атрибуции и которые не исключены раннером явно
+    (excluded_sessions — baseline), НЕ выбрасываются молча — сборщик
+    поднимает TelemetryError, и кампания честно переводит слот в
+    unavailable с причиной. Иначе реальный вызов мог бы исчезнуть из
+    записи при tool_log_complete=True — «доказанное отсутствие вызовов»
+    из потерянных данных. Результат проходит
+    parse_context_tool_evidence: сборщик не может выдать схему, которую
+    читатель отвергнет."""
     if not isinstance(adapter_facts, dict):
         raise TelemetryError(
             f"факты адаптера обязаны быть JSON-объектом, получено {type(adapter_facts).__name__}"
+        )
+
+    # --- консервативная проверка атрибуции ДО всякой сборки
+    known = set(session_phase) | set(excluded_sessions)
+    unattributed: list[str] = []
+    for field in ("effective_context_by_session", "actual_tool_calls_by_session", "prepared_tool_calls_by_session"):
+        raw = adapter_facts.get(field) or {}
+        if not isinstance(raw, dict):
+            raise TelemetryError(f"{field} обязан быть JSON-объектом")
+        for sid, payload in raw.items():
+            has_data = bool(payload) if not isinstance(payload, dict) or field != "effective_context_by_session" else bool(payload.get("records"))
+            if sid not in known and has_data and sid not in unattributed:
+                unattributed.append(sid)
+    if unattributed:
+        raise TelemetryError(
+            "телеметрия: сессии без фазовой атрибуции содержат наблюдения "
+            f"{sorted(unattributed)} — выбросить их и объявить лог полным нельзя; "
+            "нужна атрибуция раннера либо явное исключение (baseline)"
         )
 
     eff_sections: list[dict] = []
@@ -331,11 +396,19 @@ def build_context_tool_evidence(adapter_facts: dict, *, session_phase: dict[str,
     for sid, section in raw_eff.items():
         phase = session_phase.get(sid)
         if phase is None:
-            # фазу сессии выдумать нельзя: наблюдение пропускается, причина
-            # фиксируется слоем кампании в provenance
+            # sid в excluded_sessions: раннер явно исключил (baseline — не атака)
             continue
         if not isinstance(section, dict):
             raise TelemetryError(f"эффективный контекст сессии {sid!r} обязан быть JSON-объектом")
+        eff_sections.append(
+            {
+                "phase": phase,
+                "session_id": sid,
+                "actor_user_id": section.get("actor_user_id"),
+                "source": SOURCE_EXTERNAL_TELEMETRY,
+                "records": list(section.get("records") or []),
+            }
+        )
         eff_sections.append(
             {
                 "phase": phase,
