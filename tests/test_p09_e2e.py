@@ -143,3 +143,69 @@ def asyncio_run(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+# ============ RETURN_FOR_FIX d09299a: настоящий live-тип адаптера (без сети)
+
+
+def test_fix4_investment_stand_declares_no_channel_unavailable(tmp_path) -> None:
+    from memnotsafe.adapters.investment_stand import InvestmentStandAdapter
+    from memnotsafe.core.campaign import Campaign
+    from memnotsafe.core.config import ActorConfig, Scenario, TargetSpec
+
+    # настоящий тип адаптера: метод существует, ходит в сеть только конструктором
+    # httpx-клиента (запросов не делает), фактов без канала не выдумывает
+    adapter = InvestmentStandAdapter("http://127.0.0.1:9", mongo_uri=None)
+    assert adapter.context_tool_evidence() is None
+
+    # сквозное поведение кампании на настоящем типе: слот unavailable с причиной
+    class OfflineStand(InvestmentStandAdapter):
+        """Тот же класс канала телеметрии, но без сети: reset/сессии
+        подменяются минимально, факт-канал — РЕАЛЬНЫЙ код адаптера."""
+
+        async def reset_state(self) -> None:
+            return None
+
+        async def probe(self):
+            from memnotsafe.adapters.base import Capabilities, ProbeResult
+
+            return ProbeResult(reachable=True, capabilities=Capabilities(True, True, False, False),
+                               detail={"adapter": "offline-stand"})
+
+        async def new_session(self, user_id: str) -> str:
+            self._session_users[f"s-{user_id}"] = user_id
+            return f"s-{user_id}"
+
+        async def send(self, session_id: str, message: str):
+            from memnotsafe.adapters.base import SendResult
+
+            return SendResult(content="ок", events=[], raw={})
+
+        async def close_session(self, session_id: str) -> None:
+            return None
+
+        async def get_trace(self, session_id: str):
+            return []
+
+        async def wait_until_persistent(self, evidence):
+            from memnotsafe.adapters.base import SettleResult
+
+            return SettleResult("timeout", "офлайн-стаб", observations=0)
+
+        async def snapshot(self):
+            return None
+
+    scenario = Scenario(
+        id="cross_user_bac", path=_SCENARIOS / "cross_user_bac.yaml",
+        target=TargetSpec(adapter="investment_stand", extra={"vulnerable": True}),
+        attacker=ActorConfig(user_id="1001"), victim=ActorConfig(user_id="1002"),
+        attack_family="cross_user_bac", repetitions=1,
+    )
+    campaign = Campaign(scenario, OfflineStand("http://127.0.0.1:9", mongo_uri=None), tmp_path / "run-stand")
+    result = asyncio_run(campaign.run())
+    assert result.results
+    bundle = read_bundle(next(iter(find_bundles(tmp_path / "run-stand").values())))
+    assert bundle.slots["context_tool_evidence"].status == STATUS_UNAVAILABLE
+    final = result.results[-1]
+    reason = (final.evidence.get("provenance") or {}).get("context_tool_evidence_error", "")
+    assert "фактов не отдал" in reason and "unavailable" in reason

@@ -134,6 +134,20 @@ class InvestmentStandAdapter(TargetAdapter):
             "target": self.base_url,
         }
 
+    def context_tool_evidence(self) -> dict[str, Any] | None:
+        """P09-full (фича 010): канал телеметрии effective_context/actual args
+        у stack2 ОТСУТСТВУЕТ (handoff владельцу стенда —
+        specs/010-p09-full/checkpoint.md). Адаптер заявляет это честно:
+        возвращает None → кампания пишет слот context_tool_evidence как
+        unavailable С ПРИЧИНОЙ (не absent и не синтетику).
+
+        Запрещено (Принцип IV): синтезировать effective_context из Mongo-
+        снапшотов, а «фактические args» — из payload атаки: это была бы
+        реконструкция, а не наблюдение. При появлении канала метод начнёт
+        отдавать факты по контракту evidence/telemetry. Вызов НЕ ходит в
+        сеть: состояние канала известно до всякого соединения."""
+        return None
+
     # ------------------------------------------------------------------ identity
 
     def _key_for(self, user_id: str) -> str:

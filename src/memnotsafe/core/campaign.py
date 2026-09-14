@@ -521,14 +521,34 @@ class Campaign:
         ctx_tool: dict | None = None
         facts_getter = getattr(self.target, "context_tool_evidence", None)
         if callable(facts_getter):
-            from memnotsafe.evidence.telemetry import build_context_tool_evidence, session_phases_from_transcript
+            from memnotsafe.evidence.telemetry import (
+                baseline_sessions_from_transcript,
+                build_context_tool_evidence,
+                session_phases_from_transcript,
+            )
 
+            transcript = ev.get("transcript")
             try:
-                ctx_tool = build_context_tool_evidence(
-                    facts_getter(),
-                    session_phase=session_phases_from_transcript(ev.get("transcript")),
-                )
-            except Exception as exc:  # noqa: BLE001 — см. границу честности выше
+                facts = facts_getter()
+                if facts is None:
+                    # канал заявлен, но фактов нет (у investment_stand канал
+                    # телеметрии отсутствует): unavailable с точной причиной,
+                    # НЕ absent и не синтетические «факты»
+                    ctx_tool = None
+                    prov = dict(ev.get("provenance") or {})
+                    prov["context_tool_evidence_error"] = (
+                        "адаптер заявил канал context_tool_evidence, но фактов не отдал "
+                        "(телеметрия стенда недоступна) — слот unavailable, "
+                        "effective_context/actual args остаются UNKNOWN"
+                    )
+                    ev["provenance"] = prov
+                else:
+                    ctx_tool = build_context_tool_evidence(
+                        facts,
+                        session_phase=session_phases_from_transcript(transcript),
+                        excluded_sessions=baseline_sessions_from_transcript(transcript),
+                    )
+            except Exception as exc:  # noqa: BLE001 — телеметрия не роняет прогон
                 prov = dict(ev.get("provenance") or {})
                 prov["context_tool_evidence_error"] = f"{type(exc).__name__}: {exc}"
                 ev["provenance"] = prov
