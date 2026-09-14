@@ -409,15 +409,6 @@ def build_context_tool_evidence(
                 "records": list(section.get("records") or []),
             }
         )
-        eff_sections.append(
-            {
-                "phase": phase,
-                "session_id": sid,
-                "actor_user_id": section.get("actor_user_id"),
-                "source": SOURCE_EXTERNAL_TELEMETRY,
-                "records": list(section.get("records") or []),
-            }
-        )
 
     def _calls(field: str) -> list[dict]:
         raw = adapter_facts.get(field) or {}
