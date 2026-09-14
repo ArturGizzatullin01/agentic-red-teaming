@@ -1,10 +1,62 @@
-# Offline-проверка установки CLI (предварительная, C10-preview) — состояние
+# Offline-проверка установки CLI — C10 gate
 
 Дата: 2026-09-14 · Кандидат: `evidence/foundation` @ `4ee868a`+ · Блок: Evidence Foundation
 
-## Вердикт: BLOCKED (объективный блокер среды, не дефект пакета)
+## Вердикт (финал, 2026-09-14, сессия после сетевого разрешения): PASS
+
+Разрешение пользователя: «Разрешаю одну сетевую сессию C10 для скачивания
+зависимостей и сборки wheel. Live и платные LLM-вызовы не разрешаю».
+
+Выполнено (кандидат `main=f3b4e02`, worktree `full-stack-rc1`):
+
+1. **Wheelhouse** `$env:TEMP\c10-preview\wheelhouse` (вне репо): 12 колёс —
+   pyyaml 6.0.3 (cp314), httpx 0.28.1, rich 14.3.4 + транзитивные
+   (httpcore, h11, anyio, certifi, idna, markdown-it-py, mdurl, pygments,
+   typing_extensions).
+2. **Wheel проекта**: `pip wheel <repo> --no-deps` →
+   `memnotsafe-0.1.0-py3-none-any.whl`, size 256928,
+   sha256 `270c73a2ffb8857391de6283acb68084f46d2c0dfe4d1cdb2fe94f08c67ce7bc`
+   (build isolation сам подтянул setuptools>=68 в эфемерное окружение).
+3. **Чистый venv** `$env:TEMP\c10-preview\clean-venv` (вне репо и вне
+   venv-integration): `pip install --no-index --find-links <wheelhouse>` —
+   13 пакетов установлено строго из wheelhouse, editable НЕ использовался.
+4. **`pip check`**: No broken requirements found.
+5. **Import-proof** (cwd = `$env:TEMP\c10-preview\smoke-cwd`, PYTHONPATH снят):
+   `memnotsafe.__file__` → `...\c10-preview\clean-venv\Lib\site-packages\memnotsafe\__init__.py`;
+   консольный скрипт `memnotsafe.exe` установлен.
+6. **Installed-CLI smoke** (все команды — установленным пакетом, исходное
+   дерево не требуется):
+   - `--help` exit 0/stdout, stderr пуст; неизвестный аргумент exit 2/stderr/stdout пуст;
+   - `probe --target mock`: human/`--json`/`--quiet`/`--json --quiet`/`--no-color` —
+     exit 0; JSON — ровно один объект; **0 ANSI-байт во всех выводах**; stderr пуст;
+   - `run cross_user_bac.yaml` → exit 0 (позитив); `cross_user_bac_protected.yaml`
+     → **exit 0 + `status: NOT_EXPLOITABLE`, ASR 0%** (честный негатив);
+   - `campaign --iterations 2` → exit 0; `report` обоих прогонов → exit 0
+     (replay + verify_run_evidence); `report --json` — один объект, `asr` в data;
+   - `replay --case <id>` → exit 0 (трасса с call_id-корреляцией);
+   - `judge-calibrate --from-run … --out …` → exit 0; неверные аргументы → exit 2;
+   - `generate` (offline stub-writer, 5 записей корпуса) → exit 0;
+   - `report --input <missing>` → **exit 1**: human — `[FATAL]` в stderr/stdout пуст;
+     `--json` — stdout пуст/JSON-ошибка в stderr/без ANSI;
+   - артефакты установленного пакета: `experiment.json`, `bundles/<case>/manifest.json`,
+     `attempts.jsonl`, `budget-ledger.jsonl`, `campaign.json` — созданы и читаются.
+7. **Известная грань (не дефект wheel, зафиксирована)**: `generate` без
+   `--classes` из каталога без `attack_classes/` даёт сырой traceback + exit 1.
+   Поведение **байт-в-байт совпадает** с принятым исходным деревом
+   (`FileNotFoundError: 'attack_classes'` — cwd-относительный дефолт);
+   контрактный путь ошибки (report missing, config-gate) чист. Правка —
+   отдельной карточкой CLI, не в C10 и не в P09 (запрещено менять CLI-контракт).
+
+Полный suite 759 повторно не гонялся — исходники не менялись (C10 не трогает код).
+
+---
+
+## История: предварительное состояние (до сетевого разрешения)
+
+### Вердикт: BLOCKED (объективный блокер среды, не дефект пакета)
 
 ## Что требуется для gate (C10-предварительный)
+
 
 1. **Сборка wheel** — PEP 517 backend `setuptools>=68` (`pyproject.toml [build-system]`).
    setuptools ОТСУТСТВУЕТ в проверенных интерпретаторах (граница аудита: проверены

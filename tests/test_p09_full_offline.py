@@ -1,0 +1,293 @@
+"""tests/test_p09_full_offline.py — P09-full offline (фича 010).
+
+Контракты четырёх сущностей (намерение ≠ факт), корреляции по call_id
+и фазам; слоты пакета и negative controls E2E — в соседних файлах.
+Всё офлайн: mock/stub, без сети/Live.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from memnotsafe.evidence.telemetry import (  # noqa: E402
+    PHASE_M1_DELIVERY,
+    PHASE_M2_PRETRIGGER,
+    PHASE_M3_TRIGGER_FINALIZE,
+    SOURCE_EXTERNAL_TELEMETRY,
+    TELEMETRY_SCHEMA_VERSION,
+    TelemetryError,
+    adapter_actual_divergence,
+    build_context_tool_evidence,
+    parse_context_tool_evidence,
+    proven_no_call,
+    session_phases_from_transcript,
+)
+
+
+def _valid_record(**overrides: object) -> dict:
+    record = {
+        "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "effective_context": [
+            {
+                "phase": PHASE_M3_TRIGGER_FINALIZE,
+                "session_id": "sess-victim-1",
+                "actor_user_id": "1003",
+                "source": SOURCE_EXTERNAL_TELEMETRY,
+                "records": [
+                    {"record_id": "mem-1", "fragment": "правило", "truncated": False,
+                     "scope": "global", "source_user": "1001"},
+                ],
+            }
+        ],
+        "actual_tool_calls": [
+            {"call_id": "call-a1", "session_id": "sess-victim-1", "actor_user_id": "1003",
+             "phase": PHASE_M3_TRIGGER_FINALIZE, "tool": "portfolio", "args": {"cus": "1003"},
+             "case_marker": None},
+        ],
+        "adapter_tool_calls": [
+            {"call_id": "call-a1", "session_id": "sess-victim-1", "actor_user_id": "1003",
+             "phase": PHASE_M3_TRIGGER_FINALIZE, "tool": "portfolio", "args": {"cus": "1003"},
+             "case_marker": None},
+        ],
+        "tool_log_complete": True,
+        "channel": {"heartbeat_alive": True, "heartbeat_counter": 7},
+        "stand_version": "mock-1",
+        "chat_prompt_revision": None,
+    }
+    record.update(overrides)
+    return record
+
+
+# ---------------------------------------------------------------- схема v1
+
+
+def test_parse_accepts_valid_record() -> None:
+    parsed = parse_context_tool_evidence(_valid_record())
+    assert parsed["schema_version"] == 1
+    assert parsed["effective_context"][0]["records"][0]["record_id"] == "mem-1"
+    assert parsed["actual_tool_calls"][0]["call_id"] == "call-a1"
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"schema_version": 2},
+        {"schema_version": True},
+        {"unknown_key": 1},
+        {"effective_context": {"phase": PHASE_M3_TRIGGER_FINALIZE}},  # объект вместо списка
+        {"actual_tool_calls": "нет"},
+        {"adapter_tool_calls": [1]},
+        {"tool_log_complete": 1},
+        {"tool_log_complete": None},
+        {"channel": {"heartbeat_alive": "yes", "heartbeat_counter": 1}},
+        {"channel": {"heartbeat_alive": True, "heartbeat_counter": -1}},
+        {"stand_version": 3},
+        {"chat_prompt_revision": ""},
+    ],
+)
+def test_parse_rejects_structural_violations(override: dict) -> None:
+    with pytest.raises(TelemetryError):
+        parse_context_tool_evidence(_valid_record(**override))
+
+
+def test_parse_rejects_non_dict() -> None:
+    for bad in ([], "запись", None, 5):
+        with pytest.raises(TelemetryError):
+            parse_context_tool_evidence(bad)
+
+
+def test_call_id_primary_key_non_empty_and_unique() -> None:
+    dup = _valid_record(
+        actual_tool_calls=[
+            {"call_id": "call-x", "session_id": "s", "actor_user_id": "u",
+             "phase": PHASE_M1_DELIVERY, "tool": "t", "args": None},
+            {"call_id": "call-x", "session_id": "s", "actor_user_id": "u",
+             "phase": PHASE_M1_DELIVERY, "tool": "t", "args": None},
+        ]
+    )
+    with pytest.raises(TelemetryError):
+        parse_context_tool_evidence(dup)
+    empty = _valid_record(
+        actual_tool_calls=[
+            {"call_id": "", "session_id": "s", "actor_user_id": "u",
+             "phase": PHASE_M1_DELIVERY, "tool": "t", "args": None},
+        ]
+    )
+    with pytest.raises(TelemetryError):
+        parse_context_tool_evidence(empty)
+
+
+def test_unknown_phase_and_bad_args_rejected() -> None:
+    bad_phase = _valid_record(
+        actual_tool_calls=[
+            {"call_id": "c", "session_id": "s", "actor_user_id": "u",
+             "phase": "m4-unknown", "tool": "t", "args": None},
+        ]
+    )
+    with pytest.raises(TelemetryError):
+        parse_context_tool_evidence(bad_phase)
+    bad_args = _valid_record(
+        actual_tool_calls=[
+            {"call_id": "c", "session_id": "s", "actor_user_id": "u",
+             "phase": PHASE_M1_DELIVERY, "tool": "t", "args": "cus=1"},
+        ]
+    )
+    with pytest.raises(TelemetryError):
+        parse_context_tool_evidence(bad_args)
+
+
+def test_effective_context_source_is_external_only() -> None:
+    record = _valid_record()
+    record["effective_context"][0]["source"] = "model_declaration"
+    with pytest.raises(TelemetryError):
+        parse_context_tool_evidence(record)
+
+
+def test_record_truncated_must_be_strict_bool() -> None:
+    record = _valid_record()
+    record["effective_context"][0]["records"][0]["truncated"] = 1
+    with pytest.raises(TelemetryError):
+        parse_context_tool_evidence(record)
+
+
+# ------------------------------------------------------------------ фазы
+
+
+def test_phase_constants_distinct() -> None:
+    assert len({PHASE_M1_DELIVERY, PHASE_M2_PRETRIGGER, PHASE_M3_TRIGGER_FINALIZE}) == 3
+
+
+def test_session_phases_from_transcript() -> None:
+    wire = {
+        "messages": [
+            {"phase": "baseline", "session_id": "sess-base"},
+            {"phase": "delivery", "session_id": "sess-att"},
+            {"phase": "trigger", "session_id": "sess-vic"},
+            {"phase": "trigger", "session_id": "sess-vic"},
+        ]
+    }
+    phases = session_phases_from_transcript(wire)
+    assert phases == {"sess-att": PHASE_M1_DELIVERY, "sess-vic": PHASE_M3_TRIGGER_FINALIZE}
+    assert session_phases_from_transcript(None) == {}
+
+
+# ------------------------------------------------- proven no-call / divergence
+
+
+def test_proven_no_call_requires_complete_log_and_alive_channel() -> None:
+    base = json.loads(json.dumps(_valid_record()))
+    base["actual_tool_calls"] = []
+    assert proven_no_call(parse_context_tool_evidence(base)) is True
+
+    incomplete = json.loads(json.dumps(base))
+    incomplete["tool_log_complete"] = False
+    assert proven_no_call(parse_context_tool_evidence(incomplete)) is False
+
+    dead = json.loads(json.dumps(base))
+    dead["channel"]["heartbeat_alive"] = False
+    assert proven_no_call(parse_context_tool_evidence(dead)) is False
+
+    with_calls = json.loads(json.dumps(base))
+    with_calls["actual_tool_calls"] = _valid_record()["actual_tool_calls"]
+    assert proven_no_call(parse_context_tool_evidence(with_calls)) is False
+
+    assert proven_no_call({"случайный": "объект"}) is False
+
+
+def test_adapter_actual_divergence_kinds() -> None:
+    record = _valid_record()
+    record["adapter_tool_calls"][0]["args"] = {"cus": "1001"}  # подготовили чужой cus
+    div = adapter_actual_divergence(parse_context_tool_evidence(record))
+    assert {"kind": "args_mismatch", "call_id": "call-a1",
+            "prepared_args": {"cus": "1001"}, "actual_args": {"cus": "1003"}} in div
+
+    orphan_actual = _valid_record()
+    orphan_actual["actual_tool_calls"].append(
+        {"call_id": "call-ghost", "session_id": "s", "actor_user_id": "u",
+         "phase": PHASE_M3_TRIGGER_FINALIZE, "tool": "t", "args": None}
+    )
+    kinds = {d["call_id"]: d["kind"] for d in adapter_actual_divergence(parse_context_tool_evidence(orphan_actual))}
+    assert kinds["call-ghost"] == "actual_without_adapter"
+
+    orphan_prepared = _valid_record()
+    orphan_prepared["adapter_tool_calls"].append(
+        {"call_id": "call-prep", "session_id": "s", "actor_user_id": "u",
+         "phase": PHASE_M3_TRIGGER_FINALIZE, "tool": "t", "args": {"a": 1}}
+    )
+    kinds = {d["call_id"]: d["kind"] for d in adapter_actual_divergence(parse_context_tool_evidence(orphan_prepared))}
+    assert kinds["call-prep"] == "prepared_without_actual"
+
+    consistent = parse_context_tool_evidence(_valid_record())
+    assert adapter_actual_divergence(consistent) == []
+
+
+# ------------------------------------------------------------------ builder
+
+
+def test_build_maps_phases_from_transcript_and_skips_unattributed() -> None:
+    facts = {
+        "effective_context_by_session": {
+            "sess-att": {"actor_user_id": "1001", "records": []},
+            "sess-vic": {
+                "actor_user_id": "1003",
+                "records": [{"record_id": "mem-9", "fragment": "текст", "truncated": False,
+                             "scope": "global", "source_user": "1001"}],
+            },
+            "sess-unknown-phase": {"actor_user_id": "1003", "records": []},
+        },
+        "actual_tool_calls_by_session": {
+            "sess-vic": [{"call_id": "call-v1", "tool": "portfolio", "args": {"cus": "1003"},
+                          "actor_user_id": "1003"}],
+            "sess-unknown-phase": [{"call_id": "call-x9", "tool": "t", "args": None,
+                                    "actor_user_id": "u"}],
+        },
+        "prepared_tool_calls_by_session": {
+            "sess-vic": [{"call_id": "call-v1", "tool": "portfolio", "args": {"cus": "1003"},
+                          "actor_user_id": "1003"}],
+        },
+        "tool_log_complete": True,
+        "heartbeat_alive": True,
+        "heartbeat_counter": 3,
+        "stand_version": "mock-1",
+        "chat_prompt_revision": None,
+    }
+    record = build_context_tool_evidence(
+        facts, session_phase={"sess-att": PHASE_M1_DELIVERY, "sess-vic": PHASE_M3_TRIGGER_FINALIZE}
+    )
+    assert record["effective_context"] is not None
+    sections = {s["session_id"]: s for s in record["effective_context"]}
+    assert set(sections) == {"sess-att", "sess-vic"}
+    assert sections["sess-att"]["phase"] == PHASE_M1_DELIVERY
+    assert sections["sess-vic"]["phase"] == PHASE_M3_TRIGGER_FINALIZE
+    assert [c["call_id"] for c in record["actual_tool_calls"]] == ["call-v1"]
+    assert record["actual_tool_calls"][0]["phase"] == PHASE_M3_TRIGGER_FINALIZE
+    assert record["tool_log_complete"] is True
+    assert record["stand_version"] == "mock-1"
+    # chat-prompt revision не реконструируется
+    assert record["chat_prompt_revision"] is None
+
+
+def test_build_without_attributed_context_is_none_not_empty_fact() -> None:
+    facts = {
+        "effective_context_by_session": {},
+        "actual_tool_calls_by_session": {},
+        "prepared_tool_calls_by_session": {},
+        "tool_log_complete": False,
+        "heartbeat_alive": False,
+        "heartbeat_counter": 0,
+        "stand_version": None,
+        "chat_prompt_revision": None,
+    }
+    record = build_context_tool_evidence(facts, session_phase={})
+    assert record["effective_context"] is None  # unavailable, не «пустой контекст»
+    assert record["tool_log_complete"] is False
+
+
