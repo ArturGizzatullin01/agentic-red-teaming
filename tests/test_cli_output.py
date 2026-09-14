@@ -125,6 +125,11 @@ def _tty_opts(**kw) -> tuple[OutputOptions, _FakeTTY, io.StringIO]:
 
 def _forget_rich(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
+    # TERM окружения влияет на rich даже при force_terminal: в CI/дамповом
+    # терминале (TERM=dumb) rich корректно не выдаёт ANSI. Production-контракт
+    # («цвет только на рендерящем TTY») соблюдён — тест задаёт цветной TERM
+    # сам, а не зависит от машины (фикс воспроизводимости приёмки).
+    monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.delitem(sys.modules, "rich", raising=False)
     monkeypatch.delitem(sys.modules, "rich.console", raising=False)
 

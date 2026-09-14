@@ -31,9 +31,12 @@ def _scenario():
     )
 
 
-def _run(*, online, attempts=5, budget=50, scripted=None):
+def _run(*, online, attempts=5, budget=50, scripted=None, out=None):
+    """`out` — pytest tmp_path из вызывающего теста: артефакты прогона изолированы
+    и не зависят от чужих файлов/прав в фиксированном каталоге (бывший
+    /tmp/esc-unit на Windows падал PermissionError и зависел от остатков)."""
     cfg = AttackerConfig(provider="stub", scripted=scripted, budget=budget) if online else None
-    campaign = Campaign(_scenario(), MockTarget(vulnerable=True), Path("/tmp/esc-unit"),
+    campaign = Campaign(_scenario(), MockTarget(vulnerable=True), out,
                         attacker_config=cfg, online=online, online_attempts=attempts)
     result = asyncio.run(campaign.run())
     return campaign, result.results[0]
@@ -41,17 +44,17 @@ def _run(*, online, attempts=5, budget=50, scripted=None):
 
 # --------------------------------------------------------------- US2 цикл
 
-def test_online_off_is_not_exploitable_and_zero_calls():
+def test_online_off_is_not_exploitable_and_zero_calls(tmp_path):
     # SC-003: без онлайна атака честно не пробивает, атакующая LLM не создаётся.
-    campaign, r = _run(online=False)
+    campaign, r = _run(online=False, out=tmp_path / "esc")
     assert r.success is False
     assert campaign._attacker_client is None
     assert campaign.attacker_calls == 0
 
 
-def test_online_breaks_on_second_attempt_and_stops():
+def test_online_breaks_on_second_attempt_and_stops(tmp_path):
     # SC-004: атака пробивается адаптацией в пределах лимита; стоп на первом успехе.
-    campaign, r = _run(online=True, attempts=5, scripted=[escalation_stub_script(), escalation_stub_script()])
+    campaign, r = _run(online=True, attempts=5, scripted=[escalation_stub_script(), escalation_stub_script()], out=tmp_path / "esc")
     prov = r.evidence["provenance"]
     assert r.success is True
     assert prov["attempts"] == 2  # корпус (1) + одно переписывание (2)
@@ -59,26 +62,26 @@ def test_online_breaks_on_second_attempt_and_stops():
     assert campaign.attacker_calls == 1  # ровно один вызов (стоп на успехе)
 
 
-def test_attempts_never_exceed_limit():
+def test_attempts_never_exceed_limit(tmp_path):
     # SC-004: число попыток никогда не больше лимита. attempts=1 → ровно одна.
-    _campaign, r = _run(online=True, attempts=1, scripted=[escalation_stub_script()])
+    _campaign, r = _run(online=True, attempts=1, scripted=[escalation_stub_script()], out=tmp_path / "esc")
     assert r.success is False
     assert r.evidence["provenance"]["attempts"] == 1
 
 
-def test_budget_exhaustion_is_graceful_stop():
+def test_budget_exhaustion_is_graceful_stop(tmp_path):
     # FR-010: исчерпание бюджета — штатный стоп (не ошибка). budget=0 → нет
     # переписываний, budget_exhausted=true, результат сохранён, ошибки нет.
-    campaign, r = _run(online=True, attempts=5, budget=0, scripted=[escalation_stub_script()])
+    campaign, r = _run(online=True, attempts=5, budget=0, scripted=[escalation_stub_script()], out=tmp_path / "esc")
     assert r.success is False
     assert r.evidence["provenance"]["budget_exhausted"] is True
     assert campaign.attacker_error is None  # НЕ сбой
 
 
-def test_attacker_failure_sets_error_and_preserves_results():
+def test_attacker_failure_sets_error_and_preserves_results(tmp_path):
     # FR-011/SC-005: сбой атакующей LLM (скрипт пуст → AttackerError) — это НЕ
     # «атака не пробила». Ошибка зафиксирована, результат сохранён.
-    campaign, r = _run(online=True, attempts=5, scripted=[])  # пустой скрипт → AttackerError
+    campaign, r = _run(online=True, attempts=5, scripted=[], out=tmp_path / "esc")  # пустой скрипт → AttackerError
     assert campaign.attacker_error is not None
     assert r is not None  # результат до сбоя сохранён
     assert "attacker_error" in r.evidence["provenance"]
@@ -145,7 +148,7 @@ def test_findings_carry_origin_and_severity_by_attack_class(tmp_path):
 
 def test_online_finding_reports_attempts(tmp_path):
     # SC-007: у онлайновой находки видно число потраченных попыток.
-    campaign, r = _run(online=True, attempts=5, scripted=[escalation_stub_script()])
+    campaign, r = _run(online=True, attempts=5, scripted=[escalation_stub_script()], out=tmp_path / "esc")
     assert r.evidence["provenance"]["attempts"] == 2
     assert r.evidence["provenance"]["origin"] == "online"
 
