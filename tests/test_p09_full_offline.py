@@ -498,3 +498,85 @@ def test_fix3_call_id_match_must_agree_on_context_fields() -> None:
     assert mismatch["kind"] == "context_mismatch"
     assert mismatch["call_id"] == "call-a1"
     assert set(mismatch["fields"]) == {"session_id", "actor_user_id", "phase", "tool"}
+
+
+# ============ RETURN_FOR_FIX 1a6f633: D1 (отсутствующий ключ ≠ пусто) и D2 (дубль секций)
+
+_D1_PHASE = {"sess-A": PHASE_M3_TRIGGER_FINALIZE}
+
+
+def _d1_facts() -> dict:
+    return {
+        "effective_context_by_session": {
+            "sess-A": {"actor_user_id": "1002",
+                       "records": [{"record_id": "r1", "fragment": "x", "truncated": False,
+                                    "scope": "user:1002", "source_user": "1001"}]},
+        },
+        "actual_tool_calls_by_session": {},
+        "prepared_tool_calls_by_session": {},
+        "tool_log_complete": True,
+        "heartbeat_alive": True,
+        "heartbeat_counter": 3,
+        "stand_version": "v1",
+        "chat_prompt_revision": None,
+    }
+
+
+def test_d2_one_session_exactly_one_effective_context_section() -> None:
+    # D2: задвоенный append давал ДВЕ идентичные секции на одну сессию; старые
+    # тесты этого не видели — dict/set-индексация по session_id съедает повтор
+    record = build_context_tool_evidence(_d1_facts(), session_phase=dict(_D1_PHASE))
+    sections = record["effective_context"]
+    assert len(sections) == 1, f"ожидается ровно одна секция, получено {len(sections)}"
+    keys = [(s["session_id"], s["phase"]) for s in sections]
+    assert len(keys) == len(set(keys)), f"дублирующиеся секции: {keys}"
+
+
+def test_d1_missing_facts_key_is_contract_error_not_proven_no_call() -> None:
+    # D1: отсутствующий ключ фактов молча становился пустым {} — при полном
+    # логе и живом канале это давало proven_no_call=True из потерянных данных.
+    # Паритет с wire-парсером: отсутствие ≠ пусто
+    facts = _d1_facts()
+    del facts["actual_tool_calls_by_session"]
+    with pytest.raises(TelemetryError, match="actual_tool_calls_by_session"):
+        build_context_tool_evidence(facts, session_phase=dict(_D1_PHASE))
+
+
+def test_d1_explicit_empty_dict_is_legitimate_proven_no_call() -> None:
+    # позитивный контроль: явный пустой {} легитимен — честный
+    # «доказанный нет-вызов» (полный лог + живой канал)
+    record = build_context_tool_evidence(_d1_facts(), session_phase=dict(_D1_PHASE))
+    assert record["actual_tool_calls"] == []
+    assert proven_no_call(record) is True
+
+
+@pytest.mark.parametrize(
+    ("actual", "tool_log", "alive", "expect"),
+    [
+        ("empty", True, True, True),       # доказанное отсутствие вызова
+        ("empty", False, True, False),     # лог неполон → UNKNOWN, вывода нет
+        ("empty", True, False, False),     # канал мёртв → UNKNOWN, вывода нет
+        ("calls", True, True, False),      # вызов был → не «нет вызова»
+        ("missing", True, True, "error"),  # D1: потерянный ключ ≠ пустой лог
+        ("missing", False, False, "error"),
+    ],
+)
+def test_d1_proven_no_call_truth_table_from_builder(actual, tool_log, alive, expect) -> None:
+    facts = _d1_facts()
+    if actual == "empty":
+        facts["actual_tool_calls_by_session"] = {}
+    elif actual == "calls":
+        facts["actual_tool_calls_by_session"] = {
+            "sess-A": [{"call_id": "call-a", "tool": "portfolio", "args": {"cus": "1002"},
+                        "actor_user_id": "1002"}],
+        }
+    else:
+        del facts["actual_tool_calls_by_session"]
+    facts["tool_log_complete"] = tool_log
+    facts["heartbeat_alive"] = alive
+    if expect == "error":
+        with pytest.raises(TelemetryError, match="actual_tool_calls_by_session"):
+            build_context_tool_evidence(facts, session_phase=dict(_D1_PHASE))
+        return
+    record = build_context_tool_evidence(facts, session_phase=dict(_D1_PHASE))
+    assert proven_no_call(record) is expect
