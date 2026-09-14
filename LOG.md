@@ -5,6 +5,32 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-15 — glm — RETURN_FOR_FIX по d09299a закрыт (фиксы телеметрии/CLI/live-конфигов)
+
+- вердикт Codex: 6 пунктов; все закрыты, каждый RED→GREEN:
+  1-3 (evidence/telemetry.py): строгая схема v1 — ВСЕ ключи верхнего уровня
+  обязательны, отсутствующий ключ отличён от явного null, fragment-не-строка
+  не приводится к ""; наблюдения сессий без фазовой атрибуции больше НЕ
+  выбрасываются молча — TelemetryError → слот unavailable с причиной
+  (реальный unattributed call никогда не даёт proven_no_call=True);
+  baseline исключается ЯВНО (excluded_sessions из транскрипта раннера);
+  call_id-совпадение обязан согласовать session/actor/phase/tool — иначе
+  context_mismatch в divergence
+  4 (investment_stand + campaign): адаптер честно заявляет отсутствие
+  канала (context_tool_evidence()=None, без сети и синтетики); кампания
+  переводит слот в unavailable С ПРИЧИНОЙ в provenance — не absent
+  5 (cli): generate вне репо без --classes — чистый config-error
+  (stderr+exit 1, --json — один объект ошибки), без сырого traceback
+  6 (live-конфиги): порты stack2 9600/28017 (Redis 7379 — сторона стенда),
+  repetitions=1, stop_on_success убран; отдельный L2-конфиг и драйвер
+  scripts/live_clean_control.py (путь жертвы без атакующего payload)
+- проверки: профильный P09-набор 123 passed; полный suite ОДИН раз на
+  a90f737: 815 passed / 0 failed / 0 skipped (24.5s); wheel пересобран
+  (sha256 d1955e69…), повторён затронутый installed-smoke (generate
+  human/json + probe/run/report) — зелёный
+- LIVE: 0/2, не запускался; стенд на 9600/28017 не отвечает, ключей
+  SK_GENAI_* в окружении нет — жду поднятия стенда и ключей от владельца
+
 ### 2026-09-14/15 — glm — R1 завершён + C10 PASS + P09-full offline (feature/p09-full)
 
 - R1: по решению пользователя считается завершённым на локальном `main=f3b4e02`

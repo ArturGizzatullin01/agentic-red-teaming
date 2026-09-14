@@ -18,6 +18,39 @@
 
 ## Журнал
 
+### 2026-09-15 — RETURN_FOR_FIX по d09299a закрыт (новый кандидат 1b77a66)
+
+Вердикт Codex и его пункты → исправления (каждый RED→GREEN, коммиты):
+
+| # | Находка Codex | Исправление | Коммит | Регресс |
+|---|---|---|---|---|
+| 1 | Потерянный вызов становился proven no-call: unattributed-сессии выбрасывались при tool_log_complete=True | сборщик поднимает TelemetryError на ЛЮБЫЕ наблюдения без фазовой атрибуции (calls и context); кампания → слот unavailable + причина; baseline исключается ЯВНО (excluded_sessions из транскрипта раннера) | `a90f737` | unattributed call никогда не даёт proven_no_call=True (3 теста) |
+| 2 | «Строгая» схема принимала отсутствующие ключи; fragment-не-строка превращался в "" | все ключи верхнего уровня обязательны; отсутствующий ключ ≠ явный null (null легитимен только для unavailable/unknown-полей); fragment обязан быть строкой | `a90f737` | 4 негативных теста |
+| 3 | call_id-совпадение считалось полным без сверки контекста | совпавший call_id обязан согласовать session_id/actor_user_id/phase/tool; расхождение → `context_mismatch` в divergence | `a90f737` | одинаковые call_id+args при разных session/actor/phase/tool → context_mismatch |
+| 4 | InvestmentStandAdapter не реализовал канал; на live слот был бы absent | метод `context_tool_evidence()` = None (канала нет, синтетика запрещена, сеть не дёргается); кампания: None → **unavailable с причиной** в provenance | `917bd9e` | настоящий тип адаптера без сети: слот unavailable, причина «фактов не отдал» |
+| 5 | installed generate вне репо без --classes — сырой traceback | чистый config-error: stderr `[FATAL]`-подсказка, exit 1; `--json` — один объект ошибки; дефолт `attack_classes/` задокументирован как cwd-относительный | `a239a5c` | 2 теста (human + json), затем installed-повтор |
+| 6 | live-конфиги: старые порты, repetitions 5 | L1 `cross_user_bac_live.yaml`: API 9600, Mongo 28017 (Redis 7379 — сторона stack2), **repetitions=1**, stop_on_success убран; L2 `live_clean_control.yaml` (отдельный чистый контроль) + драйвер `scripts/live_clean_control.py` | `1b77a66` | конфиги, без тестов (ops) |
+
+**Проверки:** профильный P09-набор **123 passed**; полный suite ОДИН раз на
+`a90f737` (последний production-коммит): **815 passed / 0 failed / 0 skipped**
+(24.5s) = 805 + 10 новых. Wheel ПЕРЕСОБРАН
+(sha256 `d1955e69…`), повторён затронутый installed-smoke (generate human/json
++ probe/run/report) — всё зелёное; gate-док обновлён (C10: PASS после
+RETURN_FOR_FIX).
+
+**Live: 0/2, не запускался.** Порты в префлайте были старыми (8600/27017) —
+по исправленным конфигам стенд/Mongo на 9600/28017 сейчас НЕ отвечают, ключи
+SK_GENAI_1001/1002 в окружении процесса отсутствуют. Команды по готовности:
+
+```bash
+# L1 (ровно 1 попытка; после инфраструктурной ошибки НЕ повторять):
+PYTHONPATH=src python -m memnotsafe.cli run \
+  --scenario scenarios/cross_user_bac_live.yaml --output runs/live-L1 --json
+# L2 (последний прогон):
+PYTHONPATH=src python scripts/live_clean_control.py \
+  --config scenarios/live_clean_control.yaml --output runs/live-L2
+```
+
 ### 2026-09-14 — реализация (7 коммитов по плану)
 
 | Коммит | Содержание |

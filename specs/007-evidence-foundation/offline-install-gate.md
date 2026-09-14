@@ -1,8 +1,35 @@
 # Offline-проверка установки CLI — C10 gate
 
-Дата: 2026-09-14 · Кандидат: `evidence/foundation` @ `4ee868a`+ · Блок: Evidence Foundation
+Дата: 2026-09-14/15 · Кандидат: `feature/p09-full` @ `1b77a66` (фиксы RETURN_FOR_FIX d09299a)
 
-## Вердикт (финал, 2026-09-14, сессия после сетевого разрешения): PASS
+## Вердикт (финал, 2026-09-15, после RETURN_FOR_FIX): PASS
+
+История: PASS (2026-09-14) → приёмкой Codex переведён в RETURN_FOR_FIX —
+installed `generate` вне репозитория без `--classes` давал сырой traceback
+(нарушение контракта runtime/config error). Исправлено в `a2399a5c`-линейке
+(коммит `a239a5c`), wheel ПЕРЕСОБРАН из исправленного дерева, повторён
+ЗАТРОНУТЫЙ installed-smoke:
+
+- wheel пересобран: `memnotsafe-0.1.0-py3-none-any.whl`, sha256
+  `d1955e69d8c643ea7b03ed7570fb36b470c82ccaa4bcd05c61e2ce21d17cfdc2`
+  (был `270c73a2…`); установлен в НОВЫЙ чистый venv строго
+  `--no-index --find-links`; `pip check` — чисто;
+- `memnotsafe.__file__` → site-packages чистого venv (PYTHONPATH снят, cwd
+  `$env:TEMP\c10-preview\smoke-cwd` — вне исходников);
+- generate (installed, cwd вне репо, без `--classes`) → **exit 1, stderr
+  `[FATAL] … --classes <dir> …`, 0 байт traceback**; с реальным
+  `--classes` → exit 0; `--json`-режим ошибки → stdout пуст, stderr —
+  ровно один JSON-объект `{schema_version, command, outcome:"error",
+  exit_code:1, data, artifacts}`;
+- регресс затронутой зоны: probe --json (0 ANSI, stderr пуст), protected
+  run → exit 0 + NOT_EXPLOITABLE, report → exit 0 — все из установленного
+  пакета.
+
+Дальнейшее — история предыдущего PASS (2026-09-14, wheel `270c73a2…`).
+
+---
+
+## Предыдущий вердикт (2026-09-14): PASS (частично отозван приёмкой — см. выше)
 
 Разрешение пользователя: «Разрешаю одну сетевую сессию C10 для скачивания
 зависимостей и сборки wheel. Live и платные LLM-вызовы не разрешаю».
