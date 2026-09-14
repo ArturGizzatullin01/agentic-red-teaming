@@ -335,16 +335,17 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     campaign = load_campaign(input_dir)
 
-    # P10a (фича 007): пакеты доказательств верифицируются при наличии.
-    # Повреждённый/подменённый артефакт или НЕЗАВЕРШЁННЫЙ каталог пакета (без
-    # manifest.json) — runtime-ошибка данных → exit 1 (console-output.md,
-    # строка «runtime/config error»); незавершённый не маскируется под
-    # завершённый и не прозевать его replay'ем. Исторические runs без
-    # bundles/ проходят как раньше (0 пакетов — не ошибка).
-    from memnotsafe.evidence.bundle import BundleError, verify_run_bundles
+    # P10a (фича 007): доказательственная база прогона проверяется при
+    # наличии. Повреждённый/подменённый артефакт, НЕЗАВЕРШЁННЫЙ каталог пакета
+    # (без manifest.json), evidence_error в attempts.jsonl (в т.ч. сбой записи
+    # ДО создания каталога — иначе replay видел бы только пустоту) или
+    # завершённая попытка без пакета — runtime-ошибка данных → exit 1
+    # (console-output.md, строка «runtime/config error»). Исторические runs
+    # без bundles/ и attempts.jsonl проходят как раньше (0 пакетов — не ошибка).
+    from memnotsafe.evidence.bundle import BundleError, verify_run_evidence
 
     try:
-        verify_run_bundles(input_dir)
+        verify_run_evidence(input_dir)
     except BundleError as exc:
         reporter.emit_error(command="report", message=str(exc))
         return 1

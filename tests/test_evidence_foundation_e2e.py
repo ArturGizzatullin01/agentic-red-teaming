@@ -269,6 +269,48 @@ def test_incomplete_bundle_is_not_mistaken_for_complete(tmp_path, capsys) -> Non
     assert "незавершённый" in json.loads(captured.err)["data"]["message"]
 
 
+def test_bundle_failure_before_mkdir_replay_exit_1(tmp_path, capsys, monkeypatch) -> None:
+    """E2E (фикс приёмки P1-2, повтор): сбой записи пакета ДО создания каталога
+    (OSError на mkdir) — evidence_error в истории, каталогов нет; replay обязан
+    вернуть exit 1, а не «успешно ноль пакетов»."""
+    from memnotsafe.evidence import bundle as bundle_mod
+
+    def disk_full(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(bundle_mod, "write_bundle", disk_full)
+    rc = cli.main(["run", "--scenario", str(_SCENARIOS / "cross_user_bac.yaml"),
+                   "--output", str(tmp_path / "run")])
+    captured = capsys.readouterr()
+    assert rc == 0  # результаты сохранены штатно
+    out = tmp_path / "run"
+    assert find_bundles(out) == {}  # каталогов нет — прежняя проверка слепа
+    assert any(e.outcome == "evidence_error"
+               for e in read_history(out / "attempts.jsonl"))
+
+    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1  # replay НЕ проходит с пустым stderr
+    assert captured.out == ""
+    assert "не записан" in json.loads(captured.err)["data"]["message"]
+
+
+def test_completed_attempt_without_bundle_detected(tmp_path, capsys) -> None:
+    """«Наличие ожидаемых пакетов»: завершённая попытка, чей пакет удалён,
+    обнаруживается сверкой с attempts.jsonl → replay exit 1."""
+    rc = cli.main(["run", "--scenario", str(_SCENARIOS / "cross_user_bac.yaml"),
+                   "--output", str(tmp_path / "run")])
+    assert rc == 0
+    capsys.readouterr()
+    out = tmp_path / "run"
+    case_dir = next(iter(find_bundles(out).values()))
+    shutil.rmtree(case_dir)
+    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "нет пакета доказательств" in json.loads(captured.err)["data"]["message"]
+
+
 # ------------------------------------------------- 8) повреждение артефакта
 
 def test_corrupted_artifact_detected_by_replay(tmp_path, capsys) -> None:
@@ -279,7 +321,8 @@ def test_corrupted_artifact_detected_by_replay(tmp_path, capsys) -> None:
     out = tmp_path / "run"
     case_dir = next(iter(find_bundles(out).values()))
     artifact = next(case_dir.joinpath("artifacts").iterdir())
-    artifact.write_text('{"подменено": true}', encoding="utf-8")
+    original = artifact.read_bytes()
+    artifact.write_bytes(b"X" * len(original))  # подмена ТОГО ЖЕ размера: ловит sha256, не размер
 
     # report --json: stdout пуст, JSON-ошибка в stderr, exit 1 (таблица контракта)
     rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])

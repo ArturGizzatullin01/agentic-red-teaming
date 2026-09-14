@@ -206,6 +206,40 @@ def test_manifest_missing_slot_entries_rejected(tmp_path) -> None:
         read_bundle(tmp_path / "bundle")
 
 
+def test_negative_bytes_rejected(tmp_path) -> None:
+    """Фикс приёмки P2: bytes=-17 больше не проходит — размер обязан быть
+    неотрицательным целым."""
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["slots"]["m0"]["bytes"] = -17
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="размером"):
+        read_bundle(tmp_path / "bundle")
+
+
+def test_bytes_mismatch_detected_even_with_valid_sha256(tmp_path) -> None:
+    """Фактический размер сверяется с манифестом: усечение/дозапись с
+    НЕпересчитанным манифестом ловится размером, не только sha256."""
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["slots"]["m0"]["bytes"] = 999999
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="размеру"):
+        read_bundle(tmp_path / "bundle")
+
+
+def test_malformed_sha256_rejected(tmp_path) -> None:
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["slots"]["m0"]["sha256"] = "ABCDEF"  # не hex-64 нижнего регистра
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="sha256"):
+        read_bundle(tmp_path / "bundle")
+
+
 def test_verify_run_bundles_fails_on_incomplete_dir(tmp_path) -> None:
     """Фикс приёмки P1: каталог пакета без манифеста НЕ проскальзывает мимо
     верификации — verify_run_bundles роняет его как незавершённый."""

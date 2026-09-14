@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,6 +52,11 @@ STATUS_UNAVAILABLE = "unavailable"
 class BundleError(ValueError):
     """Контрактное нарушение пакета: незавершён, чужая версия, путь вне пакета,
     повреждённый или подменённый артефакт. Диагностическая ошибка, не краш."""
+
+
+# sha256 в манифесте — только 64 hex-символа в нижнем регистре (формат
+# hashlib.hexdigest); верхний регистр/короткие/нечислобуквенные — отказ.
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _sha256_file(path: Path) -> str:
@@ -214,7 +220,9 @@ def _safe_rel_path(bundle_dir: Path, rel: str) -> Path:
 def _validate_slot_record(bundle_dir: Path, name: str, rec: SlotRecord) -> None:
     """ОБЯЗАТЕЛЬНАЯ валидация записи слота в манифесте (фикс приёмки P1):
     present без path/sha256/bytes, неизвестный статус или неизвестное имя
-    слота — контрактное нарушение, а не «пропуск проверки checksum»."""
+    слота — контрактное нарушение, а не «пропуск проверки checksum».
+    Фикс приёмки P2: строгие типы и диапазоны — sha256 только нижний hex-64,
+    bytes только неотрицательное целое."""
     if name not in BUNDLE_SLOTS:
         raise BundleError(f"пакет {bundle_dir}: неизвестный слот {name!r} в манифесте")
     if rec.status not in (STATUS_PRESENT, STATUS_ABSENT, STATUS_UNAVAILABLE):
@@ -222,13 +230,19 @@ def _validate_slot_record(bundle_dir: Path, name: str, rec: SlotRecord) -> None:
     if rec.status == STATUS_PRESENT:
         if not rec.path:
             raise BundleError(f"пакет {bundle_dir}: слот {name!r} present без пути — манифест неполон")
-        if not rec.sha256:
+        if (
+            not isinstance(rec.sha256, str)
+            or _SHA256_RE.fullmatch(rec.sha256) is None
+        ):
             raise BundleError(
-                f"пакет {bundle_dir}: слот {name!r} present без sha256 — проверка checksum "
-                "обязательна, манифест без неё не принимается"
+                f"пакет {bundle_dir}: слот {name!r} present с некорректным sha256 "
+                "(ожидается 64 hex-символа в нижнем регистре) — манифест неполон"
             )
-        if not rec.bytes:
-            raise BundleError(f"пакет {bundle_dir}: слот {name!r} present без размера — манифест неполон")
+        if isinstance(rec.bytes, bool) or not isinstance(rec.bytes, int) or rec.bytes < 0:
+            raise BundleError(
+                f"пакет {bundle_dir}: слот {name!r} present с некорректным размером "
+                f"{rec.bytes!r} (ожидается неотрицательное целое) — манифест неполон"
+            )
 
 
 def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundle:
@@ -264,11 +278,20 @@ def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundl
             artifact = _safe_rel_path(bundle_dir, rec.path)
             if not artifact.exists():
                 raise BundleError(f"пакет {bundle_dir}: артефакт слота {name!r} отсутствует: {rec.path}")
-            if verify and _sha256_file(artifact) != rec.sha256:
-                raise BundleError(
-                    f"пакет {bundle_dir}: артефакт слота {name!r} повреждён или подменён "
-                    f"(sha256 не совпал: {rec.path})"
-                )
+            if verify:
+                # Фактический размер сверяется с заявленным ДО checksum: подмена
+                # контента с пересчитанным манифестом ловится sha256, усечение/
+                # дозапись с НЕпересчитанным манифестом — размером (фикс P2).
+                if artifact.stat().st_size != rec.bytes:
+                    raise BundleError(
+                        f"пакет {bundle_dir}: артефакт слота {name!r} не совпадает по размеру "
+                        f"с манифестом ({artifact.stat().st_size} != {rec.bytes}): {rec.path}"
+                    )
+                if _sha256_file(artifact) != rec.sha256:
+                    raise BundleError(
+                        f"пакет {bundle_dir}: артефакт слота {name!r} повреждён или подменён "
+                        f"(sha256 не совпал: {rec.path})"
+                    )
         slots[name] = rec
     missing_required = [s for s in BUNDLE_SLOTS if s not in slots]
     if missing_required:
@@ -330,3 +353,35 @@ def verify_run_bundles(run_dir: str | Path) -> int:
     for path in (Path(run_dir) / "bundles" / name for name in sorted(states)):
         read_bundle(path)
     return len(states)
+
+
+def verify_run_evidence(run_dir: str | Path) -> int:
+    """Полная проверка доказательственной базы прогона (фикс приёмки P1-2):
+    (а) верификация всех пакетов — verify_run_bundles; (б) сверка с историей
+    попыток: evidence_error в attempts.jsonl (в т.ч. сбой ДО создания каталога
+    пакета, когда verеfi_run_bundles видно лишь пустоту) и завершённая попытка
+    без пакета — BundleError. Возвращает число завершённых пакетов."""
+    count = verify_run_bundles(run_dir)
+    from memnotsafe.core.attempt import (
+        COMPLETED_OUTCOMES,
+        OUTCOME_EVIDENCE_ERROR,
+        read_history,
+    )
+
+    entries = read_history(Path(run_dir) / "attempts.jsonl")
+    failed = [e for e in entries if e.outcome == OUTCOME_EVIDENCE_ERROR]
+    if failed:
+        raise BundleError(
+            f"пакет доказательств не записан для {failed[0].candidate_id}: {failed[0].error}"
+        )
+    missing = [
+        e.candidate_id
+        for e in entries
+        if e.attempt_no >= 1 and e.outcome in COMPLETED_OUTCOMES
+        and not (Path(run_dir) / "bundles" / e.candidate_id / "manifest.json").exists()
+    ]
+    if missing:
+        raise BundleError(
+            f"у завершённой попытки нет пакета доказательств: bundles/{missing[0]}"
+        )
+    return count

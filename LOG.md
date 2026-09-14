@@ -5,6 +5,22 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14 — glm — evidence/foundation: второй RETURN_FOR_FIX закрыт (хвосты P1-2 и P2)
+
+- P1-2 хвост (сбой пакета ДО mkdir был невидим replay): verify_run_evidence(run_dir) —
+  пакетная верификация + сверка с attempts.jsonl: (а) любая запись evidence_error →
+  BundleError «пакет не записан»; (б) завершённая попытка без пакета → «нет пакета
+  доказательств»; cmd_report вызовет именно её → exit 1 с сообщением в stderr (JSON-контракт
+  соблюдён, stdout пуст)
+- P2 хвост (bytes=-17 принимался, hex-формата не было): строгие типы/диапазоны в
+  _validate_slot_record — sha256 только [0-9a-f]{64}, bytes только неотрицательное int
+  (bool отклонён); read_bundle сверяет ФАКТИЧЕСКИЙ размер артефакта с манифестом до
+  checksum (усечение/дозапись без пересчёта манифеста ловится размером)
+- тесты: +7 (bytes=-17, bytes-мисматч при валидном sha256, некорректный sha256-формат,
+  e2e «ошибка до mkdir → replay exit 1», e2e «завершённая попытка без пакета», уточнение
+  e2e порчи — подмена того же размера для checksum-пути); полный набор 746 passed
+- коммит: см. HEAD (поверх 1eae486)
+
 ### 2026-09-14 — glm — evidence/foundation: фиксы RETURN_FOR_FIX ( Codex-приёмка c3c586b)
 
 - P1-1 (checksum обходился): read_bundle валидирует манифест ЦЕЛИКОМ — present без
