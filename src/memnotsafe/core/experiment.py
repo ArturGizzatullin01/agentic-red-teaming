@@ -165,10 +165,13 @@ def build_experiment_spec(
     attacker_config=None,
     online: bool = False,
     online_attempts: int = 5,
+    stand_version: str | None = None,
 ) -> ExperimentSpec:
     """Собирает spec из конфигурации кампании. Всё неизвестное — "unknown".
     Значения секретов недоступны по построению: config несёт только имена
-    переменных окружения."""
+    переменных окружения. stand_version (P09-full) — наблюдение среды:
+    попадает в volatile и в digest НЕ входит, поэтому experiment_id для
+    той же конфигурации не меняется."""
     import memnotsafe.generation.prompts as prompts_module
     from memnotsafe.attacks.base import ATTACK_REGISTRY, get_attack
 
@@ -243,7 +246,12 @@ def build_experiment_spec(
             "oracle_overrides": dict(scenario.oracle_overrides or {}),
             "require_case_marker": scenario.require_case_marker,
         },
-        volatile={"created_at": datetime.now(timezone.utc).isoformat()},
+        # P09-full: версия стенда — летуческое наблюдение среды (вне digest);
+        # chat-prompt revision остаётся unknown, пока стенд не отдаёт её явно.
+        volatile={
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "stand_version": stand_version,
+        },
     )
     object.__setattr__(spec, "experiment_id", sha256_hex(spec.digest_source()))
     return spec

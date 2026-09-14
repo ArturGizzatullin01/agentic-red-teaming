@@ -123,11 +123,22 @@ class Campaign:
         # с этой конфигурацией. Летучие поля и секреты в digest не входят.
         from memnotsafe.core.experiment import build_experiment_spec, write_experiment
 
+        # P09-full: версия стенда — duck-typed наблюдение (факты адаптера);
+        # в volatile, на digest не влияет.
+        stand_version: str | None = None
+        facts_getter = getattr(self.target, "context_tool_evidence", None)
+        if callable(facts_getter):
+            try:
+                stand_version = facts_getter().get("stand_version")
+            except Exception:  # noqa: BLE001 — телеметрия среды не роняет прогон
+                stand_version = None
+
         spec = build_experiment_spec(
             self.scenario,
             attacker_config=self.attacker_config,
             online=self.online,
             online_attempts=self.online_attempts,
+            stand_version=stand_version,
         )
         self.experiment_id = spec.experiment_id
         write_experiment(self.output_dir, spec)
@@ -224,7 +235,14 @@ class Campaign:
             )
 
             # Провенанс происхождения — слоем кампании, а не раннером (research §12).
-            result.evidence["provenance"] = dict(provenance)
+            # Заметки телеметрии P09-full (context_tool_evidence_error), уже
+            # лежащие в evidence.provenance, не затираются — сливаются аддитивно.
+            prov_final = dict(provenance)
+            prov_final.update({
+                k: v for k, v in (result.evidence.get("provenance") or {}).items()
+                if k not in prov_final
+            })
+            result.evidence["provenance"] = prov_final
 
             # Онлайн-эскалация (US2): вокруг немодифицированного run_attack. При
             # выключенном онлайн-уровне возвращает result как есть (SC-003).
@@ -495,6 +513,26 @@ class Campaign:
         trace_file = self.output_dir / "traces" / f"{candidate_id}.json"
         # рукописная/нестандартная цель → None: digest не выдумываем
         goal_digest = goal_digest_or_none(candidate.get("expected_effect"))
+        # P09-full: слот context_tool_evidence — ФАКТЫ эффективного контекста
+        # и аргументов (адаптер/фактические), фазы — из транскрипта раннера.
+        # Адаптер без канала → слот не упоминается (absent, «не предусмотрен»);
+        # канал есть, данных нет → unavailable; сбой канала → unavailable +
+        # причина в provenance. Никакая телеметрия не роняет прогон.
+        ctx_tool: dict | None = None
+        facts_getter = getattr(self.target, "context_tool_evidence", None)
+        if callable(facts_getter):
+            from memnotsafe.evidence.telemetry import build_context_tool_evidence, session_phases_from_transcript
+
+            try:
+                ctx_tool = build_context_tool_evidence(
+                    facts_getter(),
+                    session_phase=session_phases_from_transcript(ev.get("transcript")),
+                )
+            except Exception as exc:  # noqa: BLE001 — см. границу честности выше
+                prov = dict(ev.get("provenance") or {})
+                prov["context_tool_evidence_error"] = f"{type(exc).__name__}: {exc}"
+                ev["provenance"] = prov
+                ctx_tool = None
         try:
             write_bundle(
                 self.output_dir / "bundles" / candidate_id,
@@ -515,6 +553,7 @@ class Campaign:
                     "candidate": candidate or None,
                     "memory_diff": ev.get("diff_m0_m1"),
                     "tool_events": tool_events or None,
+                    **({"context_tool_evidence": ctx_tool} if facts_getter is not None else {}),
                 },
                 files={"trace": trace_file if trace_file.exists() else None},
             )
