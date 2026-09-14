@@ -333,6 +333,22 @@ def test_corrupted_artifact_detected_by_replay(tmp_path, capsys) -> None:
     assert "повреждён" in json.loads(captured.err)["data"]["message"]
 
 
+def test_corrupt_attempts_jsonl_replay_exit_1(tmp_path, capsys) -> None:
+    """Повреждённый attempts.jsonl — runtime-ошибка данных: report exit 1 с
+    понятным сообщением, не сырой traceback (фикс аудита)."""
+    rc = cli.main(["run", "--scenario", str(_SCENARIOS / "cross_user_bac.yaml"),
+                   "--output", str(tmp_path / "run")])
+    assert rc == 0
+    capsys.readouterr()
+    out = tmp_path / "run"
+    (out / "attempts.jsonl").write_text("{oops", encoding="utf-8")
+    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "attempts.jsonl" in json.loads(captured.err)["data"]["message"]
+
+
 # ------------------------------------------------- 9) исторический run
 
 def test_historical_run_without_new_artifacts(tmp_path, capsys) -> None:

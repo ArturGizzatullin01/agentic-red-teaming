@@ -71,6 +71,7 @@ class ExperimentSpec:
     delivery: dict
     budgets: dict
     file_digests: dict
+    runner: dict = field(default_factory=dict)
     volatile: dict = field(default_factory=dict)
 
     def _digest_payload(self) -> dict:
@@ -84,6 +85,7 @@ class ExperimentSpec:
             "corpus": self.corpus,
             "delivery": self.delivery,
             "budgets": self.budgets,
+            "runner": self.runner,
             "file_digests": self.file_digests,
         }
 
@@ -118,6 +120,7 @@ class ExperimentSpec:
             corpus=data.get("corpus"),
             delivery=dict(data.get("delivery") or {}),
             budgets=dict(data.get("budgets") or {}),
+            runner=dict(data.get("runner") or {}),
             file_digests=dict(data.get("file_digests") or {}),
             volatile=dict(data.get("volatile") or {}),
         )
@@ -206,6 +209,14 @@ def build_experiment_spec(
         file_digests={
             "scenario_yaml": file_sha256(scenario.path) or UNKNOWN,
             "attack_family_source": family_file or UNKNOWN,
+        },
+        # Эффективные параметры запуска (фикс аудита): изменение любого
+        # оверрайда создаёт новый эксперимент.
+        runner={
+            "stop_on_success": bool(scenario.stop_on_success),
+            "trigger_override": scenario.trigger_override,
+            "oracle_overrides": dict(scenario.oracle_overrides or {}),
+            "require_case_marker": scenario.require_case_marker,
         },
         volatile={"created_at": datetime.now(timezone.utc).isoformat()},
     )

@@ -186,24 +186,25 @@ class AttemptHistory:
         return rec
 
     def entries(self) -> list[AttemptRecord]:
-        if not self.path.exists():
-            return []
-        out: list[AttemptRecord] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                out.append(AttemptRecord.from_dict(json.loads(line)))
-        return out
+        return read_history(self.path)
 
 
 def read_history(path: str | Path) -> list[AttemptRecord]:
-    """Толерантное чтение: файла нет (исторический run) → пустой список."""
+    """Толерантное чтение: файла нет (исторический run) → пустой список.
+    Повреждённая строка — КОНТРАКТНАЯ ошибка AttemptHistoryError с номером
+    строки (не сырой JSONDecodeError): недописанная/подменённая история не
+    маскируется под пустую или полноценную."""
     p = Path(path)
     if not p.exists():
         return []
     records = []
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for no, line in enumerate(p.read_text(encoding="utf-8").splitlines(), start=1):
         line = line.strip()
-        if line:
-            records.append(AttemptRecord.from_dict(json.loads(line)))
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise AttemptHistoryError(f"{path}: строка {no} — не JSON: {exc}") from exc
+        records.append(AttemptRecord.from_dict(data))
     return records

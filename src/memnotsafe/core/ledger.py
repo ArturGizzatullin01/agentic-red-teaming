@@ -140,13 +140,20 @@ class BudgetLedger:
 
 
 def read_ledger(path: str | Path) -> list[LedgerEntry]:
-    """Толерантное чтение: файла нет (исторический run) → пустой список."""
+    """Толерантное чтение: файла нет (исторический run) → пустой список.
+    Повреждённая строка — LedgerError с номером строки: недописанный/подменённый
+    леджер не маскируется под пустой (симметрично read_history)."""
     p = Path(path)
     if not p.exists():
         return []
     entries = []
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for no, line in enumerate(p.read_text(encoding="utf-8").splitlines(), start=1):
         line = line.strip()
-        if line:
-            entries.append(LedgerEntry.from_dict(json.loads(line)))
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise LedgerError(f"{path}: строка {no} — не JSON: {exc}") from exc
+        entries.append(LedgerEntry.from_dict(data))
     return entries

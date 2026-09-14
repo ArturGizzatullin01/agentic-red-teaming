@@ -15,10 +15,16 @@
                   в доказанное отсутствие события (Принцип IV).
 
 Чтение (`read_bundle`) отклоняет: отсутствующий/незавершённый манифест,
-чужую schema_version, пути вне пакета и любое несовпадение sha256. Старые
-runs без каталога bundles/ читаются как «пакетов нет» (find_bundles → {}),
-никакие поля за читателя не выдумываются. Replay работает без target и без
-вызовов моделей — пакет это данные, а не живой канал.
+чужую schema_version, некорректные типы/диапазоны полей, пути вне пакета и
+любое несовпадение sha256/размера. Старые runs без каталога bundles/ читаются
+как «пакетов нет» (find_bundles → {}), никакие поля за читателя не
+выдумываются. Replay работает без target и без вызовов моделей — пакет это
+данные, а не живой канал.
+
+Граница честности: sha256/размер доказывают целостность и ловят случайную
+порчу и наивную подмену ФАЙЛА, но не криптографическую подлинность —
+злоумышленник, переписавший и артефакт, и манифест с новым checksum, будет
+пройден. Подпись/внешнее доверенное хранилище — вне скоупа фичи 007.
 
 Секреты в манифест не попадают по построению: пишутся только поля,
 переданные вызывающим слоем явно (идентификаторы, статусы, checksums).
@@ -269,9 +275,16 @@ def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundl
         raise BundleError(f"пакет {bundle_dir}: чужой манифест (kind={raw.get('kind')!r})")
     if not str(raw.get("run_id") or "") or not str(raw.get("case_id") or ""):
         raise BundleError(f"пакет {bundle_dir}: run_id/case_id обязательны — манифест неполон")
+    raw_attempt_no = raw.get("attempt_no")
+    if isinstance(raw_attempt_no, bool) or not isinstance(raw_attempt_no, int) or raw_attempt_no < 0:
+        raise BundleError(
+            f"пакет {bundle_dir}: attempt_no={raw_attempt_no!r} — ожидается неотрицательное целое"
+        )
 
     slots: dict[str, SlotRecord] = {}
     for name, slot_raw in (raw.get("slots") or {}).items():
+        if not isinstance(slot_raw, dict):
+            raise BundleError(f"пакет {bundle_dir}: слот {name!r} — запись манифеста обязана быть объектом")
         rec = SlotRecord.from_dict(slot_raw)
         _validate_slot_record(bundle_dir, name, rec)
         if rec.status == STATUS_PRESENT:
@@ -303,7 +316,7 @@ def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundl
         schema_version=BUNDLE_SCHEMA_VERSION,
         run_id=str(raw.get("run_id") or ""),
         case_id=str(raw.get("case_id") or ""),
-        attempt_no=int(raw.get("attempt_no") or 0),
+        attempt_no=raw_attempt_no,
         experiment_id=raw.get("experiment_id"),
         candidate_id=raw.get("candidate_id"),
         parent_candidate_id=raw.get("parent_candidate_id"),
@@ -368,7 +381,12 @@ def verify_run_evidence(run_dir: str | Path) -> int:
         read_history,
     )
 
-    entries = read_history(Path(run_dir) / "attempts.jsonl")
+    from memnotsafe.core.attempt import AttemptHistoryError
+
+    try:
+        entries = read_history(Path(run_dir) / "attempts.jsonl")
+    except AttemptHistoryError as exc:
+        raise BundleError(str(exc)) from exc
     failed = [e for e in entries if e.outcome == OUTCOME_EVIDENCE_ERROR]
     if failed:
         raise BundleError(

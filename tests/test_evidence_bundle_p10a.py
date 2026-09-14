@@ -24,6 +24,7 @@ from memnotsafe.evidence.bundle import (
     find_bundles,
     read_bundle,
     verify_run_bundles,
+    verify_run_evidence,
     write_bundle,
 )
 
@@ -238,6 +239,52 @@ def test_malformed_sha256_rejected(tmp_path) -> None:
     manifest_path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(BundleError, match="sha256"):
         read_bundle(tmp_path / "bundle")
+
+
+def test_manifest_non_integer_attempt_no_rejected(tmp_path) -> None:
+    """Фикс аудита: attempt_no="x" в манифесте — контрактное нарушение
+    (BundleError), а не сырой ValueError-краш читателя."""
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["attempt_no"] = "x"
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="attempt_no"):
+        read_bundle(tmp_path / "bundle")
+
+
+def test_manifest_slot_entry_non_dict_rejected(tmp_path) -> None:
+    """Фикс аудита: слот-строка вместо объекта — BundleError, не AttributeError."""
+    _write(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["slots"]["m0"] = "garbage"
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="слот"):
+        read_bundle(tmp_path / "bundle")
+
+
+def test_corrupt_history_line_is_contract_error(tmp_path) -> None:
+    """Фикс аудита: мусорная строка в attempts.jsonl — контрактная ошибка
+    AttemptHistoryError с понятным сообщением, не сырой JSONDecodeError."""
+    from memnotsafe.core.attempt import AttemptHistoryError, read_history
+
+    (tmp_path / "attempts.jsonl").write_text('{"schema_version": 1, "case_id": ' + chr(10) + '{oops', encoding="utf-8")
+    with pytest.raises(AttemptHistoryError, match="attempts.jsonl"):
+        read_history(tmp_path / "attempts.jsonl")
+
+
+def test_verify_run_evidence_wraps_history_corruption(tmp_path) -> None:
+    """Битая история попыток не должна валить replay сырым исключением:
+    verify_run_evidence оборачивает в BundleError."""
+    _write(tmp_path)
+    (tmp_path / "bundles" / "CASE-x-001-aaaaaa").mkdir(parents=True, exist_ok=True)
+    import shutil
+
+    shutil.copytree(tmp_path / "bundle", tmp_path / "bundles" / "CASE-x-001-aaaaaa", dirs_exist_ok=True)
+    (tmp_path / "attempts.jsonl").write_text("{oops", encoding="utf-8")
+    with pytest.raises(BundleError, match="attempts.jsonl"):
+        verify_run_evidence(tmp_path)
 
 
 def test_verify_run_bundles_fails_on_incomplete_dir(tmp_path) -> None:

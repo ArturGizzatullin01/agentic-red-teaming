@@ -73,6 +73,33 @@ def test_experiment_id_stable_and_config_sensitive(tmp_path) -> None:
     assert build_experiment_spec(scenario_c).experiment_id != a1.experiment_id
 
 
+def test_runner_overrides_change_experiment_id(tmp_path) -> None:
+    """Фикс аудита: эффективные параметры запуска (stop_on_success,
+    trigger_override, oracle_overrides) входят в spec — их изменение создаёт
+    новый эксперимент (как обещано в докстринге, но отсутствовало в коде)."""
+    base = Scenario(
+        id="cross_user_bac", path=tmp_path / "s.yaml",
+        target=TargetSpec(adapter="mock"),
+        attacker=ActorConfig(user_id="1001"), victim=ActorConfig(user_id="1002"),
+        attack_family="cross_user_bac", repetitions=1,
+    )
+    overridden = Scenario(
+        id="cross_user_bac", path=tmp_path / "s.yaml",
+        target=TargetSpec(adapter="mock"),
+        attacker=ActorConfig(user_id="1001"), victim=ActorConfig(user_id="1002"),
+        attack_family="cross_user_bac", repetitions=1,
+        stop_on_success=True,
+        trigger_override="другой триггер",
+        oracle_overrides={"write": "force_unknown"},
+    )
+    spec_base = build_experiment_spec(base)
+    spec_over = build_experiment_spec(overridden)
+    assert spec_base.experiment_id != spec_over.experiment_id
+    assert spec_over.runner["stop_on_success"] is True
+    assert spec_over.runner["trigger_override"] == "другой триггер"
+    assert spec_base.runner["oracle_overrides"] == {}
+
+
 def test_volatile_fields_outside_digest(tmp_path) -> None:
     s = _scenario(tmp_path)
     spec1 = build_experiment_spec(s)
