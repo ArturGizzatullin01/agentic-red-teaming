@@ -264,6 +264,8 @@ def test_build_maps_phases_and_rejects_unattributed_call() -> None:
     assert record["effective_context"] is not None
     sections = {s["session_id"]: s for s in record["effective_context"]}
     assert set(sections) == {"sess-att", "sess-vic"}
+    # фикс слепого пятна: dict-индексация съедает дубль — считаем секции явно
+    assert len(record["effective_context"]) == 2
     assert sections["sess-att"]["phase"] == PHASE_M1_DELIVERY
     assert sections["sess-vic"]["phase"] == PHASE_M3_TRIGGER_FINALIZE
     assert [c["call_id"] for c in record["actual_tool_calls"]] == ["call-v1"]
@@ -482,6 +484,8 @@ def test_fix1_baseline_sessions_excluded_explicitly_by_runner_authority() -> Non
     )
     sections = {s["session_id"] for s in record["effective_context"]}
     assert sections == {"sess-vic"}
+    # фикс слепого пятна: set-индексация дедуплицирует — считаем секции явно
+    assert len(record["effective_context"]) == 1
 
 
 def test_fix3_call_id_match_must_agree_on_context_fields() -> None:
@@ -580,3 +584,41 @@ def test_d1_proven_no_call_truth_table_from_builder(actual, tool_log, alive, exp
         return
     record = build_context_tool_evidence(facts, session_phase=dict(_D1_PHASE))
     assert proven_no_call(record) is expect
+
+
+_SCENARIOS = Path(__file__).resolve().parents[1] / "scenarios"
+
+
+def test_d1_campaign_broken_facts_slot_unavailable_not_proven_no_call(tmp_path) -> None:
+    # D1 через кампанийный путь (campaign.py не меняется): канал заявлен, но
+    # факты неполны → билдер отказывает (TelemetryError) → кампания обязана
+    # перевести слот в unavailable с причиной в provenance, НЕ уронить прогон
+    # и НЕ допустить «доказанного отсутствия вызовов» из потерянных данных
+    import asyncio
+
+    from memnotsafe.adapters.mock import MockTarget
+    from memnotsafe.core.campaign import Campaign
+    from memnotsafe.core.config import ActorConfig, Scenario, TargetSpec
+    from memnotsafe.evidence.bundle import STATUS_UNAVAILABLE, find_bundles, read_bundle
+
+    class MissingKeyFactsMock(MockTarget):
+        # канал телеметрии заявлен, но ключ фактов потерян (D1-сценарий)
+        def context_tool_evidence(self):
+            facts = dict(super().context_tool_evidence())
+            del facts["actual_tool_calls_by_session"]
+            return facts
+
+    scenario = Scenario(
+        id="cross_user_bac", path=_SCENARIOS / "cross_user_bac.yaml",
+        target=TargetSpec(adapter="mock", extra={"vulnerable": True}),
+        attacker=ActorConfig(user_id="1001"), victim=ActorConfig(user_id="1002"),
+        attack_family="cross_user_bac", repetitions=1,
+    )
+    campaign = Campaign(scenario, MissingKeyFactsMock(vulnerable=True), tmp_path / "run-d1")
+    result = asyncio.run(campaign.run())
+    assert result.results, "прогон обязан состояться: сбой телеметрии не роняет кампанию"
+    bundle = read_bundle(next(iter(find_bundles(tmp_path / "run-d1").values())))
+    assert bundle.slots["context_tool_evidence"].status == STATUS_UNAVAILABLE
+    reason = (result.results[-1].evidence.get("provenance") or {}).get("context_tool_evidence_error", "")
+    assert "TelemetryError" in reason, f"причина обязана быть видимой, получено: {reason!r}"
+    assert "actual_tool_calls_by_session" in reason
