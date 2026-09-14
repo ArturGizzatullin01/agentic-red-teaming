@@ -5,6 +5,26 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-14 — glm — evidence/foundation: третий RETURN_FOR_FIX закрыт (совместимость v1, JSON-типы, карточка P09)
+
+- P1 (совместимость ExperimentSpec): введён digest_version (v1 = payload без runner, спеки
+  4ee868a; v2 = с runner); from_serialized читает историческую v1-спеку СВОИМ алгоритмом,
+  исторический experiment_id не переписывается (runner={}); tamper-детекция v2 сохранена.
+  Тесты: test_historical_v1_spec_reads_with_own_digest, test_v2_spec_tamper_still_detected
+- P2 (JSON-типы): манифест-массив [] и строки-массивы в attempts.jsonl/ledger → контрактные
+  ошибки («обязана быть JSON-объектом»), не AttributeError; e2e на CLI: report exit 1, stdout
+  пуст, сообщение в stderr-JSON. Тесты: test_manifest_json_array_rejected,
+  test_history_and_ledger_array_line_is_contract_error, e2e ×2
+- карточка P09 исправлена: absent = «слот не предусмотрен» (семантика EvidenceBundle не
+  переопределяется), «доказанное отсутствие события» — отдельный вывод из полного tool-лога;
+  expected_effect = декларация намерения, effective_context = факт, не приравниваются;
+  ложное заявление о внесённом слоте context_tool_evidence удалено — честно: не внесён,
+  план при реализации
+- install-gate doc: команды переведены на PowerShell, утверждение «нет на всей машине»
+  сужено до границы аудита (три интерпретатора; приёмщик подтвердил venv)
+- проверки: 759 passed ×2 (свежие basetemp; +6 тестов к 753)
+
+
 ### 2026-09-14 — glm — evidence/foundation: блок подготовки к интеграции (воспроизводимость + аудит + gate-доки)
 
 - воспроизводимость: тесты эскалации переведены с фиксированного /tmp/esc-unit (PermissionError

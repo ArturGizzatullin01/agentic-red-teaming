@@ -19,6 +19,7 @@ from memnotsafe.core.campaign import Campaign
 from memnotsafe.core.config import ActorConfig, Scenario, TargetSpec
 from memnotsafe.core.experiment import (
     ExperimentError,
+    ExperimentSpec,
     build_experiment_spec,
     read_experiment,
 )
@@ -98,6 +99,51 @@ def test_runner_overrides_change_experiment_id(tmp_path) -> None:
     assert spec_over.runner["stop_on_success"] is True
     assert spec_over.runner["trigger_override"] == "другой триггер"
     assert spec_base.runner["oracle_overrides"] == {}
+
+
+def test_historical_v1_spec_reads_with_own_digest(tmp_path) -> None:
+    """Фикс приёмки P1 (раунд 3): спека формата 4ee868a (digest v1, без runner)
+    читается СВОИМ алгоритмом digest, исторический experiment_id не
+    переписывается, runner={} — не «подменённая»."""
+    from memnotsafe.core.goal_contract import canonical_json, sha256_hex
+
+    scenario = Scenario(
+        id="cross_user_bac", path=tmp_path / "s.yaml",
+        target=TargetSpec(adapter="mock"),
+        attacker=ActorConfig(user_id="1001"), victim=ActorConfig(user_id="1002"),
+        attack_family="cross_user_bac", repetitions=1,
+    )
+    spec_now = build_experiment_spec(scenario)
+
+    # сериализация ровно в формате 4ee868a: без runner и digest_version,
+    # id = digest v1 (payload без runner)
+    old = {k: v for k, v in spec_now.to_dict().items() if k not in ("runner", "digest_version")}
+    v1_payload = {k: v for k, v in spec_now._digest_payload().items() if k != "runner"}
+    old["experiment_id"] = sha256_hex(canonical_json(v1_payload))
+
+    restored = ExperimentSpec.from_serialized(old)
+    assert restored.experiment_id == old["experiment_id"]  # id сохранён
+    assert restored.digest_version == 1
+    assert restored.runner == {}
+    # историческая спека НЕ переписывается на новый id при повторном чтении
+    assert ExperimentSpec.from_serialized(restored.to_dict()).experiment_id == old["experiment_id"]
+
+    # новая спека v2: id другой, подмена по-прежнему детектируется
+    assert spec_now.experiment_id != old["experiment_id"]
+
+
+def test_v2_spec_tamper_still_detected(tmp_path) -> None:
+    scenario = Scenario(
+        id="cross_user_bac", path=tmp_path / "s.yaml",
+        target=TargetSpec(adapter="mock"),
+        attacker=ActorConfig(user_id="1001"), victim=ActorConfig(user_id="1002"),
+        attack_family="cross_user_bac", repetitions=1,
+    )
+    spec = build_experiment_spec(scenario)
+    data = spec.to_dict()
+    data["runner"]["stop_on_success"] = True  # содержимое изменено, id старый
+    with pytest.raises(ExperimentError, match="подменена"):
+        ExperimentSpec.from_serialized(data)
 
 
 def test_volatile_fields_outside_digest(tmp_path) -> None:

@@ -128,6 +128,18 @@ def test_record_roundtrip_and_version_guard() -> None:
     path.unlink()
 
 
+def test_history_and_ledger_array_line_is_contract_error(tmp_path) -> None:
+    """Фикс приёмки P2 (раунд 3): строка-массив [] в JSONL — контрактная
+    ошибка, а не AttributeError."""
+    from memnotsafe.core.ledger import LedgerError, read_ledger
+
+    (tmp_path / "h.jsonl").write_text("[]", encoding="utf-8")
+    with pytest.raises(AttemptHistoryError, match="JSON-объектом"):
+        read_history(tmp_path / "h.jsonl")
+    with pytest.raises(LedgerError, match="JSON-объектом"):
+        read_ledger(tmp_path / "h.jsonl")
+
+
 def test_read_history_tolerant_for_historical_runs(tmp_path) -> None:
     assert read_history(tmp_path / "nope.jsonl") == []
 

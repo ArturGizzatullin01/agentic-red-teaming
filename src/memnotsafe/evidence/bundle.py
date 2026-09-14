@@ -264,6 +264,10 @@ def read_bundle(bundle_dir: str | Path, *, verify: bool = True) -> EvidenceBundl
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise BundleError(f"пакет {bundle_dir}: манифест не читается: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise BundleError(
+            f"пакет {bundle_dir}: манифест обязан быть JSON-объектом, получено {type(raw).__name__}"
+        )
     if raw.get("schema_version") != BUNDLE_SCHEMA_VERSION:
         raise BundleError(
             f"пакет {bundle_dir}: schema_version={raw.get('schema_version')!r} не поддерживается "

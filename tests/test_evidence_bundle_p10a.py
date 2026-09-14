@@ -287,6 +287,15 @@ def test_verify_run_evidence_wraps_history_corruption(tmp_path) -> None:
         verify_run_evidence(tmp_path)
 
 
+def test_manifest_json_array_rejected(tmp_path) -> None:
+    """Фикс приёмки P2 (раунд 3): манифест-массив [] — контрактная ошибка,
+    а не AttributeError."""
+    _write(tmp_path)
+    (tmp_path / "bundle" / "manifest.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(BundleError, match="JSON-объектом"):
+        read_bundle(tmp_path / "bundle")
+
+
 def test_verify_run_bundles_fails_on_incomplete_dir(tmp_path) -> None:
     """Фикс приёмки P1: каталог пакета без манифеста НЕ проскальзывает мимо
     верификации — verify_run_bundles роняет его как незавершённый."""

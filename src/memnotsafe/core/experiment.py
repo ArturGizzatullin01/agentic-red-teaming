@@ -41,6 +41,13 @@ from memnotsafe.core.goal_contract import canonical_json, sha256_hex
 
 EXPERIMENT_SCHEMA_VERSION = 1
 
+# Версия АЛГОРИТМА digest experiment_id (фикс приёмки P1: добавление секции
+# runner изменило digest без смены версии — историческая спека 4ee868a
+# отклонялась как «подменённая»). v1 = payload БЕЗ runner (спеки до 2026-09-14);
+# v2 = payload с runner. Чтение v1 ЯВНО поддержано, исторический id не
+# переписывается; спека v1 остаётся валидным документом своего формата.
+DIGEST_VERSION = 2
+
 UNKNOWN = "unknown"
 
 
@@ -72,12 +79,14 @@ class ExperimentSpec:
     budgets: dict
     file_digests: dict
     runner: dict = field(default_factory=dict)
+    digest_version: int = DIGEST_VERSION
     volatile: dict = field(default_factory=dict)
 
-    def _digest_payload(self) -> dict:
-        """Всё, кроме летучих полей. Секреты сюда не попадают по построению
-        (build_experiment_spec кладёт только имена env-переменных)."""
-        return {
+    def _digest_payload(self, *, digest_version: int | None = None) -> dict:
+        """Всё, кроме летучих полей и секретов (build_experiment_spec кладёт
+        только имена env-переменных). digest v1 — БЕЗ runner (совместимость
+        со спеками 4ee868a); v2 — с runner."""
+        payload = {
             "scenario_id": self.scenario_id,
             "target": self.target,
             "attacker": self.attacker,
@@ -85,18 +94,22 @@ class ExperimentSpec:
             "corpus": self.corpus,
             "delivery": self.delivery,
             "budgets": self.budgets,
-            "runner": self.runner,
             "file_digests": self.file_digests,
         }
+        version = DIGEST_VERSION if digest_version is None else digest_version
+        if version >= 2:
+            payload["runner"] = self.runner
+        return payload
 
     def digest_source(self) -> str:
-        return canonical_json(self._digest_payload())
+        return canonical_json(self._digest_payload(digest_version=self.digest_version))
 
     def to_dict(self) -> dict:
         data = self._digest_payload()
         data.update(
             {
                 "schema_version": self.schema_version,
+                "digest_version": self.digest_version,
                 "experiment_id": self.experiment_id,
                 "volatile": dict(self.volatile),
             }
@@ -105,11 +118,22 @@ class ExperimentSpec:
 
     @classmethod
     def from_serialized(cls, data: dict) -> "ExperimentSpec":
+        if not isinstance(data, dict):
+            raise ExperimentError(
+                f"ExperimentSpec: спека обязана быть JSON-объектом, получено {type(data).__name__}"
+            )
         if data.get("schema_version") != EXPERIMENT_SCHEMA_VERSION:
             raise ExperimentError(
                 f"ExperimentSpec: schema_version={data.get('schema_version')!r} не поддерживается "
                 f"(ожидается {EXPERIMENT_SCHEMA_VERSION})"
             )
+        # Версия digest: явное поле digest_version; его отсутствие при
+        # отсутствии секции runner — историческая спека v1 (4ee868a), читается
+        # СВОИМ алгоритмом digest, исторический experiment_id не переписывается.
+        historical_v1 = "digest_version" not in data and "runner" not in data
+        digest_version = 1 if historical_v1 else int(data.get("digest_version") or DIGEST_VERSION)
+        if digest_version not in (1, 2):
+            raise ExperimentError(f"ExperimentSpec: digest_version={digest_version!r} не поддерживается")
         spec = cls(
             schema_version=EXPERIMENT_SCHEMA_VERSION,
             experiment_id=str(data.get("experiment_id") or ""),
@@ -121,11 +145,12 @@ class ExperimentSpec:
             delivery=dict(data.get("delivery") or {}),
             budgets=dict(data.get("budgets") or {}),
             runner=dict(data.get("runner") or {}),
+            digest_version=digest_version,
             file_digests=dict(data.get("file_digests") or {}),
             volatile=dict(data.get("volatile") or {}),
         )
-        # experiment_id — это digest содержимого: пересчитанный id обязан
-        # совпасть, иначе spec подменён или сериализован чужой версией кода.
+        # experiment_id — это digest содержимого СВОЕЙ версии: пересчитанный id
+        # обязан совпасть, иначе spec подменён или сериализован чужой версией.
         if spec.experiment_id != sha256_hex(spec.digest_source()):
             raise ExperimentError(
                 "ExperimentSpec: experiment_id не совпадает с digest содержимого — "

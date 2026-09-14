@@ -206,5 +206,9 @@ def read_history(path: str | Path) -> list[AttemptRecord]:
             data = json.loads(line)
         except json.JSONDecodeError as exc:
             raise AttemptHistoryError(f"{path}: строка {no} — не JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise AttemptHistoryError(
+                f"{path}: строка {no} — запись обязана быть JSON-объектом, получено {type(data).__name__}"
+            )
         records.append(AttemptRecord.from_dict(data))
     return records

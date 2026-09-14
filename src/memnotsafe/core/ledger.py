@@ -155,5 +155,9 @@ def read_ledger(path: str | Path) -> list[LedgerEntry]:
             data = json.loads(line)
         except json.JSONDecodeError as exc:
             raise LedgerError(f"{path}: строка {no} — не JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise LedgerError(
+                f"{path}: строка {no} — запись обязана быть JSON-объектом, получено {type(data).__name__}"
+            )
         entries.append(LedgerEntry.from_dict(data))
     return entries

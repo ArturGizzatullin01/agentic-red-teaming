@@ -370,6 +370,40 @@ def test_manifest_history_mismatch_detected(tmp_path, capsys) -> None:
     assert "не согласован" in json.loads(captured.err)["data"]["message"]
 
 
+def test_manifest_json_array_cli_exit_1(tmp_path, capsys) -> None:
+    """E2E (фикс приёмки P2, раунд 3): манифест-массив → report exit 1 с
+    контрактным сообщением, не сырой AttributeError."""
+    rc = cli.main(["run", "--scenario", str(_SCENARIOS / "cross_user_bac.yaml"),
+                   "--output", str(tmp_path / "run")])
+    assert rc == 0
+    capsys.readouterr()
+    out = tmp_path / "run"
+    case_dir = next(iter(find_bundles(out).values()))
+    (case_dir / "manifest.json").write_text("[]", encoding="utf-8")
+    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "JSON-объектом" in json.loads(captured.err)["data"]["message"]
+
+
+def test_history_array_line_cli_exit_1(tmp_path, capsys) -> None:
+    """E2E (фикс приёмки P2, раунд 3): строка-массив в attempts.jsonl →
+    report exit 1 с контрактным сообщением."""
+    rc = cli.main(["run", "--scenario", str(_SCENARIOS / "cross_user_bac.yaml"),
+                   "--output", str(tmp_path / "run")])
+    assert rc == 0
+    capsys.readouterr()
+    out = tmp_path / "run"
+    with (out / "attempts.jsonl").open("a", encoding="utf-8") as f:
+        f.write("[]" + chr(10))
+    rc = cli.main(["report", "--input", str(out), "--output", str(tmp_path / "rep"), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "JSON-объектом" in json.loads(captured.err)["data"]["message"]
+
+
 # ------------------------------------------------- 9) исторический run
 
 def test_historical_run_without_new_artifacts(tmp_path, capsys) -> None:
