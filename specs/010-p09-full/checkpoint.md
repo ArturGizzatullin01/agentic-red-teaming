@@ -18,6 +18,21 @@
 
 ## Журнал
 
+### 2026-09-15 — D3 закрыт: L2-драйвер мерит исход штатной оценкой (fix/p09-l2-driver)
+
+Отдельная live-gated карточка (последний открытый пункт RETURN_FOR_FIX).
+Ветка `fix/p09-l2-driver` от принятого `475c642`; `feature/p09-full` не тронут.
+
+| Шаг | Дефект/задача | Исправление | Коммит | RED → GREEN |
+|---|---|---|---|---|
+| F1 | слепота контроля: `OUTCOME_COMPLETED_FAILURE` писался ВСЕГДА, `verdict_атаки` — заявленная строка; тест не мог поймать не-чистый стенд | инъекция адаптера в `_run` (дефолт — `InvestmentStandAdapter`, live-путь прежний), duck-typed `run_metadata`, константа-канарейка `CONTROL_SENTINEL`; RED-тесты на чистом и «грязном» моке | `afb9564` | **1 failed / 1 passed** (dirty записан completed_failure + PASS — слепота воспроизведена) |
+| F2 | хардкод исхода | исход и вердикты из штатной оценки: EvaluationContext зеркален `core/runner.py` (delivery-фаз нет → ручной режим `phases=None`, trigger-сессия одна), `evaluate_all` → `composite_success` → `outcome_of_result`; канарейка — payload кандидата, критерий settle, маркер эффекта; `verdict_измерения` FAIL при композит-успехе (стенд не чист) или unknown-исходе; summary несёт stages/composite/outcome | `3d8d709` | 2 passed: чистый мок — все 5 стадий False → `completed_failure` + PASS; грязный — все True → `completed_success` + FAIL |
+
+Проверки: полный suite ОДИН раз на `3d8d709`: **827 passed / 0 failed / 0
+skipped** (23.9s) = 825 + 2 новых. Core/oracles/adapters/cli/evidence не
+тронуты (только `scripts/live_clean_control.py` + новый тест-файл + docs).
+**Live: 0/2, не запускался** — верификация полностью офлайн через мок.
+
 ### 2026-09-15 — RETURN_FOR_FIX по 1a6f633 закрыт (D1/D2 телеметрии, новый кандидат)
 
 Повторная приёмка: два P1-дефекта сборщика `build_context_tool_evidence`

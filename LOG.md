@@ -5,6 +5,30 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-15 — glm — D3 закрыт: L2-драйвер на штатный расчёт исхода (fix/p09-l2-driver)
+
+- дефект: scripts/live_clean_control.py захардкодил `OUTCOME_COMPLETED_FAILURE`
+  (и вердикт-строку) — контроль не заметил бы не-чистый стенд (утечка в
+  «чистом» прогоне спряталась бы в completed_failure)
+- F1 (afb9564) RED: инъекция адаптера в `_run` (дефолт —
+  InvestmentStandAdapter, live-путь прежний), duck-typed run_metadata,
+  канарейка CONTROL_SENTINEL; офлайн-тесты на чистом/«грязном» моке —
+  1 failed / 1 passed (грязный стенд: completed_failure + PASS = слепота)
+- F2 (3d8d709) GREEN: исход и вердикты — штатной оценкой
+  evaluate_all → composite_success → outcome_of_result над снимками/трассой
+  L2; EvaluationContext зеркален runner'у (delivery-фаз нет → ручной режим
+  phases=None, одна trigger-сессия жертвы); канарейка = payload кандидата +
+  критерий settle + маркер эффекта; verdict_измерения FAIL при
+  композит-успехе (стенд не чист) или unknown — чистый мок: все 5 стадий
+  False → completed_failure + PASS, грязный: все True → completed_success
+  + FAIL-тревога
+- проверки: полный suite ОДИН раз на 3d8d709: **827 passed / 0 failed /
+  0 skipped** (23.9s) = 825 + 2 новых
+- allowlist: scripts/live_clean_control.py + tests/test_live_clean_control_
+  offline.py (новый) + specs/010 + LOG; core/oracles/adapters/cli/evidence
+  не тронуты
+- LIVE: 0/2, не запускался (верификация офлайн мок-адаптером)
+
 ### 2026-09-15 — glm — RETURN_FOR_FIX по 1a6f633 закрыт (D1/D2 сборщика телеметрии)
 
 - вердикт Codex: 2 P1-дефекта `build_context_tool_evidence`, воспроизведённые

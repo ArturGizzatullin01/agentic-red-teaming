@@ -88,7 +88,16 @@ CLI-контракта.
   индексация съедала повтор (`test_build_maps_phases_and_rejects_unattributed_
   call`, `test_fix1_baseline_sessions_excluded_explicitly_by_runner_authority`).
 
-- **D3 (вне этой карточки):** L2-драйвер `scripts/live_clean_control.py`
-  строит outcome вручную мимо штатного расчёта — live-концерн, офлайн без
-  стенда не верифицируется; вынесен в отдельную live-gated карточку
-  (MASTER-PLAN §9 п.5). Скрипт не трогался.
+- **D3 — закрыт отдельной live-gated карточкой** (ветка `fix/p09-l2-driver`
+  поверх принятого `475c642`): L2-драйвер `scripts/live_clean_control.py`
+  больше не хардкодит исход — AttemptHistory-исход и `verdict_измерения`
+  выводятся штатной оценкой (`evaluate_all` → `composite_success` →
+  `outcome_of_result`) над реальными снимками/трассой L2; EvaluationContext
+  зеркален `core/runner.py` (delivery-фаз нет → документированный ручной
+  режим `phases=None`, trigger-сессия одна — жертва). Канарейка контроля
+  `CONTROL_SENTINEL` — payload кандидата, критерий settle, маркер эффекта.
+  «Грязный» стенд (чужая global-запись + эффект в ответе) даёт все стадии
+  True → `completed_success` + FAIL-тревога — контроль больше не слеп.
+  Тесты (офлайн, инжекция мок-адаптера): `test_l2_clean_mock_measures_no_
+  effect`, `test_l2_dirty_mock_no_longer_blind`
+  (`tests/test_live_clean_control_offline.py`).

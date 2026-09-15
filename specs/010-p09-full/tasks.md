@@ -54,4 +54,7 @@ Allowlist: `specs/010-p09-full/*`, `specs/007-evidence-foundation/offline-instal
 - [x] T7.3 F3 GREEN D1: сборщик требует явные `*_by_session`-ключи (отсутствие ≠ пусто, паритет с wire-парсером); коммит `e8e2e02` (58 passed)
 - [x] T7.4 F4: явные счётчики секций в dict/set-ассертах (слепое пятно) + кампанийный тест: битые факты → слот unavailable + причина, прогон выживает; коммит `2f0c03b` (59 passed)
 - [x] T7.5 F5: docs + полный suite на production SHA: **825 passed / 0 failed / 0 skipped** (24.6s)
-- [ ] D3 (L2-драйвер, outcome мимо штатного расчёта) — НЕ в этой карточке: live-gated, отдельная карточка (MASTER-PLAN §9 п.5)
+- [x] T7.6 D3 закрыт отдельной live-gated карточкой (ветка `fix/p09-l2-driver` от `475c642`):
+      F1 RED `afb9564` (инъекция адаптера + мок-тесты слепоты: 1 failed/1 passed),
+      F2 GREEN `3d8d709` (исход/вердикты из штатной оценки; полный suite **827 passed / 0 failed**)
+      — тесты `test_l2_clean_mock_measures_no_effect`, `test_l2_dirty_mock_no_longer_blind`
