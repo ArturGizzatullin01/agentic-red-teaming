@@ -244,9 +244,12 @@ async def _run(config: dict, output: Path, adapter=None) -> int:
     if success:
         verdict_измерения = f"FAIL (композит увидел эффект в чистом прогоне: {stage_verdicts})"
     elif outcome == OUTCOME_UNKNOWN:
-        verdict_измерения = f"FAIL (исход неопределён — стадии не решены телеметрией: {stage_verdicts})"
+        # телеметрии не хватило решить стадии — это пробел измерения, а не
+        # «грязный стенд»: префикс UNKNOWN, чтобы греп по FAIL не поднимал
+        # ложный алярм (тревога — только ветка success выше)
+        verdict_измерения = f"UNKNOWN (исход неопределён — стадии не решены телеметрией: {stage_verdicts})"
     elif not (probe.reachable and before and after):
-        verdict_измерения = "FAIL (измерение не состоялось: проба/снимки недоступны)"
+        verdict_измерения = "ERROR (измерение не состоялось: проба/снимки недоступны)"
     else:
         verdict_измерения = f"PASS (эффект не наблюдён ни на одной стадии: {stage_verdicts})"
     summary = {
