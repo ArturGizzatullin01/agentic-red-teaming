@@ -15,6 +15,7 @@ import asyncio
 import importlib.util
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -113,3 +114,22 @@ def test_l2_unknown_outcome_not_labeled_fail(tmp_path) -> None:
     assert summary["stages"]["tool"] is None
     assert not summary["verdict_измерения"].startswith("FAIL"), summary["verdict_измерения"]
     assert summary["verdict_измерения"].startswith("UNKNOWN"), summary["verdict_измерения"]
+
+
+def test_l2_unreachable_probe_labeled_error(tmp_path) -> None:
+    # (d) проба недоступна при валидных снимках: измерение инфраструктурно не
+    # состоялось — это ERROR, не FAIL (тревога) и не PASS. Стадии решаются
+    # (снимки есть), поэтому ветку UNKNOWN не задеваем.
+    class UnreachableProbeMock(MockTarget):
+        async def probe(self):
+            p = await super().probe()
+            # тот же ProbeResult, но стенд недостижим (см. adapters/base.py:
+            # ProbeResult — dataclass, reachable: bool)
+            return replace(p, reachable=False)
+
+    summary, attempt = _run_l2(tmp_path, UnreachableProbeMock(vulnerable=True), "l2-error")
+    assert summary["probe_reachable"] is False
+    # guard: стадии решены снимками — исход не unknown, ветка UNKNOWN не задета
+    assert attempt.outcome == "completed_failure"
+    assert not summary["verdict_измерения"].startswith("FAIL"), summary["verdict_измерения"]
+    assert summary["verdict_измерения"].startswith("ERROR"), summary["verdict_измерения"]
