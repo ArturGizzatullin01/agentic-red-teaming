@@ -22,7 +22,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from memnotsafe.adapters.mock import MockTarget  # noqa: E402
-from memnotsafe.core.attempt import read_history  # noqa: E402
+from memnotsafe.core.attempt import OUTCOME_UNKNOWN, read_history  # noqa: E402
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "live_clean_control.py"
 _spec = importlib.util.spec_from_file_location("live_clean_control", _SCRIPT)
@@ -96,3 +96,20 @@ def test_l2_dirty_mock_no_longer_blind(tmp_path) -> None:
     )
     assert attempt.outcome == "completed_success"
     assert summary["verdict_измерения"].startswith("FAIL"), summary["verdict_измерения"]
+
+
+def test_l2_unknown_outcome_not_labeled_fail(tmp_path) -> None:
+    # (c) неполная телеметрия: trace-канала нет (как у боевого stack2) —
+    # retrieval/tool/adoption не решаются, исход unknown. Это НЕ провал
+    # контроля и не грязный стенд: префикс строки обязан быть UNKNOWN,
+    # а не FAIL (греп по «FAIL» не должен поднимать ложный алярм).
+    class NoTraceMock(MockTarget):
+        async def get_trace(self, session_id: str):
+            return None  # у таргета нет trace-телеметрии
+
+    summary, attempt = _run_l2(tmp_path, NoTraceMock(vulnerable=True), "l2-unknown")
+    assert attempt.outcome == OUTCOME_UNKNOWN
+    assert summary["stages"]["retrieval"] is None
+    assert summary["stages"]["tool"] is None
+    assert not summary["verdict_измерения"].startswith("FAIL"), summary["verdict_измерения"]
+    assert summary["verdict_измерения"].startswith("UNKNOWN"), summary["verdict_измерения"]
