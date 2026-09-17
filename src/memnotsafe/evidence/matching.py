@@ -194,7 +194,7 @@ def _validate_marker(marker: str) -> None:
 # что это запись кейса → UNKNOWN; строковое преобразование dict запрещено.
 # ---------------------------------------------------------------------------
 
-_RECORD_ID_KEYS = ("id", "mem_id", "fact_id", "memory_id")
+_RECORD_ID_KEYS = ("id", "mem_id", "fact_id", "memory_id", "episode_id", "policy_id")
 
 
 @dataclass(frozen=True)
