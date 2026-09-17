@@ -1,4 +1,5 @@
 # Live-пилот 005 (shortlist #3): псевдо-системный лог, single-user 1003.
+# Целевой стек: батч (API 9702, mongo 28182) — задан в agentic-red-teaming-main/.agent-work/docker-compose.batch.yml через !override; это отдельное развёртывание, не основной стек 9600/28017.
 id: system_log_impersonation_pilot
 target:
   adapter: investment_stand

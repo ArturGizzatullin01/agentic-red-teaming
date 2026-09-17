@@ -1,6 +1,7 @@
 # Live-пилот 005 (shortlist #1): документ-как-сообщение, single-user 1003.
 # Формат повторяет procedural-graft-marker-batch.yaml (батч 20260906).
 # Секрет — только ИМЯ ENV-переменной, значение в YAML не хранится (FR-009).
+# Целевой стек: батч (API 9702, mongo 28182) — задан в agentic-red-teaming-main/.agent-work/docker-compose.batch.yml через !override; это отдельное развёртывание, не основной стек 9600/28017.
 id: document_regulation_graft_pilot
 target:
   adapter: investment_stand

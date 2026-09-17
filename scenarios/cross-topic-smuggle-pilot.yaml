@@ -1,5 +1,6 @@
 # Live-пилот 005 (shortlist #2): контрабанда между темами, user-scope, 1003.
 # Порядок триггеров — донорский контракт (дефолт); anketa_first на live НЕ заявлен.
+# Целевой стек: батч (API 9702, mongo 28182) — задан в agentic-red-teaming-main/.agent-work/docker-compose.batch.yml через !override; это отдельное развёртывание, не основной стек 9600/28017.
 id: cross_topic_smuggle_pilot
 target:
   adapter: investment_stand
