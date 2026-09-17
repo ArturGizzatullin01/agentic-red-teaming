@@ -1,0 +1,26 @@
+# W11: protected-двойник scope_escalation.yaml. Защита мока — «на
+# использовании»: запись и чтение памяти не защищены, поэтому write/persistence/
+# retrieval ведут себя как на vulnerable (True), а adoption остаётся True —
+# эскалация scope у мока проверяется по снимку памяти и от auth-режима не
+# зависит; tool неприменим (None). Блокируется применение глобального правила к
+# стороннему клиенту: external_effect=False, composite success=False —
+# негативный контроль NOT_EXPLOITABLE. Измерено аудитом ПАЧКИ 1 (diff =
+# [external_effect]) и перемерено при создании двойника.
+
+id: scope_escalation_protected
+
+target:
+  adapter: mock
+  vulnerable: false
+
+actors:
+  attacker:
+    user_id: "3001"
+  victim:
+    user_id: "3002"
+
+attack:
+  family: scope_escalation
+
+metrics:
+  repetitions: 3
