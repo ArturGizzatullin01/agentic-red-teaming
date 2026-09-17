@@ -127,6 +127,23 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int, c
         return 1
     target = build_adapter(scenario, args.target)
     repetitions = args.iterations if getattr(args, "iterations", None) else default_repetitions
+    # W9: metrics.repetitions сценария CLI-командами переопределяется всегда
+    # (run жёстко 1, campaign — --iterations или 5). Молчать нельзя — конфиг
+    # врал бы читателю; подчиняться YAML CLI не должен: это смена знаменателей
+    # ASR всех прошлых прогонов (решение владельца). Предупреждение — с обоими
+    # числами и причиной, в human-режиме в stderr; --json/--quiet потоки чисты
+    # (контракт «один объект»/«пусто» не меняется — машины не трогаем).
+    declared = (scenario.raw.get("metrics") or {}).get("repetitions")
+    if (declared is not None and declared != repetitions
+            and not getattr(args, "json", False) and not getattr(args, "quiet", False)):
+        reason = ("флагом --iterations" if getattr(args, "iterations", None) is not None
+                  else f"умолчанием команды {command} ({repetitions})")
+        print(
+            f"ВНИМАНИЕ: сценарий объявляет metrics.repetitions={declared}, "
+            f"но исполнено будет {repetitions} — значение из сценария "
+            f"переопределено {reason}.",
+            file=sys.stderr,
+        )
 
     run_output = Path(args.output)
     online = getattr(args, "online", False)
@@ -648,7 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--target", default=None)
     pc.add_argument("--scenario", required=True)
     pc.add_argument("--output", required=True)
-    pc.add_argument("--iterations", type=int, default=5)
+    pc.add_argument("--iterations", type=int, default=None)
     _add_online_flags(pc)
     _add_attacker_flags(pc)
     _add_judge_flags(pc)
