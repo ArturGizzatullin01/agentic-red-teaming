@@ -232,9 +232,37 @@ class InvestmentStandAdapter(TargetAdapter):
         return SendResult(content=content, events=[dict(e) for e in events], raw=raw)
 
     async def get_trace(self, session_id: str) -> list[dict[str, Any]] | None:
-        # Живой стенд не отдаёт внутреннюю retrieval-трассу, привязанную к id
-        # конкретной записи → retrieval честно остаётся UNKNOWN (research §2).
-        return None
+        # Источник трассы — журнал извлечения стенда (карточка I, ПАЧКА 4):
+        # коллекция memory_retrieval_log, пишется MemoryStore.build_context
+        # в МОМЕНТ сборки контекста — наблюдение, а не вывод из исхода
+        # (принцип IV). Прежняя безусловная заглушка None оставляла retrieval
+        # навсегда UNKNOWN (W2). Нет Mongo / нет журнала по сессии → None:
+        # честный UNKNOWN, «не извлекалось» ≠ «не измерялось».
+        docs = self._read_retrieval_log(session_id)
+        if not docs:
+            return None
+        # Возможности приводятся в соответствие ФАКТИЧЕСКОЙ наблюдаемости —
+        # мутацией полей на месте; self.capabilities не переприсваивается
+        # никогда (инвариант конструктора: раннер держит разделяемую ссылку
+        # через probe()). Флаги поднимаются только при реально прочитанных
+        # документах журнала, не по факту конфигурации.
+        self.capabilities.trace = True
+        self.capabilities.retrieval = True
+        events: list[dict[str, Any]] = []
+        for doc in docs:
+            refs = doc.get("refs") or []
+            events.append({
+                "event": "memory_retrieval",
+                "session_id": session_id,
+                "actor": str(doc.get("user_id", "")),
+                "ts": doc.get("ts"),
+                "memory_refs": [str(r.get("id_value")) for r in refs if r.get("id_value")],
+                "detail": {
+                    "source": "memory_retrieval_log",
+                    "kinds": [r.get("kind") for r in refs],
+                },
+            })
+        return events
 
     async def close_session(self, session_id: str) -> None:
         user_id = self._session_users.get(session_id)
@@ -543,6 +571,20 @@ class InvestmentStandAdapter(TargetAdapter):
         if db is None:
             return None
         return list(db["dialog_sessions"].find({"session_id": session_id}))
+
+    def _read_retrieval_log(self, session_id: str) -> list[dict[str, Any]] | None:
+        """Документы memory_retrieval_log по сессии — журнал извлечения памяти
+        стенда (карточка I): по одному документу на вызов build_context с
+        непустым контекстом, refs[].id_value — id записей, реально попавших
+        в текст. None — Mongo не сконфигурирован; [] — журнал по сессии пуст.
+        Seam для офлайн-тестов: переопределяется подклассом без Mongo."""
+        db = self._db()
+        if db is None:
+            return None
+        try:
+            return list(db["memory_retrieval_log"].find({"session_id": session_id}).sort("ts", 1))
+        except Exception:  # noqa: BLE001 — нет коллекции/доступа — честный UNKNOWN
+            return None
 
     def _build_snapshot(self, docs_by_collection: dict[str, list[dict[str, Any]]]) -> SystemSnapshot:
         """Нормализует сырые документы Mongo в записи {id, source_user, text, scope}
