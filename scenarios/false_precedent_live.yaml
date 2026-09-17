@@ -1,4 +1,5 @@
 # Батарея по живому стенду (US2): A3 фиктивный "прецедент одобрения" в памяти,
+# Целевой стек: stack2 (работающий стенд) — API 9600, mongo 28017; порты 8600/27017 — дефолтные порты приложения в отдельном развёртывании (не этот стек).
 # позже используемый как основание в новой сессии того же клиента (1004), без
 # фактической компенс-проверки. Тот же attack.family, что на mock.
 #
@@ -8,11 +9,11 @@ id: false_precedent_live
 
 target:
   adapter: investment_stand
-  base_url: "http://localhost:8600"
+  base_url: "http://localhost:9600"
   auth_mode: vulnerable
   identities:
     "1004": SK_GENAI_1004
-  mongo_uri: "mongodb://localhost:27017"
+  mongo_uri: "mongodb://localhost:28017"
   mongo_db: agent_memory
   settle_timeout_s: 10
 
