@@ -22,13 +22,15 @@ scripts/demo-run.ps1 — офлайн-демо стенда: ПАРА кампа
   4. python из PATH.
 Ни один не годен — печатаем, что проверяли, подсказываем -Python, exit 1.
 
-Пин W10: в PYTHONPATH кладётся src ЭТОГО дерева; до прогона печатается
-memnotsafe.__file__ и ПРОВЕРЯЕТСЯ, что путь лежит внутри src этого checkout'а.
-Указывает куда-то ещё — понятная ошибка и ненулевой выход, прогон не
-продолжается. Унаследованный PYTHONPATH не затирается: src дописывается в
-конец, и если чужой путь всё же выиграл разрешение, проверка __file__ ловит
-это громко. Молча затереть чужой PYTHONPATH нельзя — это спрятало бы неверную
-настройку окружения вместо того, чтобы её показать.
+Пин W10: в PYTHONPATH кладётся src ЭТОГО дерева — В НАЧАЛО пути, своё дерево
+всегда выигрывает разрешение. До прогона печатается memnotsafe.__file__ и
+проверяется, что путь лежит внутри src этого checkout'а. При prepend-порядке
+эта проверка — не детектор чужой настройки, а утверждение: срабатывать она
+не должна никогда, и если сработала — что-то действительно не так.
+Исходное значение PYTHONPATH запоминается и восстанавливается на КАЖДОМ
+выходе из скрипта (включая аварийные exit 1): прямые вызовы scripts\demo-run.ps1
+из одной сессии PowerShell в разных checkout'ах не должны наследовать
+PYTHONPATH друг от друга.
 
 Без сети, без ключей: только mock-адаптер. Артефакты — в runs\demo-<UTC>/,
 каталог runs/ в .gitignore. Ненулевой код возврата, если любой прогон упал.
@@ -44,12 +46,24 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $SrcPath = Join-Path $RepoRoot "src"
 
 # W10: демо обязано показывать код ЭТОГО дерева, а не первый memnotsafe из
-# чужого site-packages. Унаследованный PYTHONPATH не затираем — дописываем src
-# в конец; чужой путь, выигравший разрешение, ловится проверкой __file__ ниже.
-if ($Env:PYTHONPATH) {
-    $Env:PYTHONPATH = "$Env:PYTHONPATH;$SrcPath"
+# чужого site-packages. src кладётся В НАЧАЛО PYTHONPATH — своё дерево всегда
+# выигрывает разрешение. Исходное значение запоминается и восстанавливается
+# ПЕРЕД КАЖДЫМ exit (см. Restore-PythonPath ниже на каждом выходе).
+$PythonPathExisted = Test-Path Env:PYTHONPATH
+$PythonPathPrev = $Env:PYTHONPATH
+if ($PythonPathExisted -and $PythonPathPrev) {
+    $Env:PYTHONPATH = "$SrcPath;$PythonPathPrev"
 } else {
     $Env:PYTHONPATH = $SrcPath
+}
+function Restore-PythonPath {
+    # «Было не задано» должно стать «не задано» (Remove-Item), а не пустой
+    # строкой; «было задано значением» — вернуть значение дословно.
+    if ($PythonPathExisted) {
+        $Env:PYTHONPATH = $PythonPathPrev
+    } else {
+        Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-MemnotsafeImport {
@@ -108,6 +122,7 @@ if (-not $selected) {
     Write-Host "Укажите путь явно:"
     Write-Host "  .\demo -Python C:\полный\путь\к\.venv-integration\Scripts\python.exe"
     Write-Host "Как поднять venv: docs/integration-handoff/STANDING-RULES.md, раздел 6."
+    Restore-PythonPath
     exit 1
 }
 Write-Host ("ВЫБРАН PYTHON: {0} (кандидат: {1})" -f $selected.Exe, $selected.Label)
@@ -123,10 +138,14 @@ try {
 }
 if ($pinRc -ne 0 -or $pinOutput.Count -eq 0) {
     Write-Host "ОШИБКА: memnotsafe не импортируется выбранным python (PYTHONPATH=$Env:PYTHONPATH)."
+    Restore-PythonPath
     exit 1
 }
 $importedFile = ([string]$pinOutput[-1]).Trim()
 Write-Host ("memnotsafe.__file__ = {0}" -f $importedFile)
+# При prepend-порядке свой src всегда выигрывает разрешение — эта проверка
+# не детектор чужой настройки (как было при append), а утверждение: если
+# сработала — что-то действительно не так, и молчать об этом нельзя.
 $normFile = $importedFile -replace "/", "\"
 $normSrc = $SrcPath -replace "/", "\"
 if (-not ($normFile -like ($normSrc + "\*"))) {
@@ -135,6 +154,7 @@ if (-not ($normFile -like ($normSrc + "\*"))) {
     Write-Host ("  импортировалось:      {0}" -f $importedFile)
     Write-Host "Прогон не продолжается: демо не запускает чужой код. Текущий PYTHONPATH:"
     Write-Host ("  PYTHONPATH={0}" -f $Env:PYTHONPATH)
+    Restore-PythonPath
     exit 1
 }
 
@@ -152,6 +172,7 @@ function Invoke-DemoCampaign {
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ОШИБКА: прогон $Label упал (код $LASTEXITCODE)."
         if ($raw) { $raw | ForEach-Object { Write-Host $_ } }
+        Restore-PythonPath
         exit $LASTEXITCODE
     }
     # stdout-JSON даёт пути артефактов; воронка/ASR лежат в report.json (metrics).
@@ -202,4 +223,5 @@ if ($Open) {
 }
 Write-Host ""
 Write-Host "артефакты прогона: $BaseDir (runs/ в .gitignore)"
+Restore-PythonPath
 exit 0
