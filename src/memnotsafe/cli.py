@@ -218,6 +218,7 @@ def _campaign_data(result, findings: list) -> dict:
         "scenario_id": result.scenario_id,
         "attempts": result.attempts,
         "end_to_end_asr": m.get("end_to_end_asr"),
+        "asr_provenance": m.get("asr_provenance"),
         "findings_counts": _findings_counts(findings),
         "results": [
             {
