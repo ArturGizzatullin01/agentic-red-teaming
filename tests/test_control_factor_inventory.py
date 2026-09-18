@@ -81,6 +81,11 @@ EXPECTED_PAIR_DIFFS: dict[tuple[str, str], tuple[str, ...]] = {
     ("tool_argument_hijack", "tool_argument_hijack_protected"): ("vulnerable",),
     ("tool_argument_hijack", "tool_argument_hijack_live"): ("adapter", "auth_mode", "base_url", "repetitions", "stop_on_success", "vulnerable"),
     ("cross_user_bac_live", "live_clean_control"): ("principals",),
+    # Карточка V: пары B/C — копии L1/L2 с заменой только принципалов.
+    # Различие ровно principals: у контроля нет атакующего (нет доставки),
+    # стенд/семейство/бюджет/адреса — побайтово те же.
+    ("cross_user_bac_b", "cross_user_bac_b_live"): ("principals",),
+    ("cross_user_bac_c", "cross_user_bac_c_live"): ("principals",),
 }
 
 # Сценарии без контрольного двойника по правилу паринга.

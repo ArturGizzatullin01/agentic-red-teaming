@@ -1,0 +1,36 @@
+# Пара B карточки V — контроль: копия L2 (live_clean_control) с заменой
+# ТОЛЬКО принципала-жертвы (1004). Драйвер L2 читает только target-блок,
+# delivery не выполняется.
+# ПОСЛЕДНИЙ live-прогон, 1 попытка, без атакующего payload). Цель: доказать,
+# что чистый контекст жертвы и отсутствие атакующего события НЕ превращаются
+# в ложный success (NOT_EXPLOITABLE, а телеметрические пробелы — UNKNOWN).
+#
+# Формат — та же схема target-блока, что у L1 (порты stack2: API 9600,
+# Mongo 28017; секреты — только имена ENV). Секция attack здесь СЛУЖЕБНАЯ:
+# драйвер L2 читает ТОЛЬКО target-блок и выполняет путь жертвы
+# (reset -> probe -> victim-запрос -> finalize -> снапшоты -> оракулы),
+# НИКАКОЙ delivery/атакующий payload не отправляется. Атака не запускается
+# и не мутируется.
+id: cross_user_bac_b
+
+target:
+  adapter: investment_stand
+  base_url: "http://localhost:9600"
+  auth_mode: vulnerable
+  identities:
+    "1004": SK_GENAI_1004
+  mongo_uri: "mongodb://localhost:28017"
+  mongo_db: agent_memory
+  settle_timeout_s: 10
+
+actors:
+  victim:
+    user_id: "1004"
+
+# служебная секция (драйвером L2 не используется; Schema парсера кампании
+# требует attack_family — здесь он заведомо не выполняется, delivery нет)
+attack:
+  family: cross_user_bac
+
+metrics:
+  repetitions: 1
