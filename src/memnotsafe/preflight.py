@@ -123,6 +123,21 @@ async def _default_http_get(url: str) -> HttpReply:
         return HttpReply(status_code=None, error=type(exc).__name__)
 
 
+def _adapter_mongo_db_default() -> str:
+    """Имя базы, которое возьмёт адаптер при отсутствии mongo_db в сценарии:
+    значение по умолчанию параметра — часть сигнатуры InvestmentStandAdapter,
+    берём из самого адаптера. Литералом не дублировать: разъедется тихо при
+    первой же правке адаптера (замок — тест карточки S-2, PASS_IF 7)."""
+    import inspect
+
+    from memnotsafe.adapters.investment_stand import InvestmentStandAdapter
+
+    default = inspect.signature(
+        InvestmentStandAdapter.__init__
+    ).parameters["mongo_db"].default
+    return str(default)
+
+
 def _default_mongo(uri: str, db_name: str) -> MongoProbe:
     """Живой щуп Mongo (в тестах подменяется). pymongo — опциональная
     зависимость с ленивым импортом (как у адаптера): её отсутствие —
@@ -149,7 +164,13 @@ def _default_mongo(uri: str, db_name: str) -> MongoProbe:
 def _identity_checks(identities, environ) -> list[Check]:
     """B1 (заданы и непусты) и B2 (попарно различны). B2 — попарное правило:
     совпавшая группа называется целиком (user_id + имена переменных) и не
-    затрагивает остальных принципалов. Значения наружу не выходят."""
+    затрагивает остальных принципалов. Значения наружу не выходят.
+
+    Ключи YAML нормализуются в str ДО всего: незакавыченный `1001:` парсится
+    в int, и сообщения обязаны строиться по тому же представлению, по которому
+    идёт сравнение, — иначе preflight падает KeyError ровно в тех двух
+    случаях, когда ему есть что сказать (S-2, дефект 2)."""
+    identities = {str(uid): str(env) for uid, env in identities.items()}
     if not identities:
         return [
             Check("B1", "Переменные identity заданы и непусты", SKIP,
@@ -159,8 +180,8 @@ def _identity_checks(identities, environ) -> list[Check]:
         ]
     values: dict[str, str | None] = {}
     for user_id, env_name in identities.items():
-        raw = environ.get(str(env_name))
-        values[str(user_id)] = raw if raw else None
+        raw = environ.get(env_name)
+        values[user_id] = raw if raw else None
     missing = sorted(uid for uid, v in values.items() if v is None)
     b1 = Check("B1", "Переменные identity заданы и непусты",
                BLOCKER if missing else OK,
@@ -176,7 +197,12 @@ def _identity_checks(identities, environ) -> list[Check]:
         if v is not None:
             groups.setdefault(v, []).append(uid)
     collisions = sorted(sorted(uids) for uids in groups.values() if len(uids) > 1)
-    if collisions:
+    if not groups:
+        # Сравнения не было вовсе: статус — SKIP, а не OK — UNKNOWN ≠ True по
+        # той же причине, что UNKNOWN ≠ False (S-2, дефект 4).
+        b2 = Check("B2", "Значения identity попарно различны", SKIP,
+                   "нет ни одного непустого значения (см. B1)")
+    elif collisions:
         parts = []
         for uids in collisions:
             named = ", ".join(f"user_id {uid} ({identities[uid]})" for uid in uids)
@@ -186,8 +212,7 @@ def _identity_checks(identities, environ) -> list[Check]:
                    "покажет ложный успех")
     else:
         b2 = Check("B2", "Значения identity попарно различны", OK,
-                   f"все {len(groups)} значений попарно различны" if groups
-                   else "нет ни одного непустого значения (см. B1)")
+                   f"все {len(groups)} значений попарно различны")
     return [b1, b2]
 
 
@@ -254,7 +279,7 @@ def _mongo_checks(mongo_uri, mongo_db, mongo_probe) -> list[Check]:
                   "mongo_uri не задан (см. W3)"),
         ]
     w3 = Check("W3", "mongo_uri задан", OK,
-               f"задан; база: {mongo_db or '<имя не задано>'}")
+               f"задан; база: {mongo_db}")
     probe = mongo_probe(mongo_uri, mongo_db or "")
     if probe.state == "pymongo-missing":
         return [w3,
@@ -360,7 +385,10 @@ def run_preflight(scenario_path: str | Path, *, http_get=None, mongo_probe=None,
         scenario.target.base_url, http_get or _default_http_get))
     result.checks.extend(_mongo_checks(
         scenario.target.extra.get("mongo_uri"),
-        scenario.target.extra.get("mongo_db"),
+        # щупаем ту же базу, которую возьмёт адаптер: без mongo_db в сценарии
+        # адаптер сидит на умолчании своей сигнатуры — preflight не имеет
+        # права разойтись с ним (S-2, дефект 3)
+        scenario.target.extra.get("mongo_db") or _adapter_mongo_db_default(),
         mongo_probe or _default_mongo,
     ))
     result.checks.append(_deployment_check(

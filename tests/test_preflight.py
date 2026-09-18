@@ -20,6 +20,7 @@ from memnotsafe.preflight import (  # noqa: E402
     OK,
     SKIP,
     WARNING,
+    MongoProbe,
     _default_mongo,
     run_preflight,
 )
@@ -385,3 +386,195 @@ def test_real_live_scenario_offline(tmp_path, monkeypatch, capsys):
     assert "live-fake-one" not in rendered and "live-fake-two" not in rendered
     captured = capsys.readouterr()
     assert "live-fake-one" not in captured.out + captured.err
+
+
+# ================================================================== карточка S-2
+# Возврат карточки S: сила замка. Раскладка обязана РАСХОДИТЬСЯ на верном и
+# типичном неверном поведении; нестроковые ключи — блокер, а не KeyError;
+# mongo_db без сценария — та же база, что у адаптера; SKIP, когда сравнения
+# не было.
+
+NEEDLE2 = "sk-genai-S2-NEEDLE-77F3"
+
+_IDENT_BLOCK = '  identities:\n    "1001": SK_GENAI_1001\n    "1002": SK_GENAI_1002\n'
+
+
+def test_b2_colliding_pair_is_not_first_two_by_any_order(tmp_path, monkeypatch):
+    """PASS_IF 1–2 (S-2): раскладка расходящаяся. Совпавшая пара — (1003,
+    1004): она НЕ первые два ни по порядку словаря (вставка 1001, 1002
+    раньше), ни по сортировке user_id (1001 < 1002 < 1003 < 1004), ни по
+    алфавиту имён переменных (SK_FIRST_A/SK_FIRST_B < SK_LATE_C/SK_LATE_D).
+    Под мутацией «сравнивать только первых двух» B2 здесь даёт OK — и этот
+    тест краснеет (проверено прогоном мутации, не рассуждением)."""
+    text = _LIVE_YAML.replace(
+        _IDENT_BLOCK,
+        '  identities:\n    "1001": SK_FIRST_A\n    "1002": SK_FIRST_B\n'
+        '    "1003": SK_LATE_C\n    "1004": SK_LATE_D\n',
+    )
+    monkeypatch.setenv("SK_FIRST_A", "value-one")
+    monkeypatch.setenv("SK_FIRST_B", "value-two")
+    monkeypatch.setenv("SK_LATE_C", "dup-pair-value")
+    monkeypatch.setenv("SK_LATE_D", "dup-pair-value")
+    result = _run(tmp_path, env=None, text=text)
+    b2 = _by_id(result, "B2")
+    assert b2.status == BLOCKER
+    assert result.exit_code == 1
+    assert "1003" in b2.text and "1004" in b2.text
+    assert "SK_LATE_C" in b2.text and "SK_LATE_D" in b2.text
+    # первые два по всем трём порядкам в блокер не попали
+    assert "1001" not in b2.text and "1002" not in b2.text
+    assert "SK_FIRST" not in b2.text
+
+
+def test_nonstring_keys_equal_values_blocker(tmp_path, monkeypatch):
+    """PASS_IF 4а (S-2): ключи YAML без кавычек (int), значения совпали —
+    B2 БЛОКЕР с обоими user_id и именами, ни одного KeyError."""
+    text = _LIVE_YAML.replace(
+        _IDENT_BLOCK, '  identities:\n    1001: SK_A\n    1002: SK_B\n'
+    )
+    monkeypatch.setenv("SK_A", "sk-genai-same")
+    monkeypatch.setenv("SK_B", "sk-genai-same")
+    result = _run(tmp_path, env=None, text=text)
+    b2 = _by_id(result, "B2")
+    assert b2.status == BLOCKER
+    assert result.exit_code == 1
+    assert "1001" in b2.text and "1002" in b2.text
+    assert "SK_A" in b2.text and "SK_B" in b2.text
+
+
+def test_nonstring_keys_unset_var_blocker(tmp_path, monkeypatch):
+    """PASS_IF 4б (S-2): нестроковые ключи, переменная не задана — B1 БЛОКЕР
+    с именем переменной, не KeyError."""
+    text = _LIVE_YAML.replace(
+        _IDENT_BLOCK, '  identities:\n    1001: SK_A\n    1002: SK_B\n'
+    )
+    monkeypatch.delenv("SK_A", raising=False)
+    monkeypatch.setenv("SK_B", "value-set")
+    result = _run(tmp_path, env=None, text=text)
+    b1 = _by_id(result, "B1")
+    assert b1.status == BLOCKER
+    assert "SK_A" in b1.text and "1001" in b1.text
+    assert result.exit_code == 1
+
+
+def test_nonstring_mixed_quoting_blocker(tmp_path, monkeypatch):
+    """PASS_IF 4в (S-2): смешанное закавычивание ("1001" в кавычках, 1002
+    без) и совпавшие значения — блокер, не KeyError."""
+    text = _LIVE_YAML.replace(
+        _IDENT_BLOCK, '  identities:\n    "1001": SK_A\n    1002: SK_B\n'
+    )
+    monkeypatch.setenv("SK_A", "sk-genai-mixed")
+    monkeypatch.setenv("SK_B", "sk-genai-mixed")
+    result = _run(tmp_path, env=None, text=text)
+    b2 = _by_id(result, "B2")
+    assert b2.status == BLOCKER
+    assert result.exit_code == 1
+    assert "SK_A" in b2.text and "SK_B" in b2.text
+
+
+def test_s2_needle_never_leaks(tmp_path, monkeypatch, capsys):
+    """PASS_IF 5 (S-2): игла (своя, не отработанные sk-genai-PREFLIGHT-… /
+    sk-genai-A0NEEDLE-…) не появляется ни в stdout+stderr, ни в текстах
+    исключений на ВСЕХ раскладках дефекта 4 — включая нестроковые ключи.
+    Исключений нет вовсе: preflight говорит, а не падает."""
+    import memnotsafe.preflight as pf
+    from memnotsafe.cli import main as cli_main
+
+    monkeypatch.setattr(pf, "_default_http_get", _fake_http())
+    monkeypatch.setattr(pf, "_default_mongo", _fake_mongo("ok"))
+    unquoted = _LIVE_YAML.replace(
+        _IDENT_BLOCK, '  identities:\n    1001: SK_A\n    1002: SK_B\n'
+    )
+    mixed = _LIVE_YAML.replace(
+        _IDENT_BLOCK, '  identities:\n    "1001": SK_A\n    1002: SK_B\n'
+    )
+    layouts = {
+        "nonstring-equal": (unquoted, {"SK_A": NEEDLE2, "SK_B": NEEDLE2}),
+        "nonstring-unset": (unquoted, {"SK_B": NEEDLE2}),
+        "mixed-equal": (mixed, {"SK_A": NEEDLE2, "SK_B": NEEDLE2}),
+    }
+    for name, (text, env) in layouts.items():
+        for var in ("SK_A", "SK_B"):
+            monkeypatch.delenv(var, raising=False)
+        for var, val in env.items():
+            monkeypatch.setenv(var, val)
+        p = tmp_path / f"{name}.yaml"
+        p.write_text(text, encoding="utf-8")
+        code = cli_main(["preflight", "--scenario", str(p)])
+        captured = capsys.readouterr()
+        assert NEEDLE2 not in captured.out, name
+        assert NEEDLE2 not in captured.err, name
+        assert code in (0, 1), name
+        assert NEEDLE2 not in _run(tmp_path, env=None, text=text).render(), name
+
+
+def test_mongo_db_default_follows_adapter(tmp_path, monkeypatch):
+    """PASS_IF 6–7 (S-2): mongo_db не задан в сценарии — щуп уходит в ту же
+    базу, что возьмёт адаптер. Имя сверяется с умолчанием СИГНАТУРЫ адаптера
+    (не литералом в preflight); третий участник — литерал, записанный при
+    написании замка: правка умолчания адаптера обязана краснить этот тест,
+    чтобы разъезд не прошёл молча."""
+    import inspect
+
+    from memnotsafe.adapters.investment_stand import InvestmentStandAdapter
+
+    sig_default = str(
+        inspect.signature(
+            InvestmentStandAdapter.__init__
+        ).parameters["mongo_db"].default
+    )
+    captured = {}
+
+    def probe(uri, db_name):
+        captured["db"] = db_name
+        return MongoProbe(state="ok")
+
+    text = _LIVE_YAML.replace("  mongo_db: agent_memory\n", "")
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    result = run_preflight(
+        _write(tmp_path, text), http_get=_fake_http(), mongo_probe=probe,
+        environ=None,
+    )
+    assert captured["db"], "в щуп ушло пустое имя базы"
+    assert captured["db"] == sig_default, (captured["db"], sig_default)
+    # записано при написании замка (PASS_IF 7): менять сознательно вместе с
+    # умолчанием адаптера — именно так ловится тихий разъезд
+    assert captured["db"] == "agent_memory", captured["db"]
+    for check_id in ("W3", "W4", "W6"):
+        assert "None" not in _by_id(result, check_id).text, check_id
+        assert "<имя не задано>" not in _by_id(result, check_id).text, check_id
+    # доступная база с коллекцией — предупреждений от Mongo нет вовсе
+    assert _by_id(result, "W3").status == OK
+    assert _by_id(result, "W4").status == OK
+    assert _by_id(result, "W6").status == OK
+
+
+def test_preflight_does_not_duplicate_db_literal():
+    """PASS_IF 7 (S-2): умолчание адаптера не продублировано литералом в
+    preflight — источник только сигнатура адаптера."""
+    import inspect
+
+    import memnotsafe.preflight as pf
+
+    from memnotsafe.adapters.investment_stand import InvestmentStandAdapter
+
+    sig_default = str(
+        inspect.signature(
+            InvestmentStandAdapter.__init__
+        ).parameters["mongo_db"].default
+    )
+    src = Path(pf.__file__).read_text(encoding="utf-8")
+    assert sig_default not in src, "умолчание mongo_db продублировано литералом"
+
+
+def test_b2_skip_when_nothing_to_compare(tmp_path, monkeypatch):
+    """PASS_IF 8 (S-2): все переменные пусты — сравнения не было, статус B2
+    SKIP (не OK: UNKNOWN ≠ True); B1 при этом БЛОКЕР, exit 1."""
+    monkeypatch.delenv("SK_GENAI_1001", raising=False)
+    monkeypatch.delenv("SK_GENAI_1002", raising=False)
+    result = _run(tmp_path, env=None)
+    assert _by_id(result, "B1").status == BLOCKER
+    assert _by_id(result, "B2").status == SKIP
+    assert "(см. B1)" in _by_id(result, "B2").text
+    assert result.exit_code == 1
