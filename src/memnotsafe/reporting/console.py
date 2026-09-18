@@ -261,7 +261,7 @@ def render_campaign_summary(
     rep.line("")
     rep.line(f"END-TO-END ASR: {asr * 100:.0f}%" if asr is not None else "END-TO-END ASR: н/д")
     rep.line(f"Successful: {m['successful']}/{m['attempts']}")
-    rep.line(_asr_provenance_line(m))
+    rep.line(asr_provenance_line(m))
     render_judge_summary(rep, m)
     rep.line("")
     rep.line("Report:")
@@ -339,35 +339,44 @@ def render_dataset_built(rep: "ConsoleReporter", n_cases: int, path: Any, by_sta
         rep.line(f"  {stage:<16} {count}")
 
 
-def _asr_provenance_line(m: dict) -> str:
-    """Строка природы ASR под END-TO-END ASR (карточка R, W2): независимая
-    доля и ПОИМЁННЫЕ механизмы расхождения, которые сработали. Молчит о
-    не сработавших. Печатается ВСЕГДА: «все успехи независимы» — тоже
-    информация, отсутствие строки читалось бы как «не считали»."""
+def asr_provenance_line(m: dict) -> str:
+    """Строка природы ASR под END-TO-END ASR (карточка R, W2; знаменатели —
+    R-2). Две величины, каждая со СВОИМ знаменателем и без соседства чужих:
+    доля независимых среди успехов (independent/successful) и независимая
+    ASR (independent/attempts) — процент стоит рядом со своей дробью и
+    вычисляется из тех же целых, что она, поэтому сходится по построению.
+    Плюс ПОИМЁННЫЕ механизмы расхождения, которые сработали; молчит о не
+    сработавших. Печатается ВСЕГДА: «все успехи независимы» — тоже
+    информация, отсутствие строки читалось бы как «не считали». Имя
+    публичное: функцию читает и html_report."""
     prov = m.get("asr_provenance") or {}
     successful = prov.get("successful", 0)
     independent = prov.get("independent", 0)
-    asr_ind = prov.get("end_to_end_asr_independent")
+    attempts = m.get("attempts") or 0
     if not successful:
         return "Из них независимых: — (успехов нет)"
-    share = "н/д" if asr_ind is None else f"{asr_ind * 100:.0f}%"
-    parts = [f"Из них независимых: {independent}/{successful} ({share})"]
+    head = f"Из них независимых: {independent}/{successful}"
+    if attempts:
+        head += (
+            f". Независимая ASR: {independent}/{attempts} "
+            f"({independent / attempts * 100:.0f}%)"
+        )
     if independent == successful:
-        parts.append("все успехи независимы")
-    else:
-        reasons = []
-        if prov.get("judge_raised_only"):
-            reasons.append(
-                f"{prov['judge_raised_only']} поднято судьёй"
-            )
-        if prov.get("retrieval_tolerated_only"):
-            reasons.append(
-                f"{prov['retrieval_tolerated_only']} на ненаблюдённом retrieval"
-            )
-        if prov.get("judge_raised_and_retrieval_tolerated"):
-            reasons.append(
-                f"{prov['judge_raised_and_retrieval_tolerated']} "
-                "поднято судьёй при ненаблюдённом retrieval"
-            )
-        parts.append("; ".join(reasons))
-    return ": ".join(parts)
+        return f"{head}: все успехи независимы"
+    reasons = []
+    if prov.get("judge_raised_only"):
+        reasons.append(
+            f"{prov['judge_raised_only']} поднято судьёй"
+        )
+    if prov.get("retrieval_tolerated_only"):
+        reasons.append(
+            f"{prov['retrieval_tolerated_only']} на ненаблюдённом retrieval"
+        )
+    if prov.get("judge_raised_and_retrieval_tolerated"):
+        reasons.append(
+            f"{prov['judge_raised_and_retrieval_tolerated']} "
+            "поднято судьёй при ненаблюдённом retrieval"
+        )
+    if not reasons:
+        return head
+    return f"{head}: " + "; ".join(reasons)

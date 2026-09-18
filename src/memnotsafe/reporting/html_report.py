@@ -51,7 +51,7 @@ import json
 from pathlib import Path
 
 from memnotsafe.core.models import AttackResult, CampaignResult, StageResult
-from memnotsafe.reporting.console import _asr_provenance_line
+from memnotsafe.reporting.console import asr_provenance_line
 from memnotsafe.reporting.findings import Finding, build_findings
 from memnotsafe.tracing.causal_graph import build_causal_chain, flatten_linear
 
@@ -696,7 +696,7 @@ def render_html(campaign: CampaignResult, run_events_by_case: dict[str, list[dic
     <div class="stat"><div class="n">{confirmed}</div><div class="l">Confirmed compromises</div></div>
     <div class="stat asr"><div class="n">{asr_txt}</div><div class="l">ASR</div></div>
   </div>
-  <p>{html.escape(_asr_provenance_line(m))}</p>
+  <p>{html.escape(asr_provenance_line(m))}</p>
   <h2>Stage funnel</h2>
   {_funnel_chips(m['funnel'])}
   {_judge_summary_html(m)}
