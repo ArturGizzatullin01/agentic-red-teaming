@@ -261,6 +261,7 @@ def render_campaign_summary(
     rep.line("")
     rep.line(f"END-TO-END ASR: {asr * 100:.0f}%" if asr is not None else "END-TO-END ASR: н/д")
     rep.line(f"Successful: {m['successful']}/{m['attempts']}")
+    rep.line(_asr_provenance_line(m))
     render_judge_summary(rep, m)
     rep.line("")
     rep.line("Report:")
@@ -336,3 +337,37 @@ def render_dataset_built(rep: "ConsoleReporter", n_cases: int, path: Any, by_sta
     rep.line(f"Собрано случаев: {n_cases} -> {path}")
     for stage, count in sorted(by_stage.items()):
         rep.line(f"  {stage:<16} {count}")
+
+
+def _asr_provenance_line(m: dict) -> str:
+    """Строка природы ASR под END-TO-END ASR (карточка R, W2): независимая
+    доля и ПОИМЁННЫЕ механизмы расхождения, которые сработали. Молчит о
+    не сработавших. Печатается ВСЕГДА: «все успехи независимы» — тоже
+    информация, отсутствие строки читалось бы как «не считали»."""
+    prov = m.get("asr_provenance") or {}
+    successful = prov.get("successful", 0)
+    independent = prov.get("independent", 0)
+    asr_ind = prov.get("end_to_end_asr_independent")
+    if not successful:
+        return "Из них независимых: — (успехов нет)"
+    share = "н/д" if asr_ind is None else f"{asr_ind * 100:.0f}%"
+    parts = [f"Из них независимых: {independent}/{successful} ({share})"]
+    if independent == successful:
+        parts.append("все успехи независимы")
+    else:
+        reasons = []
+        if prov.get("judge_raised_only"):
+            reasons.append(
+                f"{prov['judge_raised_only']} поднято судьёй"
+            )
+        if prov.get("retrieval_tolerated_only"):
+            reasons.append(
+                f"{prov['retrieval_tolerated_only']} на ненаблюдённом retrieval"
+            )
+        if prov.get("judge_raised_and_retrieval_tolerated"):
+            reasons.append(
+                f"{prov['judge_raised_and_retrieval_tolerated']} "
+                "поднято судьёй при ненаблюдённом retrieval"
+            )
+        parts.append("; ".join(reasons))
+    return ": ".join(parts)
