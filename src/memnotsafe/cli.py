@@ -89,6 +89,12 @@ def cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preflight(args: argparse.Namespace) -> int:
+    from memnotsafe.preflight import preflight_cli
+
+    return preflight_cli(args.scenario)
+
+
 def _resolve_report_dir(output: str) -> tuple[Path, str]:
     p = Path(output)
     if p.suffix == ".html":
@@ -650,6 +656,10 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--scenario", default=None)
     _add_output_flags(pp)
     pp.set_defaults(func=cmd_probe)
+
+    pf = sub.add_parser("preflight", help="проверить ДО прогона, что будет измерено (identity, стенд, Mongo)")
+    pf.add_argument("--scenario", required=True)
+    pf.set_defaults(func=cmd_preflight)
 
     pr = sub.add_parser("run", help="один прогон атаки (repetitions=1)")
     pr.add_argument("--target", default=None)
