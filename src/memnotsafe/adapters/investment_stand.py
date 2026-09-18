@@ -48,6 +48,59 @@ _USER_COLLECTIONS = ("dialog_sessions", "episodic_memories", "semantic_memories"
 _GLOBAL_COLLECTION = "agent_policy_memories"
 _PORTFOLIO_TOOL = "portfolio_get_positions_valuation"
 
+
+def _pin_verdict(observed: Any, configured: Any) -> tuple[bool | None, str]:
+    """Тристейт «удержался ли пин сэмплинга» (карточка Q, W6). UNKNOWN ≠ False.
+
+    Роль ПРОВЕРЯЕМА, если в configured есть оба ключа f"{role}_temperature" и
+    f"{role}_top_p" — правило вычисляемое из имени роли, не список двух имён:
+    третья роль стенда не ломает вывод и не требует правки.
+
+    true  — есть хотя бы одна проверяемая запись и у ВСЕХ проверяемых
+            temperature/top_p совпадают с configured;
+    false — есть хотя бы одно расхождение; note называет роль, поле и оба
+            значения (проверяемые записи с расхождением);
+    None  — решить нельзя: observed пуст либо ни одна запись не проверяема;
+            note называет, какой из этих случаев.
+    Непроверяемая запись не делает false; если часть записей проверяема,
+    вывод делается по проверяемым, note перечисляет непроверенные роли."""
+    if not isinstance(observed, list) or not observed:
+        return None, "observed пуст: модель за время процесса не использовалась"
+    checkable: list[dict[str, Any]] = []
+    unchecked: list[str] = []
+    for entry in observed:
+        role = str(entry.get("role", "")) if isinstance(entry, dict) else ""
+        if f"{role}_temperature" in configured and f"{role}_top_p" in configured:
+            checkable.append(entry)
+        else:
+            unchecked.append(role or "<без роли>")
+    if not checkable:
+        return None, (
+            "ни одна запись observed не проверяема: нет пары "
+            "{роль}_temperature/{роль}_top_p в configured"
+            + (f" (роли: {', '.join(unchecked)})" if unchecked else "")
+        )
+    mismatches: list[str] = []
+    for entry in checkable:
+        role = str(entry.get("role", ""))
+        for field_name in ("temperature", "top_p"):
+            expected = configured[f"{role}_{field_name}"]
+            if entry.get(field_name) != expected:
+                mismatches.append(
+                    f"{role}.{field_name}: observed={entry.get(field_name)!r} "
+                    f"configured={expected!r}"
+                )
+    parts = [
+        "расхождения: " + "; ".join(mismatches)
+        if mismatches
+        else "все проверяемые записи совпадают с configured"
+    ]
+    if unchecked:
+        parts.append(
+            "непроверенные роли (нет пары в configured): " + ", ".join(unchecked)
+        )
+    return bool(not mismatches), ". ".join(parts)
+
 # HTTP-исходы finalize, при которых фолбэк в чат НЕ слепой: ответ получен и
 # доказывает, что finalize НЕ применён (эндпоинт отсутствует / запрос отклонён
 # до обработки). 5xx и транспортные обрывы после отправки сюда не входят.
@@ -119,6 +172,9 @@ class InvestmentStandAdapter(TargetAdapter):
         self._case_id = "unbound"
         self._reset_available = True
         self._evidence_channel: str | None = None
+        # Карточка Q (W6): фактический сэмплинг таргета, собранный после
+        # цикла попыток; None — сборщик ещё не звался (адаптер вне кампании).
+        self._sampling: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ контекст
 
@@ -127,12 +183,17 @@ class InvestmentStandAdapter(TargetAdapter):
 
     def run_metadata(self) -> dict[str, Any]:
         """Метаданные прогона для отчёта (FR-007/FR-012). Читается campaign.py
-        как опциональное расширение контракта (duck-typed, не target-branching)."""
-        return {
+        как опциональное расширение контракта (duck-typed, не target-branching).
+        target_sampling появляется, когда ядро ДО записи campaign.json вызвало
+        acollect_run_observations(); без сборщика ключа нет — это не ошибка."""
+        meta = {
             "reset_available": self._reset_available,
             "evidence_channel": self._evidence_channel,
             "target": self.base_url,
         }
+        if self._sampling is not None:
+            meta["target_sampling"] = self._sampling
+        return meta
 
     def context_tool_evidence(self) -> dict[str, Any] | None:
         """P09-full (фича 010): канал телеметрии effective_context/actual args
@@ -147,6 +208,107 @@ class InvestmentStandAdapter(TargetAdapter):
         отдавать факты по контракту evidence/telemetry. Вызов НЕ ходит в
         сеть: состояние канала известно до всякого соединения."""
         return None
+
+    # --------------------------------------------------- сэмплинг таргета (карточка Q, W6)
+
+    _SAMPLING_ENDPOINT = "/debug/sampling"
+    # Свой короткий таймаут, НЕ наследующий общий таймаут адаптера: повисший
+    # эндпоинт наблюдаемости не имеет права задержать запись артефакта прогона.
+    _SAMPLING_TIMEOUT_S = 5.0
+    # Артефакт прогона обязан иметь предсказуемый размер: тело больше границы
+    # не разбирается вовсе.
+    _SAMPLING_MAX_BYTES = 64 * 1024
+
+    async def acollect_run_observations(self) -> None:
+        """Собирает фактический сэмплинг таргета: GET /debug/sampling,
+        контракт stand.sampling/v1 (карточки P/P-2 стенда). Результат лежит
+        в поле экземпляра и забирается run_metadata() под ключом
+        target_sampling. Вызывается ядром ОДИН раз — после цикла попыток,
+        непосредственно перед записью campaign.json: до кампании observed
+        пуст по построению, и артефакт зафиксировал бы пустоту вместо факта.
+
+        Не бросает наружу НИКОГДА: любой отказ (транспорт, статус, размер,
+        разбор, схема) превращается в status:"unavailable" с причиной —
+        кампания, которая прошла, не может быть потеряна из-за чтения
+        наблюдаемости. Копируются только schema/observed/configured; имена
+        посторонних ключей верхнего уровня уходят в note, значения — нет."""
+        if self._sampling is not None:
+            return  # один вызов на прогон, без повторов
+        endpoint = self.base_url.rstrip("/") + self._SAMPLING_ENDPOINT
+        try:
+            resp = await self._client.get(
+                self._SAMPLING_ENDPOINT, timeout=self._SAMPLING_TIMEOUT_S
+            )
+            if resp.status_code != 200:
+                self._sampling = self._sampling_unavailable(
+                    endpoint, f"HTTP {resp.status_code} от {self._SAMPLING_ENDPOINT}"
+                )
+                return
+            if len(resp.content) > self._SAMPLING_MAX_BYTES:
+                self._sampling = self._sampling_unavailable(
+                    endpoint,
+                    f"тело ответа больше {self._SAMPLING_MAX_BYTES} байт "
+                    f"({len(resp.content)})",
+                )
+                return
+            try:
+                data = json.loads(resp.text)
+            except ValueError as exc:
+                self._sampling = self._sampling_unavailable(
+                    endpoint, f"ответ не разбирается как JSON: {type(exc).__name__}"
+                )
+                return
+            if not isinstance(data, dict):
+                self._sampling = self._sampling_unavailable(
+                    endpoint, f"ответ не является JSON-объектом: {type(data).__name__}"
+                )
+                return
+            schema = data.get("schema")
+            if schema != "stand.sampling/v1":
+                self._sampling = self._sampling_unavailable(
+                    endpoint, "неожиданная schema ответа: " + repr(str(schema)[:64])
+                )
+                return
+            missing = [k for k in ("observed", "configured") if k not in data]
+            if missing:
+                self._sampling = self._sampling_unavailable(
+                    endpoint, f"в ответе нет ключа(ей): {', '.join(missing)}"
+                )
+                return
+            observed, configured = data["observed"], data["configured"]
+            pin_held, pin_note = _pin_verdict(observed, configured)
+            self._sampling = {
+                "status": "observed",
+                "endpoint": endpoint,
+                "schema": schema,
+                "observed": observed,
+                "configured": configured,
+                "pin_held": pin_held,
+                "pin_note": pin_note,
+            }
+            extra_keys = sorted(set(data) - {"schema", "observed", "configured"})
+            if extra_keys:
+                # имена — да, значения — нет: посторонние поля не копируются
+                self._sampling["note"] = (
+                    "посторонние поля верхнего уровня не копировались: "
+                    + ", ".join(extra_keys)
+                )
+        except Exception as exc:  # noqa: BLE001 — прогон важнее наблюдаемости
+            self._sampling = self._sampling_unavailable(
+                endpoint, f"транспорт недоступен: {type(exc).__name__}"
+            )
+
+    @staticmethod
+    def _sampling_unavailable(endpoint: str, reason: str) -> dict[str, Any]:
+        """Слот «недоступно С ПРИЧИНОЙ» — тот же словарь, что у
+        context_tool_evidence: не absent и не синтетика."""
+        return {
+            "status": "unavailable",
+            "endpoint": endpoint,
+            "reason": reason,
+            "pin_held": None,
+            "pin_note": "недоступно — пин не проверялся (см. reason)",
+        }
 
     # ------------------------------------------------------------------ identity
 

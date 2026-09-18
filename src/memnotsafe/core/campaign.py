@@ -293,6 +293,7 @@ class Campaign:
             results=results,
             aggregate_metrics=aggregate,
         )
+        if hasattr(self.target, "acollect_run_observations"): await self.target.acollect_run_observations()
         (self.output_dir / "campaign.json").write_text(
             json.dumps(
                 _campaign_to_dict(campaign_result, self._run_metadata(run_id, len(results))),
@@ -612,6 +613,7 @@ class Campaign:
             # {"active": false}: ни вызовов, ни бюджета, которые читались бы как
             # «эскалация работала». Симметрично блоку судьи.
             "attacker": self._attacker_metadata(),
+            "target_sampling": run_meta.get("target_sampling"),
         }
 
     def _attacker_metadata(self) -> dict:
