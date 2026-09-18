@@ -578,3 +578,18 @@ def test_b2_skip_when_nothing_to_compare(tmp_path, monkeypatch):
     assert _by_id(result, "B2").status == SKIP
     assert "(см. B1)" in _by_id(result, "B2").text
     assert result.exit_code == 1
+
+
+def test_b2_skip_when_single_principal(tmp_path, monkeypatch):
+    """PASS_IF 8 (карточка U): принципал в сценарии ровно один — B2 SKIP, а
+    не вакуумное OK; B1 OK, exit 0; строка непустая и объясняет, почему
+    сравнения не было. Путь с двумя принципалами не тронут (см. тесты S-2)."""
+    text = _LIVE_YAML.replace('    "1002": SK_GENAI_1002\n', "")
+    monkeypatch.setenv("SK_GENAI_1001", "single-principal-value")
+    result = _run(tmp_path, env=None, text=text)
+    b1, b2 = _by_id(result, "B1"), _by_id(result, "B2")
+    assert b1.status == OK
+    assert b2.status == SKIP
+    assert b2.text and "сравнения не было" in b2.text
+    assert "один" in b2.text
+    assert result.exit_code == 0

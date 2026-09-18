@@ -192,3 +192,98 @@ def test_core_reads_both_forms_and_core_names_are_duck_typed():
     base = _base_contract()
     for name in _core_extensions():
         assert name not in base, f"{name} — метод базы, а не расширение"
+
+
+# ============================== Карточка U, часть A — наследование контракта
+# Прецедент — карточка L: не запрет, а ЗАЯВЛЕННЫЙ список, который краснеет при
+# изменении. Из двенадцати публичных методов базы абстрактны только пять;
+# остальные семь имеют умолчания, и адаптер, забывший любой из них,
+# инстанцируется молча на унаследованном поведении. Шесть умолчаний честны
+# (None/no-op = UNKNOWN); седьмое — wait_until_persistent — утверждает
+# outcome="observed" без единого наблюдения, и раннер гейтит на нём
+# persistence (core/runner.py:306). Инвентаризация делает наследование
+# видимым; чинить адаптеры — решение владельца, не этой карточки.
+
+# adapter -> {метод: причина, по которой наследование заявлено}
+_DECLARED_INHERITED: dict[str, dict[str, str]] = {
+    "MockTarget": {
+        "aclose": "у mock нет сетевых ресурсов, no-op умолчания честен",
+        "reset": "алиас reset_state на базе, семантика та же",
+    },
+    "OpenAICompatibleAdapter": {
+        "get_trace": "чёрный ящик без трассы, None = честный UNKNOWN",
+        "snapshot": "ненаблюдаемая память, None = честный UNKNOWN",
+        "snapshot_user": "ненаблюдаемая память, None = честный UNKNOWN",
+        "set_context": "телеметрия для LLM-таргета непринципиальна",
+        "wait_until_persistent": (
+            "ОПАСНОЕ умолчание: база возвращает SettleResult(outcome='observed') "
+            "БЕЗ наблюдения, раннер гейтит на нём persistence. Спит: adapter=openai "
+            "не использует ни один из 47 сценариев. НЕ чинить здесь — решение "
+            "владельца (карточка U, STOP)"
+        ),
+        "reset": "алиас reset_state на базе, семантика та же",
+    },
+    "InvestmentStandAdapter": {
+        "reset": "алиас reset_state на базе, семантика та же",
+    },
+}
+
+_WAIT_MSG = (
+    "наследование wait_until_persistent = адаптер утверждает "
+    "SettleResult(outcome='observed') без единого наблюдения, а раннер "
+    "гейтит на этом исходе стадию persistence (core/runner.py:306)"
+)
+
+
+def _inherited_methods(cls) -> set[str]:
+    """Методы контракта, доставшиеся от базы: нет собственной реализации
+    в vars(cls). getattr_static здесь непригоден — он смотрит MRO и потому
+    не отличает своё от унаследованного (дефект замка карточки T)."""
+    return {name for name in _base_contract() if name not in vars(cls)}
+
+
+def test_inherited_contract_inventory_matches_declared():
+    """Фактическое наследование (обход из карточки T) == заявленному списку.
+    Расхождение в любую сторону краснеет и называет адаптер, метод и
+    направление; неизвестный списку адаптер краснеет сам, без правки логики
+    теста."""
+    actual = {cls.__name__: _inherited_methods(cls) for cls in discover_adapters()}
+    problems = []
+    for name in sorted(set(actual) - set(_DECLARED_INHERITED)):
+        problems.append(
+            f"адаптер не в заявленном списке наследования: {name} "
+            f"(унаследовал: {sorted(actual[name])}) — "
+            f"допиши _DECLARED_INHERITED и реши, законно ли каждое"
+        )
+    for name in sorted(set(_DECLARED_INHERITED) & set(actual)):
+        declared = set(_DECLARED_INHERITED[name])
+        for method in sorted(actual[name] - declared):
+            problems.append(
+                f"{name} ПЕРЕСТАЛ переопределять {method} — появилось "
+                f"незаявленное наследование (кто-то удалил реализацию?)"
+            )
+        for method in sorted(declared - actual[name]):
+            problems.append(
+                f"{name} НАЧАЛ переопределять {method} — наследование "
+                f"исчезло, заявленный список устарел, обнови его сознательно"
+            )
+    assert not problems, "инвентаризация наследования разошлась: " + "; ".join(problems)
+
+
+def test_wait_until_persistent_inheritance_is_declared_and_singular():
+    """Особая проверка одного опасного умолчания: наследников ровно столько,
+    сколько заявлено. Появление ВТОРОГО наследника краснеет с сообщением про
+    observed-без-наблюдения, а не про «метод отсутствует»."""
+    actual = {
+        cls.__name__ for cls in discover_adapters()
+        if "wait_until_persistent" in _inherited_methods(cls)
+    }
+    declared = {
+        name for name, methods in _DECLARED_INHERITED.items()
+        if "wait_until_persistent" in methods
+    }
+    unexpected, outdated = actual - declared, declared - actual
+    assert not (unexpected or outdated), (
+        f"{_WAIT_MSG}. Незаявленные наследники: {sorted(unexpected)}; "
+        f"заявлено, но переопределяют сами: {sorted(outdated)}"
+    )

@@ -197,7 +197,17 @@ def _identity_checks(identities, environ) -> list[Check]:
         if v is not None:
             groups.setdefault(v, []).append(uid)
     collisions = sorted(sorted(uids) for uids in groups.values() if len(uids) > 1)
-    if not groups:
+    if len(identities) < 2:
+        # Карточка U, часть B: принципал в сценарии один — пары для сравнения
+        # не существует ВООБЩЕ, и вакуумное OK лгало бы о проверке, которой
+        # не было (из 10 live-сценариев 8 объявляют ровно одну identity).
+        # Путь с двумя и более принципалами не тронут ни поведением, ни
+        # текстом — включая случай «одна из двух переменных пуста» (там
+        # честный блокер B1 уже сказал своё).
+        b2 = Check("B2", "Значения identity попарно различны", SKIP,
+                   f"принципал в сценарии один ({len(identities)}) — пары "
+                   "для сравнения не существует, сравнения не было")
+    elif not groups:
         # Сравнения не было вовсе: статус — SKIP, а не OK — UNKNOWN ≠ True по
         # той же причине, что UNKNOWN ≠ False (S-2, дефект 4).
         b2 = Check("B2", "Значения identity попарно различны", SKIP,
