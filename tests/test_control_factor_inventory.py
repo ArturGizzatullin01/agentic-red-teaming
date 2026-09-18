@@ -65,7 +65,7 @@ EXPECTED_PAIR_DIFFS: dict[tuple[str, str], tuple[str, ...]] = {
     ("contact-supersede", "contact-supersede-protected"): ("vulnerable",),
     ("cross-lingual-insertion", "cross-lingual-insertion-protected"): ("vulnerable",),
     ("cross-topic-smuggle", "cross-topic-smuggle-protected"): ("vulnerable",),
-    ("cross_user_bac", "cross_user_bac_protected"): ("repetitions", "vulnerable"),
+    ("cross_user_bac", "cross_user_bac_protected"): ("vulnerable",),
     ("cross_user_bac", "cross_user_bac_live"): ("adapter", "auth_mode", "base_url", "repetitions", "vulnerable"),
     ("direct_poisoning", "direct_poisoning-protected"): ("vulnerable",),
     ("direct_poisoning", "direct_poisoning_live"): ("adapter", "auth_mode", "base_url", "repetitions", "stop_on_success", "vulnerable"),
@@ -168,4 +168,41 @@ def test_control_factor_inventory() -> None:
     assert unpaired == EXPECTED_UNPAIRED, (
         f"непарные сценарии изменились: {unpaired} — новые сценарии без "
         f"двойника тоже факт инвентаризации, закрепи их здесь"
+    )
+
+
+def test_protected_pairs_single_factor() -> None:
+    """Замок W4 (карточка O): у КАЖДОЙ mock-пары `<имя> ↔ <имя>_protected` /
+    `<имя>-protected` различие обязано быть ровно фактором `vulnerable`.
+
+    Это и есть «арм отличается от контроля только атакой»: если в паре
+    расползается что-то ещё (повторы, stop_on_success, адреса), разница исходов
+    перестаёт читаться как эффект защиты — она может быть эффектом бюджета
+    попыток. Пары `_live`/`-live` и явная пара L1↔L2 сюда НЕ входят: их
+    многофакторность по устройству (другой адаптер, другой стек), это другой
+    тип сравнения, а не конфаунд.
+
+    Отбор пар — то же механическое правило `_pairs` с фильтром на protected-
+    суффикс, не список имён: новая protected-пара попадает под замок сама.
+    """
+    stems = {p.stem for p in SCENARIOS.glob("*.yaml")}
+    protected_pairs = [
+        (x, y) for x, y in _pairs(stems)
+        if y.endswith(("-protected", "_protected")) and (x, y) not in EXPLICIT_PAIRS
+    ]
+    print(f"[W4-LOCK] protected-пар под замком: {len(protected_pairs)}")
+    for x, y in protected_pairs:
+        fx, fy = _factors(x), _factors(y)
+        diff = tuple(sorted(k for k in FACTOR_KEYS if fx[k] != fy[k]))
+        print(f"[W4-LOCK] {x} <-> {y}: {', '.join(diff) if diff else '<идентичны>'}")
+        extra = tuple(k for k in diff if k != "vulnerable")
+        missing = ("vulnerable",) if "vulnerable" not in diff else ()
+        assert diff == ("vulnerable",), (
+            f"пара {x!r} <-> {y!r}: различаются факторы {diff}, а обязаны ровно "
+            f"('vulnerable',) — лишнее: {extra or '—'}, отсутствует: {missing or '—'}. "
+            f"Конфаунд вернулся: выровняй СЦЕНАРИИ (повторы/прочие поля контроля "
+            f"должны совпадать с армом), а не подправляй это ожидание"
+        )
+    assert protected_pairs, (
+        "protected-пары не отобраны вовсе — правило паринга протухло"
     )

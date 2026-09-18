@@ -20,4 +20,4 @@ attack:
   family: cross_user_bac
 
 metrics:
-  repetitions: 3
+  repetitions: 5
