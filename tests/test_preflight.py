@@ -151,7 +151,8 @@ def test_b1_differs_from_b2(tmp_path, monkeypatch):
     result = _run(tmp_path, env=None)
     b1, b2 = _by_id(result, "B1"), _by_id(result, "B2")
     assert b1.status == BLOCKER and "SK_GENAI_1001" in b1.text
-    assert b2.status == OK  # единственное непустое значение сравнивать не с чем
+    assert b2.status == SKIP  # карточка B2-partial: непустых < 2 — сравнения не было
+    assert "меньше двух" in b2.text
 
     monkeypatch.setenv("SK_GENAI_1001", "value-one")
     result = _run(tmp_path, env=None)
@@ -693,3 +694,70 @@ def test_b3_ok_when_both_declared_distinct(tmp_path, monkeypatch):
     assert b3.status == OK
     assert "1001" in b3.text and "1002" in b3.text
     assert result.exit_code == 0
+
+
+# =========================================================== карточка B2-partial
+# Непустых значений меньше двух — пары не существовало, и вакуумное OK лгало
+# о сравнении, которого не было (прецедент SKIP-вместо-вакуума — карточка U
+# для единственного принципала). Коллизия реальных значений приоритетнее.
+
+_THREE_IDENT_YAML = _LIVE_YAML.replace(
+    '    "1002": SK_GENAI_1002\n',
+    '    "1002": SK_GENAI_1002\n    "1003": SK_GENAI_1003\n',
+)
+
+
+def test_b2_skip_two_declared_one_populated(tmp_path, monkeypatch):
+    """PASS_IF 1: 2 объявлено / 1 непустое → B1 BLOCKER, B2 SKIP, exit 1."""
+    monkeypatch.delenv("SK_GENAI_1001", raising=False)
+    monkeypatch.setenv("SK_GENAI_1002", "only-populated")
+    result = _run(tmp_path, env=None)
+    assert _by_id(result, "B1").status == BLOCKER
+    b2 = _by_id(result, "B2")
+    assert b2.status == SKIP
+    assert "меньше двух" in b2.text
+    assert result.exit_code == 1
+
+
+def test_b2_skip_three_declared_one_populated(tmp_path, monkeypatch):
+    """PASS_IF 2: 3 объявлено / 1 непустое → SKIP, а не «все 1 значений различны»."""
+    monkeypatch.delenv("SK_GENAI_1002", raising=False)
+    monkeypatch.delenv("SK_GENAI_1003", raising=False)
+    monkeypatch.setenv("SK_GENAI_1001", "single-value")
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)
+    b2 = _by_id(result, "B2")
+    assert b2.status == SKIP
+    assert "1 из 3" in b2.text
+
+
+def test_b2_ok_three_declared_two_populated_distinct(tmp_path, monkeypatch):
+    """PASS_IF 3: 3 / 2 различных непустых → B2 OK честно; B1 независимо
+    BLOCKER за третье отсутствующее (значения не влияют на B2)."""
+    monkeypatch.setenv("SK_GENAI_1001", "value-one")
+    monkeypatch.setenv("SK_GENAI_1002", "value-two")
+    monkeypatch.delenv("SK_GENAI_1003", raising=False)
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)
+    assert _by_id(result, "B2").status == OK
+    assert _by_id(result, "B1").status == BLOCKER
+    assert "SK_GENAI_1003" in _by_id(result, "B1").text
+
+
+def test_b2_blocker_three_declared_two_populated_equal(tmp_path, monkeypatch):
+    """PASS_IF 4: 3 / 2 совпавших → B2 BLOCKER: реальная коллизия приоритетнее
+    подсчёта непустых; непопавший третий принципал в блокере не назван."""
+    monkeypatch.setenv("SK_GENAI_1001", "dup-partial")
+    monkeypatch.setenv("SK_GENAI_1002", "dup-partial")
+    monkeypatch.delenv("SK_GENAI_1003", raising=False)
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)
+    b2 = _by_id(result, "B2")
+    assert b2.status == BLOCKER
+    assert result.exit_code == 1
+    assert "1001" in b2.text and "1002" in b2.text and "1003" not in b2.text
+
+
+def test_b2_partial_values_never_leak(tmp_path, monkeypatch):
+    """PASS_IF: значения ключей не появляются в выводе на частичной раскладке."""
+    monkeypatch.setenv("SK_GENAI_1001", "b2-partial-needle-one")
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)  # 1002/1003 не заданы
+    assert "b2-partial-needle-one" not in result.render()
+    assert _by_id(result, "B2").status == SKIP
