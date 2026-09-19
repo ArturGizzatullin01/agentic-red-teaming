@@ -13,6 +13,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memnotsafe.preflight import (  # noqa: E402
@@ -149,7 +151,8 @@ def test_b1_differs_from_b2(tmp_path, monkeypatch):
     result = _run(tmp_path, env=None)
     b1, b2 = _by_id(result, "B1"), _by_id(result, "B2")
     assert b1.status == BLOCKER and "SK_GENAI_1001" in b1.text
-    assert b2.status == OK  # единственное непустое значение сравнивать не с чем
+    assert b2.status == SKIP  # карточка B2-partial: непустых < 2 — сравнения не было
+    assert "меньше двух" in b2.text
 
     monkeypatch.setenv("SK_GENAI_1001", "value-one")
     result = _run(tmp_path, env=None)
@@ -188,9 +191,10 @@ def test_w2_distinguishes_404_from_transport(tmp_path, monkeypatch):
 
     transport_down = _run(tmp_path, env=None, healthz=None)
     w1 = _by_id(transport_down, "W1")
-    assert w1.status == WARNING
+    assert w1.status == BLOCKER  # карточка D7-A: мёртвый стенд — блокер
     assert "недостижим" in w1.text
     assert _by_id(transport_down, "W2").status == SKIP
+    assert transport_down.exit_code == 1
     assert w1.text != w2.text  # различимы по тексту
 
 
@@ -365,8 +369,9 @@ def test_w7_names_known_deployments(tmp_path, monkeypatch):
 
 def test_real_live_scenario_offline(tmp_path, monkeypatch, capsys):
     """Реальный scenarios/cross_user_bac_live.yaml: подменённый транспорт,
-    недоступный Mongo (стенд не поднимаем). Ожидаем предупреждения, не падение;
-    правильное предупреждение про Mongo — W4 «задан, но недоступен», НЕ W3."""
+    недоступный Mongo (стенд не поднимаем). Мёртвый стенд — W1 БЛОКЕР и
+    exit 1 (карточка D7-A); Mongo — предупреждение W4 «задан, но недоступен»,
+    НЕ W3; preflight не падает."""
     monkeypatch.setenv("SK_GENAI_1001", "live-fake-one")
     monkeypatch.setenv("SK_GENAI_1002", "live-fake-two")
     result = run_preflight(
@@ -377,12 +382,13 @@ def test_real_live_scenario_offline(tmp_path, monkeypatch, capsys):
     )
     rendered = result.render()
     print("\n" + rendered)
-    w3, w4 = _by_id(result, "W3"), _by_id(result, "W4")
+    w1, w3, w4 = _by_id(result, "W1"), _by_id(result, "W3"), _by_id(result, "W4")
+    assert w1.status == BLOCKER and "недостижим" in w1.text
     assert w3.status == OK, "mongo_uri в этом сценарии ЗАДАН — W3 быть не должно"
     assert w4.status == WARNING
     assert "задан, но недоступен" in w4.text
-    assert result.blockers == 0
-    assert result.exit_code == 0  # предупреждения, не блокеры
+    assert result.blockers == 1
+    assert result.exit_code == 1  # мёртвый стенд блокирует запуск
     assert "live-fake-one" not in rendered and "live-fake-two" not in rendered
     captured = capsys.readouterr()
     assert "live-fake-one" not in captured.out + captured.err
@@ -592,4 +598,252 @@ def test_b2_skip_when_single_principal(tmp_path, monkeypatch):
     assert b2.status == SKIP
     assert b2.text and "сравнения не было" in b2.text
     assert "один" in b2.text
+    assert result.exit_code == 0
+
+
+# ================================================================== карточка D4
+# Топология принципалов: victim-only парсится (инцидент V-2: preflight падал
+# KeyError 'attacker' на контроле жертвы), пустой actors — ValueError, B3
+# ловит одинаковый user_id при РАЗНЫХ значениях ключей (B2 там зелёный).
+
+_ATTACKER_ONLY_YAML = _LIVE_YAML.replace('  victim: {user_id: "1002"}\n', "")
+
+
+def test_victim_only_control_parses_and_runs():
+    """PASS_IF 1: реальный scenarios/live_clean_control.yaml (victim-only)
+    грузится без KeyError: attacker достраивается жертвой; B3 SKIP с названным
+    блоком; полный офлайн-preflight не падает, блокеров нет."""
+    from memnotsafe.core.config import load_scenario
+
+    scenario = load_scenario(_REPO / "scenarios" / "live_clean_control.yaml")
+    assert scenario.victim.user_id == "1002"
+    assert scenario.attacker.user_id == "1002"  # достроен загрузчиком
+
+    import os
+
+    old = os.environ.get("SK_GENAI_1002")
+    os.environ["SK_GENAI_1002"] = "control-value"
+    try:
+        result = run_preflight(
+            _REPO / "scenarios" / "live_clean_control.yaml",
+            http_get=_fake_http(),
+            mongo_probe=_fake_mongo("ok"),
+            environ=None,
+        )
+    finally:
+        if old is None:
+            os.environ.pop("SK_GENAI_1002", None)
+        else:
+            os.environ["SK_GENAI_1002"] = old
+    b3 = _by_id(result, "B3")
+    assert b3.status == SKIP
+    assert "victim" in b3.text and "1002" in b3.text
+    assert result.blockers == 0
+    assert result.exit_code == 0
+
+
+def test_attacker_only_behavior_unchanged(tmp_path, monkeypatch):
+    """PASS_IF 2: attacker-only — прежняя семантика victim==attacker; B3 SKIP,
+    назван attacker; exit не меняется."""
+    from memnotsafe.core.config import load_scenario
+
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    scenario = load_scenario(_write(tmp_path, _ATTACKER_ONLY_YAML))
+    assert scenario.attacker.user_id == "1001"
+    assert scenario.victim.user_id == "1001"  # прежнее умолчание single-user
+    result = _run(tmp_path, env=None, text=_ATTACKER_ONLY_YAML)
+    b3 = _by_id(result, "B3")
+    assert b3.status == SKIP
+    assert "attacker" in b3.text
+
+
+def test_no_actors_at_all_is_valueerror_not_keyerror(tmp_path):
+    """PASS_IF 3: ни attacker, ни victim — ValueError с понятным текстом
+    (названы оба блока), не KeyError."""
+    from memnotsafe.core.config import load_scenario
+
+    text = _LIVE_YAML.replace(
+        '  attacker: {user_id: "1001"}\n  victim: {user_id: "1002"}\n', ""
+    )
+    with pytest.raises(ValueError, match="attacker"):
+        load_scenario(_write(tmp_path, text))
+
+
+def test_d4_same_actor_user_id_different_keys_is_blocker(tmp_path, monkeypatch):
+    """PASS_IF 4 (мутация D4): оба блока объявлены явно, user_id совпали,
+    значения ключей РАЗНЫЕ — B2 зелёный (своего не видит), блокирует B3;
+    exit 1; значения ключей наружу не выходят."""
+    monkeypatch.setenv("SK_GENAI_1001", "d4-value-one")
+    monkeypatch.setenv("SK_GENAI_1002", "d4-value-two")
+    dup = _LIVE_YAML.replace('  victim: {user_id: "1002"}', '  victim: {user_id: "1001"}')
+    result = _run(tmp_path, env=None, text=dup)
+    b2, b3 = _by_id(result, "B2"), _by_id(result, "B3")
+    assert b2.status == OK  # ключи различны — замок значений слеп к топологии
+    assert b3.status == BLOCKER
+    assert result.exit_code == 1
+    assert "1001" in b3.text and "кросс-юзер" in b3.text
+    rendered = result.render()
+    assert "d4-value-one" not in rendered and "d4-value-two" not in rendered
+
+
+def test_b3_ok_when_both_declared_distinct(tmp_path, monkeypatch):
+    """Оба блока объявлены явно и user_id различны — B3 OK; здоровый прогон
+    остаётся exit 0 (новая проверка не портит зелёную раскладку)."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    result = _run(tmp_path, env=None)
+    b3 = _by_id(result, "B3")
+    assert b3.status == OK
+    assert "1001" in b3.text and "1002" in b3.text
+    assert result.exit_code == 0
+
+
+# =========================================================== карточка B2-partial
+# Непустых значений меньше двух — пары не существовало, и вакуумное OK лгало
+# о сравнении, которого не было (прецедент SKIP-вместо-вакуума — карточка U
+# для единственного принципала). Коллизия реальных значений приоритетнее.
+
+_THREE_IDENT_YAML = _LIVE_YAML.replace(
+    '    "1002": SK_GENAI_1002\n',
+    '    "1002": SK_GENAI_1002\n    "1003": SK_GENAI_1003\n',
+)
+
+
+def test_b2_skip_two_declared_one_populated(tmp_path, monkeypatch):
+    """PASS_IF 1: 2 объявлено / 1 непустое → B1 BLOCKER, B2 SKIP, exit 1."""
+    monkeypatch.delenv("SK_GENAI_1001", raising=False)
+    monkeypatch.setenv("SK_GENAI_1002", "only-populated")
+    result = _run(tmp_path, env=None)
+    assert _by_id(result, "B1").status == BLOCKER
+    b2 = _by_id(result, "B2")
+    assert b2.status == SKIP
+    assert "меньше двух" in b2.text
+    assert result.exit_code == 1
+
+
+def test_b2_skip_three_declared_one_populated(tmp_path, monkeypatch):
+    """PASS_IF 2: 3 объявлено / 1 непустое → SKIP, а не «все 1 значений различны»."""
+    monkeypatch.delenv("SK_GENAI_1002", raising=False)
+    monkeypatch.delenv("SK_GENAI_1003", raising=False)
+    monkeypatch.setenv("SK_GENAI_1001", "single-value")
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)
+    b2 = _by_id(result, "B2")
+    assert b2.status == SKIP
+    assert "1 из 3" in b2.text
+
+
+def test_b2_ok_three_declared_two_populated_distinct(tmp_path, monkeypatch):
+    """PASS_IF 3: 3 / 2 различных непустых → B2 OK честно; B1 независимо
+    BLOCKER за третье отсутствующее (значения не влияют на B2)."""
+    monkeypatch.setenv("SK_GENAI_1001", "value-one")
+    monkeypatch.setenv("SK_GENAI_1002", "value-two")
+    monkeypatch.delenv("SK_GENAI_1003", raising=False)
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)
+    assert _by_id(result, "B2").status == OK
+    assert _by_id(result, "B1").status == BLOCKER
+    assert "SK_GENAI_1003" in _by_id(result, "B1").text
+
+
+def test_b2_blocker_three_declared_two_populated_equal(tmp_path, monkeypatch):
+    """PASS_IF 4: 3 / 2 совпавших → B2 BLOCKER: реальная коллизия приоритетнее
+    подсчёта непустых; непопавший третий принципал в блокере не назван."""
+    monkeypatch.setenv("SK_GENAI_1001", "dup-partial")
+    monkeypatch.setenv("SK_GENAI_1002", "dup-partial")
+    monkeypatch.delenv("SK_GENAI_1003", raising=False)
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)
+    b2 = _by_id(result, "B2")
+    assert b2.status == BLOCKER
+    assert result.exit_code == 1
+    assert "1001" in b2.text and "1002" in b2.text and "1003" not in b2.text
+
+
+def test_b2_partial_values_never_leak(tmp_path, monkeypatch):
+    """PASS_IF: значения ключей не появляются в выводе на частичной раскладке."""
+    monkeypatch.setenv("SK_GENAI_1001", "b2-partial-needle-one")
+    result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)  # 1002/1003 не заданы
+    assert "b2-partial-needle-one" not in result.render()
+    assert _by_id(result, "B2").status == SKIP
+
+
+# ================================================================= карточка D7-A
+# Мёртвый стенд реально блокирует запуск: W1 — BLOCKER на транспортный отказ
+# и на любой статус != 200; W2 при транспортном отказе — SKIP без второго
+# запроса; base_url не задан — прежний SKIP; остальные W не повышаются.
+
+_TRANSPORT_RECORDER = {}
+
+
+def _recording_http(healthz=None):
+    """Заглушка, считающая ВЫЗОВЫ: доказывает, что при мёртвом /healthz
+    второго запроса (/debug/sampling) не было."""
+    calls: list[str] = []
+
+    async def http_get(url):
+        from memnotsafe.preflight import HttpReply
+
+        calls.append(url)
+        if url.endswith("/healthz"):
+            return HttpReply(status_code=healthz, error="ConnectError" if healthz is None else None)
+        raise AssertionError(f"второй запрос при мёртом стенде: {url}")
+
+    http_get.calls = calls
+    return http_get
+
+
+def test_transport_failure_is_blocker_without_second_request(tmp_path, monkeypatch):
+    """PASS_IF 1–2: транспортный отказ /healthz → W1 БЛОКЕР, exit 1; W2 SKIP;
+    запрос к /debug/sampling не делался ВООБЩЕ (счётчик вызовов)."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    http = _recording_http(healthz=None)
+    result = run_preflight(
+        _write(tmp_path), http_get=http, mongo_probe=_fake_mongo("ok"), environ=None
+    )
+    w1, w2 = _by_id(result, "W1"), _by_id(result, "W2")
+    assert w1.status == BLOCKER
+    assert "недостижим" in w1.text
+    assert w2.status == SKIP
+    assert result.exit_code == 1
+    assert http.calls == ["http://localhost:9600/healthz"], http.calls
+
+
+def test_http_503_and_404_healthz_are_blockers(tmp_path, monkeypatch):
+    """PASS_IF: любой статус != 200 (503, 404) — W1 БЛОКЕР с кодом в тексте,
+    exit 1. Мутация «вернуть WARNING обратно» краснит оба статуса здесь."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    for code in (503, 404):
+        result = _run(tmp_path, env=None, healthz=code)
+        w1 = _by_id(result, "W1")
+        assert w1.status == BLOCKER, code
+        assert str(code) in w1.text
+        assert result.blockers == 1, code
+        assert result.exit_code == 1, code
+
+
+def test_healthy_healthz_and_sampling_404_still_warn_only(tmp_path, monkeypatch):
+    """PASS_IF: healthz 200 + sampling 404 → W1 OK, W2 WARNING (не блокер),
+    exit 0 — автоповышение ЗАТРОНУЛО только W1, телеметрические дыры
+    остаются предупреждениями."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    result = _run(tmp_path, env=None, sampling=404)
+    assert _by_id(result, "W1").status == OK
+    w2 = _by_id(result, "W2")
+    assert w2.status == WARNING and "старее карточки P" in w2.text
+    assert result.blockers == 0
+    assert result.exit_code == 0
+
+
+def test_no_base_url_keeps_former_skip(tmp_path, monkeypatch):
+    """PASS_IF: base_url не задан (mock-сценарии) → W1/W2 прежний SKIP,
+    блокеров нет, exit 0."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    text = _LIVE_YAML.replace('  base_url: "http://localhost:9600"\n', "")
+    result = _run(tmp_path, env=None, text=text)
+    assert _by_id(result, "W1").status == SKIP
+    assert _by_id(result, "W2").status == SKIP
+    assert result.blockers == 0
     assert result.exit_code == 0

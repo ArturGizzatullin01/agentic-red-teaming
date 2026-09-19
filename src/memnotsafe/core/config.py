@@ -88,7 +88,23 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ValueError(f"В сценарии {path} отсутствует обязательное поле {exc}") from exc
 
     target_raw = raw.get("target", {}) or {}
-    victim_raw = actors.get("victim") or actors["attacker"]  # single-user атаки: victim==attacker по умолчанию
+    # Три валидные формы actor-блоков (карточка D4): оба; только attacker
+    # (single-user атака); только victim (контроль единственного принципала).
+    # Отсутствующий блок достраивается вторым — после загрузки отличить
+    # «объявлены оба» от «достроен» можно только по raw, что и делает B3.
+    # `actors:` без тела парсится в None — это тоже «ни attacker, ни victim».
+    attacker_raw = (actors or {}).get("attacker")
+    victim_raw = (actors or {}).get("victim")
+    if not attacker_raw and not victim_raw:
+        raise ValueError(
+            f"В сценарии {path} в блоке actors нет ни attacker, ни victim "
+            "(блок отсутствует или пуст) — нужен хотя бы один "
+            "(второй достроится им же: single-user/контроль)"
+        )
+    if not victim_raw:
+        victim_raw = attacker_raw  # single-user атаки: victim==attacker по умолчанию
+    elif not attacker_raw:
+        attacker_raw = victim_raw  # victim-only (контроль жертвы): attacker==victim
 
     return Scenario(
         id=raw.get("id", path.stem),
@@ -98,7 +114,7 @@ def load_scenario(path: str | Path) -> Scenario:
             base_url=target_raw.get("base_url"),
             extra={k: v for k, v in target_raw.items() if k not in ("adapter", "base_url")},
         ),
-        attacker=ActorConfig(user_id=str(actors["attacker"]["user_id"])),
+        attacker=ActorConfig(user_id=str(attacker_raw["user_id"])),
         victim=ActorConfig(user_id=str(victim_raw["user_id"])),
         attack_family=attack["family"],
         repetitions=int((raw.get("metrics") or {}).get("repetitions", 1)),

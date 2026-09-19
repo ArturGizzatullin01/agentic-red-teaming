@@ -220,16 +220,62 @@ def _identity_checks(identities, environ) -> list[Check]:
         b2 = Check("B2", "Значения identity попарно различны", BLOCKER,
                    "; ".join(parts) + " — кросс-юзер границы нет, атака "
                    "покажет ложный успех")
+    elif len(groups) < 2:
+        # Карточка B2-partial: непустых значений меньше двух — пары для
+        # сравнения не существовало, вакуумное OK лгало о проверке, которой
+        # не было (тот же принцип UNKNOWN ≠ True, прецедент — карточка U).
+        # Реальная коллизия уже поймана веткой выше и BLOCKER важнее подсчёта.
+        b2 = Check("B2", "Значения identity попарно различны", SKIP,
+                   f"непустых значений меньше двух ({len(groups)} из "
+                   f"{len(identities)} объявленных) — пары для сравнения "
+                   "не было (см. B1)")
     else:
         b2 = Check("B2", "Значения identity попарно различны", OK,
                    f"все {len(groups)} значений попарно различны")
     return [b1, b2]
 
 
+def _topology_check(scenario) -> Check:
+    """B3: топология принципалов по actor-блокам. Явность берётся из сырого
+    YAML (scenario.raw): загрузчик достраивает отсутствующий блок, и после
+    загрузки «объявлены оба» от «достроен один» уже не отличить. user_id
+    сравниваются и печатаются как str — незакавыченный 1001 парсится в int
+    (прецедент S-2). Значения ключей здесь нет вовсе: actors знают только
+    user_id, секретная гигиена наследуется тривиально."""
+    actors = scenario.raw.get("actors") or {}
+    declared = [name for name in ("attacker", "victim") if actors.get(name)]
+    title = "Топология принципалов: attacker и victim — разные принципалы"
+    if not declared:
+        # после фикса load_scenario (ValueError на пустом actors) недостижимо;
+        # держим SKIP, а не KeyError: preflight говорит, а не падает
+        return Check("B3", title, SKIP,
+                     "actor-блоки не объявлены — загрузчик обязан был отказать раньше")
+    if len(declared) == 1:
+        name = declared[0]
+        uid = str((actors.get(name) or {}).get("user_id"))
+        return Check("B3", title, SKIP,
+                     f"явно объявлен только {name} (user_id {uid}) — single-user/"
+                     "контроль; второй блок достроен загрузчиком, топологию проверять нечего")
+    attacker_uid = str((actors.get("attacker") or {}).get("user_id"))
+    victim_uid = str((actors.get("victim") or {}).get("user_id"))
+    if attacker_uid == victim_uid:
+        return Check("B3", title, BLOCKER,
+                     f"оба actor-блока объявлены явно, но user_id у обоих {attacker_uid} — "
+                     "принципал один, кросс-юзер границы нет; B2 при этом может быть "
+                     "зелёным (значения ключей различны) — ловить надо до прогона")
+    return Check("B3", title, OK,
+                 f"оба принципала объявлены явно и различны: attacker user_id "
+                 f"{attacker_uid}, victim user_id {victim_uid}")
+
+
 def _http_checks(base_url: str | None, http_get) -> list[Check]:
     """W1 (/healthz) и W2 (/debug/sampling). GET — единственный метод.
-    При транспортном отказе /healthz второй запрос не делается: хост всё
-    равно недостижим, и W2 печатается как SKIP, а не «не проверяли молча»."""
+    Мёртвый стенд — БЛОКЕР, а не предупреждение (карточка D7-A): прогон по
+    недостижимому или неготовому стенду гарантированно упадёт на первом же
+    запросе и потратит живое окно. При транспортном отказе /healthz второй
+    запрос не делается: хост всё равно недостижим, и W2 печатается как SKIP,
+    а не «не проверяли молча». Автоповышение затронуло ТОЛЬКО W1: остальные
+    W — телеметрические дыры — остаются WARNING/SKIP до отдельного решения."""
     if not base_url:
         return [
             Check("W1", f"GET {HEALTHZ_PATH}", SKIP, "base_url не задан"),
@@ -243,12 +289,13 @@ def _http_checks(base_url: str | None, http_get) -> list[Check]:
             w1 = Check("W1", f"GET {HEALTHZ_PATH}", OK,
                        "HTTP 200 — стенд достижим")
         elif healthz.status_code is None:
-            w1 = Check("W1", f"GET {HEALTHZ_PATH}", WARNING,
+            w1 = Check("W1", f"GET {HEALTHZ_PATH}", BLOCKER,
                        f"транспортный отказ ({healthz.error or 'без деталей'}) — "
                        "стенд недостижим, прогон упадёт на первом же запросе")
         else:
-            w1 = Check("W1", f"GET {HEALTHZ_PATH}", WARNING,
-                       f"HTTP {healthz.status_code} — стенд отвечает, но не готов")
+            w1 = Check("W1", f"GET {HEALTHZ_PATH}", BLOCKER,
+                       f"HTTP {healthz.status_code} — стенд отвечает, но не готов "
+                       "(healthz не 200)")
         if healthz.status_code is None:
             return [w1, Check("W2", f"GET {SAMPLING_PATH}", SKIP,
                               "стенд недостижим (см. W1) — запрос не делался")]
@@ -391,6 +438,7 @@ def run_preflight(scenario_path: str | Path, *, http_get=None, mongo_probe=None,
         scenario.target.extra.get("identities") or {},
         os.environ if environ is None else environ,
     ))
+    result.checks.append(_topology_check(scenario))
     result.checks.extend(_http_checks(
         scenario.target.base_url, http_get or _default_http_get))
     result.checks.extend(_mongo_checks(
