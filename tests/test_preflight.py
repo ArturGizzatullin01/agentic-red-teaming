@@ -191,9 +191,10 @@ def test_w2_distinguishes_404_from_transport(tmp_path, monkeypatch):
 
     transport_down = _run(tmp_path, env=None, healthz=None)
     w1 = _by_id(transport_down, "W1")
-    assert w1.status == WARNING
+    assert w1.status == BLOCKER  # карточка D7-A: мёртвый стенд — блокер
     assert "недостижим" in w1.text
     assert _by_id(transport_down, "W2").status == SKIP
+    assert transport_down.exit_code == 1
     assert w1.text != w2.text  # различимы по тексту
 
 
@@ -368,8 +369,9 @@ def test_w7_names_known_deployments(tmp_path, monkeypatch):
 
 def test_real_live_scenario_offline(tmp_path, monkeypatch, capsys):
     """Реальный scenarios/cross_user_bac_live.yaml: подменённый транспорт,
-    недоступный Mongo (стенд не поднимаем). Ожидаем предупреждения, не падение;
-    правильное предупреждение про Mongo — W4 «задан, но недоступен», НЕ W3."""
+    недоступный Mongo (стенд не поднимаем). Мёртвый стенд — W1 БЛОКЕР и
+    exit 1 (карточка D7-A); Mongo — предупреждение W4 «задан, но недоступен»,
+    НЕ W3; preflight не падает."""
     monkeypatch.setenv("SK_GENAI_1001", "live-fake-one")
     monkeypatch.setenv("SK_GENAI_1002", "live-fake-two")
     result = run_preflight(
@@ -380,12 +382,13 @@ def test_real_live_scenario_offline(tmp_path, monkeypatch, capsys):
     )
     rendered = result.render()
     print("\n" + rendered)
-    w3, w4 = _by_id(result, "W3"), _by_id(result, "W4")
+    w1, w3, w4 = _by_id(result, "W1"), _by_id(result, "W3"), _by_id(result, "W4")
+    assert w1.status == BLOCKER and "недостижим" in w1.text
     assert w3.status == OK, "mongo_uri в этом сценарии ЗАДАН — W3 быть не должно"
     assert w4.status == WARNING
     assert "задан, но недоступен" in w4.text
-    assert result.blockers == 0
-    assert result.exit_code == 0  # предупреждения, не блокеры
+    assert result.blockers == 1
+    assert result.exit_code == 1  # мёртвый стенд блокирует запуск
     assert "live-fake-one" not in rendered and "live-fake-two" not in rendered
     captured = capsys.readouterr()
     assert "live-fake-one" not in captured.out + captured.err
@@ -761,3 +764,86 @@ def test_b2_partial_values_never_leak(tmp_path, monkeypatch):
     result = _run(tmp_path, env=None, text=_THREE_IDENT_YAML)  # 1002/1003 не заданы
     assert "b2-partial-needle-one" not in result.render()
     assert _by_id(result, "B2").status == SKIP
+
+
+# ================================================================= карточка D7-A
+# Мёртвый стенд реально блокирует запуск: W1 — BLOCKER на транспортный отказ
+# и на любой статус != 200; W2 при транспортном отказе — SKIP без второго
+# запроса; base_url не задан — прежний SKIP; остальные W не повышаются.
+
+_TRANSPORT_RECORDER = {}
+
+
+def _recording_http(healthz=None):
+    """Заглушка, считающая ВЫЗОВЫ: доказывает, что при мёртвом /healthz
+    второго запроса (/debug/sampling) не было."""
+    calls: list[str] = []
+
+    async def http_get(url):
+        from memnotsafe.preflight import HttpReply
+
+        calls.append(url)
+        if url.endswith("/healthz"):
+            return HttpReply(status_code=healthz, error="ConnectError" if healthz is None else None)
+        raise AssertionError(f"второй запрос при мёртом стенде: {url}")
+
+    http_get.calls = calls
+    return http_get
+
+
+def test_transport_failure_is_blocker_without_second_request(tmp_path, monkeypatch):
+    """PASS_IF 1–2: транспортный отказ /healthz → W1 БЛОКЕР, exit 1; W2 SKIP;
+    запрос к /debug/sampling не делался ВООБЩЕ (счётчик вызовов)."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    http = _recording_http(healthz=None)
+    result = run_preflight(
+        _write(tmp_path), http_get=http, mongo_probe=_fake_mongo("ok"), environ=None
+    )
+    w1, w2 = _by_id(result, "W1"), _by_id(result, "W2")
+    assert w1.status == BLOCKER
+    assert "недостижим" in w1.text
+    assert w2.status == SKIP
+    assert result.exit_code == 1
+    assert http.calls == ["http://localhost:9600/healthz"], http.calls
+
+
+def test_http_503_and_404_healthz_are_blockers(tmp_path, monkeypatch):
+    """PASS_IF: любой статус != 200 (503, 404) — W1 БЛОКЕР с кодом в тексте,
+    exit 1. Мутация «вернуть WARNING обратно» краснит оба статуса здесь."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    for code in (503, 404):
+        result = _run(tmp_path, env=None, healthz=code)
+        w1 = _by_id(result, "W1")
+        assert w1.status == BLOCKER, code
+        assert str(code) in w1.text
+        assert result.blockers == 1, code
+        assert result.exit_code == 1, code
+
+
+def test_healthy_healthz_and_sampling_404_still_warn_only(tmp_path, monkeypatch):
+    """PASS_IF: healthz 200 + sampling 404 → W1 OK, W2 WARNING (не блокер),
+    exit 0 — автоповышение ЗАТРОНУЛО только W1, телеметрические дыры
+    остаются предупреждениями."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    result = _run(tmp_path, env=None, sampling=404)
+    assert _by_id(result, "W1").status == OK
+    w2 = _by_id(result, "W2")
+    assert w2.status == WARNING and "старее карточки P" in w2.text
+    assert result.blockers == 0
+    assert result.exit_code == 0
+
+
+def test_no_base_url_keeps_former_skip(tmp_path, monkeypatch):
+    """PASS_IF: base_url не задан (mock-сценарии) → W1/W2 прежний SKIP,
+    блокеров нет, exit 0."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    text = _LIVE_YAML.replace('  base_url: "http://localhost:9600"\n', "")
+    result = _run(tmp_path, env=None, text=text)
+    assert _by_id(result, "W1").status == SKIP
+    assert _by_id(result, "W2").status == SKIP
+    assert result.blockers == 0
+    assert result.exit_code == 0

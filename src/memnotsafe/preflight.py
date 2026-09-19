@@ -270,8 +270,12 @@ def _topology_check(scenario) -> Check:
 
 def _http_checks(base_url: str | None, http_get) -> list[Check]:
     """W1 (/healthz) и W2 (/debug/sampling). GET — единственный метод.
-    При транспортном отказе /healthz второй запрос не делается: хост всё
-    равно недостижим, и W2 печатается как SKIP, а не «не проверяли молча»."""
+    Мёртвый стенд — БЛОКЕР, а не предупреждение (карточка D7-A): прогон по
+    недостижимому или неготовому стенду гарантированно упадёт на первом же
+    запросе и потратит живое окно. При транспортном отказе /healthz второй
+    запрос не делается: хост всё равно недостижим, и W2 печатается как SKIP,
+    а не «не проверяли молча». Автоповышение затронуло ТОЛЬКО W1: остальные
+    W — телеметрические дыры — остаются WARNING/SKIP до отдельного решения."""
     if not base_url:
         return [
             Check("W1", f"GET {HEALTHZ_PATH}", SKIP, "base_url не задан"),
@@ -285,12 +289,13 @@ def _http_checks(base_url: str | None, http_get) -> list[Check]:
             w1 = Check("W1", f"GET {HEALTHZ_PATH}", OK,
                        "HTTP 200 — стенд достижим")
         elif healthz.status_code is None:
-            w1 = Check("W1", f"GET {HEALTHZ_PATH}", WARNING,
+            w1 = Check("W1", f"GET {HEALTHZ_PATH}", BLOCKER,
                        f"транспортный отказ ({healthz.error or 'без деталей'}) — "
                        "стенд недостижим, прогон упадёт на первом же запросе")
         else:
-            w1 = Check("W1", f"GET {HEALTHZ_PATH}", WARNING,
-                       f"HTTP {healthz.status_code} — стенд отвечает, но не готов")
+            w1 = Check("W1", f"GET {HEALTHZ_PATH}", BLOCKER,
+                       f"HTTP {healthz.status_code} — стенд отвечает, но не готов "
+                       "(healthz не 200)")
         if healthz.status_code is None:
             return [w1, Check("W2", f"GET {SAMPLING_PATH}", SKIP,
                               "стенд недостижим (см. W1) — запрос не делался")]
