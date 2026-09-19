@@ -13,6 +13,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memnotsafe.preflight import (  # noqa: E402
@@ -592,4 +594,102 @@ def test_b2_skip_when_single_principal(tmp_path, monkeypatch):
     assert b2.status == SKIP
     assert b2.text and "сравнения не было" in b2.text
     assert "один" in b2.text
+    assert result.exit_code == 0
+
+
+# ================================================================== карточка D4
+# Топология принципалов: victim-only парсится (инцидент V-2: preflight падал
+# KeyError 'attacker' на контроле жертвы), пустой actors — ValueError, B3
+# ловит одинаковый user_id при РАЗНЫХ значениях ключей (B2 там зелёный).
+
+_ATTACKER_ONLY_YAML = _LIVE_YAML.replace('  victim: {user_id: "1002"}\n', "")
+
+
+def test_victim_only_control_parses_and_runs():
+    """PASS_IF 1: реальный scenarios/live_clean_control.yaml (victim-only)
+    грузится без KeyError: attacker достраивается жертвой; B3 SKIP с названным
+    блоком; полный офлайн-preflight не падает, блокеров нет."""
+    from memnotsafe.core.config import load_scenario
+
+    scenario = load_scenario(_REPO / "scenarios" / "live_clean_control.yaml")
+    assert scenario.victim.user_id == "1002"
+    assert scenario.attacker.user_id == "1002"  # достроен загрузчиком
+
+    import os
+
+    old = os.environ.get("SK_GENAI_1002")
+    os.environ["SK_GENAI_1002"] = "control-value"
+    try:
+        result = run_preflight(
+            _REPO / "scenarios" / "live_clean_control.yaml",
+            http_get=_fake_http(),
+            mongo_probe=_fake_mongo("ok"),
+            environ=None,
+        )
+    finally:
+        if old is None:
+            os.environ.pop("SK_GENAI_1002", None)
+        else:
+            os.environ["SK_GENAI_1002"] = old
+    b3 = _by_id(result, "B3")
+    assert b3.status == SKIP
+    assert "victim" in b3.text and "1002" in b3.text
+    assert result.blockers == 0
+    assert result.exit_code == 0
+
+
+def test_attacker_only_behavior_unchanged(tmp_path, monkeypatch):
+    """PASS_IF 2: attacker-only — прежняя семантика victim==attacker; B3 SKIP,
+    назван attacker; exit не меняется."""
+    from memnotsafe.core.config import load_scenario
+
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    scenario = load_scenario(_write(tmp_path, _ATTACKER_ONLY_YAML))
+    assert scenario.attacker.user_id == "1001"
+    assert scenario.victim.user_id == "1001"  # прежнее умолчание single-user
+    result = _run(tmp_path, env=None, text=_ATTACKER_ONLY_YAML)
+    b3 = _by_id(result, "B3")
+    assert b3.status == SKIP
+    assert "attacker" in b3.text
+
+
+def test_no_actors_at_all_is_valueerror_not_keyerror(tmp_path):
+    """PASS_IF 3: ни attacker, ни victim — ValueError с понятным текстом
+    (названы оба блока), не KeyError."""
+    from memnotsafe.core.config import load_scenario
+
+    text = _LIVE_YAML.replace(
+        '  attacker: {user_id: "1001"}\n  victim: {user_id: "1002"}\n', ""
+    )
+    with pytest.raises(ValueError, match="attacker"):
+        load_scenario(_write(tmp_path, text))
+
+
+def test_d4_same_actor_user_id_different_keys_is_blocker(tmp_path, monkeypatch):
+    """PASS_IF 4 (мутация D4): оба блока объявлены явно, user_id совпали,
+    значения ключей РАЗНЫЕ — B2 зелёный (своего не видит), блокирует B3;
+    exit 1; значения ключей наружу не выходят."""
+    monkeypatch.setenv("SK_GENAI_1001", "d4-value-one")
+    monkeypatch.setenv("SK_GENAI_1002", "d4-value-two")
+    dup = _LIVE_YAML.replace('  victim: {user_id: "1002"}', '  victim: {user_id: "1001"}')
+    result = _run(tmp_path, env=None, text=dup)
+    b2, b3 = _by_id(result, "B2"), _by_id(result, "B3")
+    assert b2.status == OK  # ключи различны — замок значений слеп к топологии
+    assert b3.status == BLOCKER
+    assert result.exit_code == 1
+    assert "1001" in b3.text and "кросс-юзер" in b3.text
+    rendered = result.render()
+    assert "d4-value-one" not in rendered and "d4-value-two" not in rendered
+
+
+def test_b3_ok_when_both_declared_distinct(tmp_path, monkeypatch):
+    """Оба блока объявлены явно и user_id различны — B3 OK; здоровый прогон
+    остаётся exit 0 (новая проверка не портит зелёную раскладку)."""
+    monkeypatch.setenv("SK_GENAI_1001", "v1")
+    monkeypatch.setenv("SK_GENAI_1002", "v2")
+    result = _run(tmp_path, env=None)
+    b3 = _by_id(result, "B3")
+    assert b3.status == OK
+    assert "1001" in b3.text and "1002" in b3.text
     assert result.exit_code == 0
