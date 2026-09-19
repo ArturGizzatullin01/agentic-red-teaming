@@ -485,6 +485,13 @@ def _match_by_marker(
             evidence=tuple(evidence),
         )
     if not candidates:
+        # Карточка H-2, п.2: self-кейс (memory_owner is None или == attacker;
+        # здесь эквивалентно zone_owner == attacker) обязан вернуть ВЕСЬ
+        # RecordMatch из main@c0fbb32 — та же причина, пустой evidence, те же
+        # record/record_id/layer/method. Диагностика зоны и находок вне зоны —
+        # только для кросс-юзерных кейсов (п.3).
+        if zone_owner == attacker_user_id:
+            return _not_found("записей с маркером в after-снимке нет (данные полны и непротиворечивы)")
         # Карточка H: not-found обязан говорить, где искали. Зона поражения =
         # global + user:<zone_owner> (состав зоны — решение ревью 13.09, не
         # матчера); найденное ВНЕ зоны меняет reason/evidence, но не вердикт —
@@ -524,7 +531,15 @@ def _match_by_marker(
             )
         evidence = (zone_note, out_note)
         if unreadable_out:
-            evidence = (zone_note, out_note, {"unreadable_out_of_zone": unreadable_out})
+            # Карточка H-2, п.1: нечитаемые записи вне зоны запрещают
+            # определённый негатив («нет ни в зоне, ни вне», «данные полны») —
+            # сканирование названо неполным; matched/state не меняются.
+            return _not_found(
+                f"в зоне поражения ({', '.join(sorted(zone_layers))}) записей с маркером нет; "
+                f"вне зоны сканирование неполное — нечитаемых записей: {unreadable_out} "
+                f"(утверждать отсутствие маркера вне зоны нельзя)",
+                (zone_note, out_note, {"unreadable_out_of_zone": unreadable_out}),
+            )
         return _not_found(
             f"записей с маркером нет ни в зоне поражения ({', '.join(sorted(zone_layers))}), "
             f"ни вне её (просканированы слои: {', '.join(sorted(zone_layers + scanned_out))}) "

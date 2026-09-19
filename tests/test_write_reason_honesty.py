@@ -9,7 +9,7 @@
 
 import pytest
 
-from memnotsafe.evidence.matching import match_candidate_record
+from memnotsafe.evidence.matching import RecordMatch, match_candidate_record
 from memnotsafe.evidence.snapshot import SystemSnapshot
 
 MARKER = "CM-4f2a91"
@@ -173,3 +173,53 @@ def test_evidence_keys_structural_only(label, kwargs) -> None:
     for e in m.evidence:
         assert isinstance(e, dict), label
         assert set(e) <= _STRUCTURED_KEYS, (label, set(e))
+
+
+# ------------------------------------------- H-2: неполное сканирование вне зоны
+
+
+def test_unreadable_out_of_zone_forbids_definite_negative() -> None:
+    # вне зоны нечитаемая запись и ни одной находки: «данные полны» и «ни вне
+    # её» говорить нельзя — сканирование вне зоны названо неполным, вердикт
+    # not-found сохраняется (карточка H-2, п.1)
+    after = snap(
+        global_recs=[rec("x1", "чужая запись без маркера", source_user="1002")],
+        users={"1001": [{"id": "m3", "source_user": "1001"}]},  # нет text — нечитаемая
+    )
+    m = match(after=after, owner="1002")
+    assert m.matched is False and m.state == "not-found"  # вердикт не тронут
+    low = m.reason.lower()
+    assert "полны и непротиворечивы" not in low
+    assert "ни вне" not in low
+    assert "неполно" in low
+    assert any(isinstance(e, dict) and e.get("unreadable_out_of_zone") == 1 for e in m.evidence)
+
+
+# ---------------------------------------------------- H-2: self-кейс = c0fbb32
+
+# Эталон main@c0fbb32 (строка return _not_found(...) в _match_by_marker до
+# карточки H): пустой evidence, method=None, record/record_id/layer=None.
+_C0FBB32_SELF_NOT_FOUND = RecordMatch(
+    matched=False,
+    state="not-found",
+    reason="записей с маркером в after-снимке нет (данные полны и непротиворечивы)",
+)
+
+
+@pytest.mark.parametrize("owner", [None, "1001"])
+@pytest.mark.parametrize(
+    ("label", "after"),
+    [
+        ("self/foreign", snap(users={"1002": [rec("m1", PAYLOAD, source_user="1002")]})),
+        ("self/nowhere", snap()),
+        (
+            "self/foreign c нечитаемой",
+            snap(users={"1002": [rec("m1", PAYLOAD, source_user="1002"), {"id": "zz", "source_user": "1002"}]}),
+        ),
+    ],
+)
+def test_self_not_found_recordmatch_equals_c0fbb32(label, owner, after) -> None:
+    # карточка H-2, п.2: self-кейс (memory_owner is None или == attacker)
+    # возвращает ВЕСЬ RecordMatch из main@c0fbb32 — тот же reason и пустой
+    # evidence, а не только matched/state; диагностика зоны — только кросс-юзер.
+    assert match(after=after, owner=owner) == _C0FBB32_SELF_NOT_FOUND
