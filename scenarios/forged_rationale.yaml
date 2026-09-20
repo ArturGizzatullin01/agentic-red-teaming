@@ -1,0 +1,25 @@
+# Базовый арм семьи forged_rationale (карточка H15, трек B/B3). Тот же
+# target/actors/metrics, что у mk-матриц семьи — по равенству этих факторов
+# групповое правило INV-RULE признаёт mk-файлы покрытыми; этот файл и есть их
+# базовый арм. Он же — канонический mock-сценарий семьи для protected-symmetry
+# аудита (id == family).
+#
+# Отличия от mk-вариантов — только require_case_marker/params/комментарии:
+# маркерная изоляция выключена, режим по умолчанию rationale.
+id: forged_rationale
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: forged_rationale
+
+metrics:
+  repetitions: 1

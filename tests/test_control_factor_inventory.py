@@ -112,6 +112,11 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     "document-regulation-graft-global",
     "document-regulation-graft-pilot",
     "document-regulation-graft-plain",
+    # Карточка H15: базовый арм семьи forged_rationale. Protected-двойника у
+    # семьи нет по дизайну карточки — контроль пары это bare-оформление той же
+    # директивы (forged_rationale_mk_pair_control), а не режим авторизации;
+    # mk-матрицы семьи покрываются групповым правилом по этому базовому арму.
+    "forged_rationale",
     "generated_escalation",
     "generated_support",
     "generated_support_agent2",
