@@ -93,6 +93,13 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     "consent-laundering-marker",
     "cross-topic-smuggle-global",
     "cross-topic-smuggle-pilot",
+    # Карточка V-4: production-сценарий маркерной изоляции (operand-размещение
+    # case-marker). Контрольного двойника нет ПО ЗАМЫСЛУ — это не пара
+    # «атака ↔ контроль», а тот же арм cross_user_bac_c_live с включённой
+    # маркерной изоляцией (require_case_marker + params.case_marker_style);
+    # ни один фактор инвентаря (adapter/auth_mode/principals/family/
+    # repetitions/stop_on_success/base_url) от c_live не отличается.
+    "cross_user_bac_c_mk_operand",
     "direct_poisoning_live_judged",
     "document-regulation-graft-global",
     "document-regulation-graft-pilot",
