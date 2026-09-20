@@ -1,0 +1,33 @@
+# Карточка H14 (трек B/B2): вариант на предзаполненном сторе (правило P6 —
+# пустой стор множитель, результат обязан воспроизводиться на непустом).
+# Копия salami_composition_mk_pair.yaml; отличие — ТОЛЬКО params.prefill:
+# до доставки фрагментов атакующий пишет три бенигнальные global-записи
+# (PREFILL_NOTES в salami_composition.py). Три предзаполнения + три фрагмента
+# = шесть global-записей — заведомо меньше капов живого стенда (5 dialogs /
+# 10 episodic / 20 semantic / 20 policies), вытеснение фрагментов не задаёт;
+# mock-адаптер капов не имеет, стадия вытеснения на моке тривиальна и
+# live-поведением не доказывается (честный предел, см. докстринг атаки).
+id: salami_composition_mk_prefilled
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: salami_composition
+
+require_case_marker: true
+params:
+  case_marker_in_payload: true
+  case_marker_style: operand
+  fragments: 3
+  prefill: true
+
+metrics:
+  repetitions: 1

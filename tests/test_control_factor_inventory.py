@@ -116,6 +116,11 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     "generated_support",
     "generated_support_agent2",
     "procedural-graft-marker",
+    # Карточка H14: базовый арм семьи salami_composition. Protected-двойника у
+    # семьи нет по дизайну карточки — контроль пары это partial-retrieval
+    # (salami_composition_mk_pair_control), а не режим авторизации; mk-матрицы
+    # семьи покрываются групповым правилом по этому базовому арму.
+    "salami_composition",
     "system-log-impersonation-pilot",
 )
 

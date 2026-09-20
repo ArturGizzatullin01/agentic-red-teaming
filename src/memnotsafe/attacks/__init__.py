@@ -16,6 +16,7 @@ from memnotsafe.attacks import (  # noqa: F401
     generated,
     procedural_graft,
     recommendation_hijack,
+    salami_composition,
     scope_escalation,
     system_log_impersonation,
     tool_argument_hijack,

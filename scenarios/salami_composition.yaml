@@ -1,0 +1,25 @@
+# Базовый арм семьи salami_composition (карточка H14, трек B/B2). Тот же
+# target/actors/metrics, что у mk-матриц этой семьи — по равенству этих
+# факторов групповое правило INV-RULE признаёт mk-файлы покрытыми; этот файл
+# и есть их базовый арм. Он же — канонический mock-сценарий семьи для
+# protected-symmetry аудита (id == family).
+#
+# Отличия от mk-вариантов — только require_case_marker/params/комментарии:
+# маркерная изоляция выключена, атака измеряется в legacy-режиме атрибуции.
+id: salami_composition
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: salami_composition
+
+metrics:
+  repetitions: 1
