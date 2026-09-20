@@ -62,10 +62,11 @@ _COMPLETED_OUTCOMES = frozenset({"completed_success", "completed_failure"})
 # -- агрегаты ----------------------------------------------------------------
 
 
-def _median(values: list[float]) -> float | None:
-    if not values:
+def _median(values: list[float | None]) -> float | None:
+    vals = [v for v in values if v is not None]  # null-метрика даёт null-итог, не аварию
+    if not vals:
         return None
-    s = sorted(values)
+    s = sorted(vals)
     n = len(s)
     mid = n // 2
     if n % 2:
@@ -73,11 +74,12 @@ def _median(values: list[float]) -> float | None:
     return (s[mid - 1] + s[mid]) / 2.0
 
 
-def _p95(values: list[float]) -> float | None:
+def _p95(values: list[float | None]) -> float | None:
     """nearest-rank перцентиль — детерминирован, без внешних зависимостей."""
-    if not values:
+    vals = [v for v in values if v is not None]
+    if not vals:
         return None
-    s = sorted(values)
+    s = sorted(vals)
     idx = max(0, min(len(s) - 1, math.ceil(0.95 * len(s)) - 1))
     return s[idx]
 
