@@ -98,9 +98,14 @@ class AttemptRecord:
     session_ids: dict[str, str | None]
     outcome: str
     error: str | None = None
+    # P12: длительности фаз попытки (t_reset/t_delivery/t_settle/t_trigger/
+    # t_finalize/t_scoring) от раннера. Аддитивное поле: None/отсутствие —
+    # строка без таймингов (старые записи и нефазовые события), внутри
+    # невыполненная фаза — null, не ноль.
+    timing: dict[str, float | None] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "schema_version": ATTEMPT_SCHEMA_VERSION,
             "experiment_id": self.experiment_id,
             "run_id": self.run_id,
@@ -116,6 +121,9 @@ class AttemptRecord:
             "outcome": self.outcome,
             "error": self.error,
         }
+        if self.timing is not None:
+            out["timing"] = dict(self.timing)
+        return out
 
     @classmethod
     def from_dict(cls, data: dict) -> "AttemptRecord":
@@ -138,6 +146,10 @@ class AttemptRecord:
             session_ids=dict(data.get("session_ids") or {}),
             outcome=str(data.get("outcome") or ""),
             error=data.get("error"),
+            # P12: чтение толерантно к старым строкам без timing и к строкам
+            # будущих версий с расширенным набором фаз (неизвестные ключи
+            # читателем не интерпретируются).
+            timing=data.get("timing") if isinstance(data.get("timing"), dict) else None,
         )
 
 
@@ -165,6 +177,7 @@ class AttemptHistory:
         seed: int | None = None,
         session_ids: dict[str, str | None] | None = None,
         error: str | None = None,
+        timing: dict[str, float | None] | None = None,
     ) -> AttemptRecord:
         rec = AttemptRecord(
             experiment_id=self.experiment_id,
@@ -180,6 +193,7 @@ class AttemptHistory:
             session_ids=session_ids or {},
             outcome=outcome,
             error=error,
+            timing=timing,
         )
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec.to_dict(), ensure_ascii=False) + "\n")
