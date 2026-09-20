@@ -57,7 +57,7 @@ def test_spec_parses_and_is_complete() -> None:
     rules = spec["error_rules"]
     assert rules["failed_attempt"] == "keep_time_mark_failed"
     assert rules["max_failed_ratio"] == 0.10
-    assert "новая версия" in spec["change_policy"]
+    assert "новая версия" in spec["change_policy"].lower()
     assert _spec_null_stages(spec) == {"t_reset", "t_finalize", "t_scoring"}
 
 
