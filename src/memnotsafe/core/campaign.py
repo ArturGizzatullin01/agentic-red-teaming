@@ -43,6 +43,7 @@ from memnotsafe.core.models import AttackResult, CampaignResult
 from memnotsafe.core.runner import RunnerError, new_case_id, new_run_id, run_attack
 from memnotsafe.reporting.metrics import aggregate_metrics
 from memnotsafe.reporting.proof import build_proof
+from memnotsafe.tracing.langfuse_sink import build_langfuse_exporter
 from memnotsafe.tracing.recorder import TraceRecorder
 
 # Происхождение атаки в провенансе (FR-013). Рукописный пак / заранее
@@ -50,6 +51,35 @@ from memnotsafe.tracing.recorder import TraceRecorder
 ORIGIN_HANDWRITTEN = "handwritten"
 ORIGIN_CORPUS = "corpus"
 ORIGIN_ONLINE = "online"
+
+
+class _ExportingRecorder:
+    """P11-3: прозрачный дубль событий в экспортёр поверх настоящего рекордера.
+
+    Recorder остаётся источником истины и пишет ПЕРВЫМ (полный локальный
+    JSONL, без масок); затем тот же plain-dict уходит в
+    TraceExporter.record(), где маскируется на входе (P11-2) и доставляется
+    по семантике P11-1 (батчинг, спул при отказе, backoff). Всё, кроме записи
+    событий, делегируется рекордеру как есть — для раннера и слоёв кампании
+    прокси неотличим от TraceRecorder.
+    """
+
+    __slots__ = ("_recorder", "_exporter")
+
+    def __init__(self, recorder: TraceRecorder, exporter) -> None:
+        self._recorder = recorder
+        self._exporter = exporter
+
+    def record(self, event) -> None:
+        self._recorder.record(event)
+        self._exporter.record(event.to_dict() if hasattr(event, "to_dict") else event)
+
+    def record_raw(self, row: dict) -> None:
+        self._recorder.record_raw(row)
+        self._exporter.record(row)
+
+    def __getattr__(self, name: str):  # делегирование всего прочего рекордеру
+        return getattr(self._recorder, name)
 
 
 class Campaign:
@@ -159,6 +189,15 @@ class Campaign:
             events_path=self.output_dir / "events.jsonl",
             traces_dir=self.output_dir / "traces",
         )
+        # P11-3: экспорт трасс — за env-флагом, в точке сборки recorder.
+        # Без MEMNOTSAFE_TRACE_EXPORT=1 — ноль изменений: сборщик возвращает
+        # None, recorder остаётся тем же объектом (локальный JSONL — источник
+        # истины, пишется первым и полностью). С флагом каждое событие
+        # дублируется в exporter.record() (маска на входе — P11-2; сбой
+        # доставки уходит в спул — P11-1); поведение прогона не меняется.
+        exporter = build_langfuse_exporter(self.output_dir / "trace-export-spool")
+        if exporter is not None:
+            recorder = _ExportingRecorder(recorder, exporter)
         evidence_dir = self.output_dir / "evidence"
         evidence_dir.mkdir(parents=True, exist_ok=True)
         cases_path = self.output_dir / "cases.jsonl"
@@ -311,6 +350,12 @@ class Campaign:
                 usage={"calls_used": judge_budget.used, "calls_limit": judge_budget.limit},
                 note="summary",
             )
+        # P11-3: финальная попытка доставки экспорта. flush() исключений не
+        # бросает; недоставленное остаётся в спуле (output_dir/
+        # trace-export-spool) — прогресс и артефакты прогона от этого не
+        # зависят, локальный evidence уже полный.
+        if exporter is not None:
+            exporter.flush()
         return campaign_result
 
     # ------------------------------------------------------------------ планирование случаев

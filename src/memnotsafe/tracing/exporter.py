@@ -24,6 +24,22 @@
   - flush() не бросает исключений наружу: недоставленное честно видно через
     pending (очередь памяти + все события спула), успех не маскируется.
 
+Backoff спула (P11-3, поверх семантики выше — не меняя её): после отказов
+приёмника повторные попытки откладываются экспоненциально — ряд задержек
+1 с, 2 с, 4 с, … с потолком 60 с (BACKOFF_CAP_S), отсчёт через инжектированный
+clock; успешная доставка сбрасывает счётчик. РЕШЕНИЕ (хендоф P11-3 §4):
+ПЕРВЫЙ отказ ретраится немедленно — иначе ломается семантика P11-1 «повторная
+попытка — следующий flush» и её тесты (flush сразу после первого отказа обязан
+доотправить); backoff включается со ВТОРОГО отказа подряд. Пока backoff
+активен, send вообще не вызывается: replay пропускается, новые события идут в
+спул (порядок и честный pending сохраняются).
+
+pending O(1) (P11-3): число событий спула кэшируется ({имя файла: число});
+свои записи считаются при _spool_write (без чтения файла), удаления — при
+unlink, чужие/дорестартные файлы считаются один раз и кэшируются. Точность
+не меняется: pending — по-прежнему точное число, имена файлов — источник
+истины (внешне удалённый файл перестаёт считаться сразу).
+
 Контракт однопоточный: экспортёр не порождает потоков/задач и не трогает
 глобальное состояние — вызывающий (будущая интеграция P11-2/P11-3) решает,
 из какого цикла его дёргать. Никаких сторонних зависимостей: приёмник —
@@ -39,6 +55,11 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from memnotsafe.tracing.masking import mask_event
+
+# Backoff спула (P11-3): ряд задержек 1, 2, 4, … с потолком 60 с; включается
+# со второго отказа подряд (первый ретраится немедленно — семантика P11-1).
+BACKOFF_BASE_S = 1.0
+BACKOFF_CAP_S = 60.0
 
 
 class TraceSink(Protocol):
@@ -80,6 +101,11 @@ class TraceExporter:
         self._queue: list[dict[str, Any]] = []
         self._first_queued_at: float | None = None
         self._seq = self._max_spool_seq() + 1
+        # P11-3: backoff (счётчик подряд идущих отказов + граница «не раньше»)
+        # и кэш числа событий по файлам спула для pending O(1).
+        self._send_failures = 0
+        self._retry_not_before: float | None = None
+        self._spool_counts: dict[str, int] = {}
 
     # -- публичный контракт -------------------------------------------------
 
@@ -116,15 +142,22 @@ class TraceExporter:
 
         Исключений наружу не бросает: первый же отказ приёмника останавливает
         replay (порядок важнее ретраев), недоставленное остаётся в спуле и
-        видно через pending. Повторная попытка — следующий flush().
+        видно через pending. Повторная попытка — следующий flush(); пока
+        активен backoff, replay пропускается целиком, а очередь уходит в спул
+        (send не вызывается вовсе).
         """
         for path in self._spool_files():
-            batch = json.loads(path.read_text(encoding="utf-8"))
+            if self._backoff_active():
+                break
+            batch = self._read_spool_file(path)
             try:
                 self._sink.send(batch)
             except Exception:
+                self._note_send_failure()
                 break
+            self._note_send_success()
             path.unlink()
+            self._spool_counts.pop(path.name, None)
         if self._queue:
             queue, self._queue = self._queue, []
             first_queued_at, self._first_queued_at = self._first_queued_at, None
@@ -132,13 +165,41 @@ class TraceExporter:
 
     @property
     def pending(self) -> int:
-        """Число недоставленных событий: очередь памяти + весь спул."""
+        """Число недоставленных событий: очередь памяти + весь спул.
+
+        O(1) по содержимому спула: счёт по файлам кэшируется; свои записи
+        учитываются при записи, чужие/дорестартные файлы читаются один раз.
+        """
         total = len(self._queue)
         for path in self._spool_files():
-            total += len(json.loads(path.read_text(encoding="utf-8")))
+            count = self._spool_counts.get(path.name)
+            if count is None:
+                count = len(self._read_spool_file(path))
+                self._spool_counts[path.name] = count
+            total += count
         return total
 
     # -- внутреннее ---------------------------------------------------------
+
+    def _backoff_active(self) -> bool:
+        return (
+            self._retry_not_before is not None
+            and self._clock() < self._retry_not_before
+        )
+
+    def _note_send_failure(self) -> None:
+        self._send_failures += 1
+        if self._send_failures >= 2:  # первый отказ роняет пакет в спул, но не вводит паузу
+            delay = min(BACKOFF_CAP_S, BACKOFF_BASE_S * 2 ** (self._send_failures - 2))
+            self._retry_not_before = self._clock() + delay
+
+    def _note_send_success(self) -> None:
+        self._send_failures = 0
+        self._retry_not_before = None
+
+    def _read_spool_file(self, path: Path) -> list[dict[str, Any]]:
+        """Прочитать пакет спула (единственная точка чтения — тестируется подменой)."""
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def _ship_queue(self) -> None:
         queue, self._queue = self._queue, []
@@ -146,14 +207,18 @@ class TraceExporter:
         self._deliver(queue, _first_queued_at=first_queued_at)
 
     def _deliver(self, events: list[dict[str, Any]], *, _first_queued_at: float | None) -> None:
-        """Порядок важнее скорости: пока спул не пуст, новые — только в спул."""
-        if self._spool_files():
+        """Порядок важнее скорости: пока спул не пуст (или активен backoff) —
+        новые только в спул; прямая отправка лишь при чистом спуле и паузе."""
+        if self._spool_files() or self._backoff_active():
             self._spool_write(events)
             return
         try:
             self._sink.send(list(events))
         except Exception:
+            self._note_send_failure()
             self._spool_write(events)
+        else:
+            self._note_send_success()
 
     def _spool_write(self, events: list[dict[str, Any]]) -> None:
         if not events:
@@ -163,6 +228,7 @@ class TraceExporter:
         tmp = self._spool_dir / f".batch-{seq:08d}.json.tmp"
         tmp.write_text(json.dumps(events, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, final)  # атомарно: недописанного пакета в спуле не бывает
+        self._spool_counts[final.name] = len(events)  # pending O(1): без чтения файла
 
     def _spool_files(self) -> list[Path]:
         return sorted(self._spool_dir.glob("batch-*.json"))
