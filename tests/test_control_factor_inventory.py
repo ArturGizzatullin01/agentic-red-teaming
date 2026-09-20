@@ -15,6 +15,19 @@
 Сценарий без пары по этому правилу попадает в список непарных — это тоже факт
 (нет контрольного двойника), а не ошибка.
 
+Групповое правило mk-матриц (решение A0 2026-09-20, карточка INV-RULE):
+  сценарий с `_mk_` в имени — экспериментальная матрица: одно семейство,
+  варьируется ровно ОДНА величина (params.case_marker_style /
+  require_case_marker), контрольный двойник не нужен ПО ЗАМЫСЛУ — это не пара
+  «атака ↔ контроль», а тот же базовый арм с включённой изоляцией. Такой
+  сценарий покрывается правилом БЕЗ строки в EXPECTED_UNPAIRED, но только если
+  ВСЕ факторы инвентаря (блоки target/actors/metrics в той же проверке
+  равенства, что у пар) равны факторам какого-то НЕ-mk сценария — базового
+  арма семейства. Прецедент обоснования — 72bb6cf (exp/case-marker-placement,
+  маркерные матрицы). Правило — не зонтик: mk-имя с отличающимися факторами
+  остаётся непарным и обязано закрепляться явной строкой (замок —
+  tests/test_inventory_group_rule.py).
+
 Факторы (значения извлекаются из YAML, absence — тоже значение):
   adapter         target.adapter;
   vulnerable      target.vulnerable (mock-трига);
@@ -88,18 +101,13 @@ EXPECTED_PAIR_DIFFS: dict[tuple[str, str], tuple[str, ...]] = {
     ("cross_user_bac_c", "cross_user_bac_c_live"): ("principals",),
 }
 
-# Сценарии без контрольного двойника по правилу паринга.
+# Сценарии без контрольного двойника по правилу паринга. mk-матрицы сюда НЕ
+# пишутся: `_mk_*`-сценарий, факторы которого равны базовому арму семейства,
+# покрывается групповым правилом (см. докстринг и _group_base).
 EXPECTED_UNPAIRED: tuple[str, ...] = (
     "consent-laundering-marker",
     "cross-topic-smuggle-global",
     "cross-topic-smuggle-pilot",
-    # Карточка V-4: production-сценарий маркерной изоляции (operand-размещение
-    # case-marker). Контрольного двойника нет ПО ЗАМЫСЛУ — это не пара
-    # «атака ↔ контроль», а тот же арм cross_user_bac_c_live с включённой
-    # маркерной изоляцией (require_case_marker + params.case_marker_style);
-    # ни один фактор инвентаря (adapter/auth_mode/principals/family/
-    # repetitions/stop_on_success/base_url) от c_live не отличается.
-    "cross_user_bac_c_mk_operand",
     "direct_poisoning_live_judged",
     "document-regulation-graft-global",
     "document-regulation-graft-pilot",
@@ -110,6 +118,11 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     "procedural-graft-marker",
     "system-log-impersonation-pilot",
 )
+
+# Маркер группы экспериментальных матриц: варьируется ровно одна величина
+# (маркерная изоляция), двойник не нужен по замыслу — карточка INV-RULE,
+# решение A0 2026-09-20, прецедент 72bb6cf.
+MK_MARKER = "_mk_"
 
 
 def _factors(name: str) -> dict[str, object]:
@@ -149,11 +162,39 @@ def _pairs(stems: set[str]) -> list[tuple[str, str]]:
     return pairs
 
 
+def _group_base(name: str, factors: dict[str, dict[str, object]]) -> str | None:
+    """Базовый арм группы для `*_mk_*`-сценария или None, если правило не покрывает.
+
+    Групповое правило (карточка INV-RULE, решение A0 2026-09-20): mk-матрица
+    покрывается БЕЗ строки в EXPECTED_UNPAIRED, только если все факторы
+    инвентаря равны факторам какого-то НЕ-mk сценария — базового арма
+    семейства. Это та же проверка равенства блоков target/actors/metrics,
+    что уже используется для пар, применённая целиком (все ключи сразу), а
+    не по-отдельности. Прецедент обоснования — 72bb6cf. Правило — не зонтик:
+    mk-имя с отличающимся хотя бы одним фактором остаётся непарным и обязано
+    закрепляться явной строкой (замок — tests/test_inventory_group_rule.py).
+    """
+    if MK_MARKER not in name:
+        return None
+    for other in sorted(factors):
+        if other == name or MK_MARKER in other:
+            continue
+        if factors[other] == factors[name]:
+            return other
+    return None
+
+
 def test_control_factor_inventory() -> None:
     stems = {p.stem for p in SCENARIOS.glob("*.yaml")}
     pairs = _pairs(stems)
     paired = {s for p in pairs for s in p}
-    unpaired = tuple(sorted(stems - paired))
+    factors = {s: _factors(s) for s in sorted(stems)}
+    covered: dict[str, str] = {}
+    for s in sorted(stems - paired):
+        base = _group_base(s, factors)
+        if base is not None:
+            covered[s] = base
+    unpaired = tuple(sorted(stems - paired - set(covered)))
 
     actual: dict[tuple[str, str], tuple[str, ...]] = {}
     for x, y in pairs:
@@ -164,6 +205,8 @@ def test_control_factor_inventory() -> None:
         print(f"[INVENT] {x} <-> {y}: {', '.join(diff) if diff else '<идентичны>'}{mark}")
         for k in diff:
             print(f"[INVENT]   {k}: {x}={fx[k]!r} | {y}={fy[k]!r}")
+    for s, b in covered.items():
+        print(f"[INVENT] mk-матрица {s}: покрыта групповым правилом (базовый арм {b})")
     print(f"[INVENT] непарные (нет двойника по правилу): {', '.join(unpaired)}")
 
     assert set(actual) == set(EXPECTED_PAIR_DIFFS), (
@@ -179,7 +222,9 @@ def test_control_factor_inventory() -> None:
         )
     assert unpaired == EXPECTED_UNPAIRED, (
         f"непарные сценарии изменились: {unpaired} — новые сценарии без "
-        f"двойника тоже факт инвентаризации, закрепи их здесь"
+        f"двойника тоже факт инвентаризации, закрепи их здесь; `_mk_*` "
+        f"покрывается групповым правилом ТОЛЬКО при полном равенстве факторов "
+        f"с базовым армом (см. _group_base) — иначе тоже строкой"
     )
 
 
