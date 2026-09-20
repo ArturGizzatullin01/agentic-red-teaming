@@ -1,0 +1,114 @@
+# perf/b0/spec.yaml — B0-v1: ЗАМОРОЖЕННАЯ спецификация perf-baseline (карточка B0).
+#
+# ЧЕСТНОСТЬ: B0 измеряет ПРОИЗВОДИТЕЛЬНОСТЬ ОСНАСТКИ (mock-путь, offline),
+# не стенда. Живые сценарии НЕ входят: их время — это время сети и LLM,
+# а не нашего кода.
+#
+# ИЗМЕНЕНИЕ ЭТОГО ФАЙЛА = НОВАЯ ВЕРСИЯ B0 (B0-v2, B0-v3, ...), а не правка
+# задним числом: любой будущий before/after (P12 и далее) сравнивается с
+# конкретной версией; сравнения между разными версиями недействительны.
+
+version: B0-v1
+frozen_at: "2026-09-20"
+
+scenario_selection:
+  # Механическое правило — то же, что test_control_factor_inventory (карточка L):
+  # все mock-сценарии protected-пар, т.е. стем X, у которого в scenarios/ есть
+  # двойник X_protected или X-protected; в набор входят ОБА члена пары.
+  # Live-пары (*_live / *-live, явная пара cross_user_bac_live<->live_clean_control)
+  # и непарные сценарии НЕ входят. Состав заморожен списком ниже и заново
+  # не выводится.
+  rule: mock-protected-pairs
+  scenarios:
+    - consent-laundering
+    - consent-laundering-protected
+    - contact-supersede
+    - contact-supersede-protected
+    - cross-lingual-insertion
+    - cross-lingual-insertion-protected
+    - cross-topic-smuggle
+    - cross-topic-smuggle-protected
+    - cross_user_bac
+    - cross_user_bac_protected
+    - direct_poisoning
+    - direct_poisoning-protected
+    - document-regulation-graft
+    - document-regulation-graft-protected
+    - fake-shared-past
+    - fake-shared-past-protected
+    - procedural-graft
+    - procedural-graft-protected
+    - recommendation-hijack
+    - recommendation-hijack-protected
+    - scope_escalation
+    - scope_escalation-protected
+    - system-log-impersonation
+    - system-log-impersonation-protected
+    - tool-error-echo
+    - tool-error-echo-protected
+    - tool_argument_hijack
+    - tool_argument_hijack_protected
+
+runs: 3
+
+repetitions: from_scenario
+budgets: from_scenario
+
+# Одна попытка = один in-process прогон Campaign поверх существующего runner'а
+# с repetitions=1; повторы сценария исполняются измерителем как N таких
+# попыток. Стена попытки меряется perf_counter вокруг неё.
+attempt_mode: in_process_campaign_per_attempt
+
+error_rules:
+  # Время до отказа — тоже факт: failed попытка НЕ исключается из замера,
+  # но помечается (failed=true).
+  failed_attempt: keep_time_mark_failed
+  # Прогон, в котором доля failed попыток выше лимита, НЕ считается снимком:
+  # измеритель прерывается с отчётом (rerun), снимок не пишется.
+  max_failed_ratio: 0.10
+
+metrics:
+  per_attempt:
+    - t_total
+    - t_reset
+    - t_delivery
+    - t_settle
+    - t_trigger
+    - t_finalize
+    - t_scoring
+  aggregation:
+    run: >
+      медиана и p95 (nearest-rank) по не-null значениям попыток прогона;
+      null-значения исключены из агрегатов и посчитаны отдельно.
+    snapshot: >
+      median = медиана медиан трёх прогонов; p95 = pooled p95 по всем
+      попыткам трёх прогонов; wall_time_s = стеновые времена прогонов.
+  # Источники — ТОЛЬКО существующие точки данных (карточка B0: runner ради
+  # таймингов НЕ расширяется). Стадия, отсутствующая в существующих данных,
+  # — null в снимке и UNKNOWN в хендофе, НЕ ноль.
+  stage_sources:
+    t_total: "perf_counter измерителя вокруг попытки (Campaign, repetitions=1)"
+    t_reset: null
+    t_delivery: >
+      джойн transcript (фаза delivery -> session_id) с events.jsonl (timestamp):
+      span событий сессии доставки. observed_at транскрипта на mock-пути
+      пуст (None), времена берутся из событий трейса. Delivery-сессия
+      включает её finalize (memory_write) — на mock-артефактах неразделимо.
+    t_settle: "campaign.json results[].stages[persistence].evidence[].settle.elapsed_s"
+    t_trigger: >
+      джойн transcript (фаза trigger -> session_id) с events.jsonl (timestamp):
+      span событий trigger-сессии.
+    t_finalize: null
+    t_scoring: null
+
+unknown_stages_note: >
+  t_reset (reset_state), t_finalize (отдельный тайминг финализации — его
+  работа входит в delivery-сессию и неразделима на mock-артефактах) и
+  t_scoring (оценка оракулов/judge) существующими артефактами не
+  таймштампятся — фиксированы как UNKNOWN (null). Расширение точек данных —
+  отдельное решение A0, не часть B0.
+
+change_policy: >
+  Изменение состава сценариев, числа прогонов, правил ошибок или схемы
+  метрик — это НОВАЯ версия B0 (новый файл spec+B0-vN и новый снимок),
+  а не правка этой спецификации задним числом.
