@@ -38,6 +38,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from memnotsafe.tracing.masking import mask_event
+
 
 class TraceSink(Protocol):
     """Приёмник пакетов событий (например, внешний trace-шлюз этапа P11-3).
@@ -84,11 +86,17 @@ class TraceExporter:
     def record(self, event: dict[str, Any]) -> None:
         """Принять одно событие (тот же plain-dict, что пишет recorder).
 
+        Событие маскируется на входе (P11-2): вызывающий уже записал полный
+        JSONL ДО этого вызова (evidence-first не ослабляется), а дальше —
+        очередь, спул и приёмник — секретов не видят; поведение сбоя из
+        P11-1 не меняется, маска — новая структура, вход не мутируется.
+
         Доставка ленивая: пакет уходит при заполнении batch_size, по истечении
         flush_interval_s (проверяется при следующей записи — фоновых потоков
         нет) или при явном flush(). Переполнение очереди памяти переливает
         самые старые события в спул, не блокируя вызывающего.
         """
+        event = mask_event(event)
         self._queue.append(event)
         if self._first_queued_at is None:
             self._first_queued_at = self._clock()
