@@ -185,7 +185,13 @@ async def run_attack(
     require_case_marker: bool = False,
 ) -> AttackResult:
     """`judge` опционален и по умолчанию отсутствует: без него раннер работает
-    ровно как до появления фичи, без сети и ключей (FR-001, SC-003)."""
+    ровно как до появления фичи, без сети и ключей (FR-001, SC-003).
+
+    P12 — стадийные таймеры: границы фаз попытки (reset_state / delivery /
+    settle / trigger / finalize=close_pending / scoring) метятся монотонными
+    часами; длительности едут в evidence["timing"] и аддитивным полем timing
+    в attempts.jsonl. Фаза, не выполнявшаяся в попытке, остаётся null — не
+    ноль. Поведение фаз (порядок/ошибки/отмена) от таймеров не зависит."""
     book = _SessionBook(target)
     # 002-reporting: журнал диалога — каждая отправленная реплика и каждый
     # реальный ответ; при ошибке сохраняется наблюдённая часть (incomplete)
@@ -196,8 +202,15 @@ async def run_attack(
     # никогда — тела пользовательских исключений (могут нести секреты).
     phase_detail = ""
     cleanup_errors: list[str] = []
+    # P12: длительности фаз; None = фаза в этой попытке не выполнялась.
+    timing: dict[str, float | None] = {
+        "t_reset": None, "t_delivery": None, "t_settle": None,
+        "t_trigger": None, "t_finalize": None, "t_scoring": None,
+    }
     try:
+        _t = time.perf_counter()
         await target.reset_state()
+        timing["t_reset"] = round(time.perf_counter() - _t, 6)
         target.set_context(run_id, ctx.case_id)
         probe = await target.probe()
         capabilities: Capabilities = probe.capabilities
@@ -257,6 +270,7 @@ async def run_attack(
         attacker_session = await book.open(ctx.attacker_user_id)
         delivery_session_ids: list[str] = [attacker_session]
         delivery_messages: list[str] = []
+        _t = time.perf_counter()
         for step in attack.delivery_steps(candidate, ctx):
             phase = f"delivery_send[{step.label}]"
             as_user = step.as_user or ctx.attacker_user_id
@@ -272,11 +286,14 @@ async def run_attack(
             transcript.add(session_id=session, actor_user_id=as_user,
                            role="agent", phase="delivery", step_label=step.label,
                            content=result.content)
+        timing["t_delivery"] = round(time.perf_counter() - _t, 6)
 
         # --- финализация ВСЕХ delivery-сессий ДО settle: у investment_stand
         # close_session = finalize памяти, settle обязан видеть записанное.
         phase = "finalize"
+        _t = time.perf_counter()
         finalize_errors = await book.close_pending()
+        timing["t_finalize"] = round(time.perf_counter() - _t, 6)
         if finalize_errors:
             phase_detail = "; ".join(finalize_errors)
             raise RuntimeError(f"finalize delivery-сессий: {finalize_errors}")
@@ -303,7 +320,9 @@ async def run_attack(
         )
         if marker_used:
             settle_evidence["case_marker"] = ctx.case_marker
+        _t = time.perf_counter()
         settle_raw = await target.wait_until_persistent(settle_evidence)
+        timing["t_settle"] = round(time.perf_counter() - _t, 6)
         # P05: типизированный исход settle. Адаптеры со старым bool-контрактом
         # нормализуются (True→observed, False→timeout); unavailable — не True
         # и не False, оракул обязан ответить UNKNOWN.
@@ -324,6 +343,7 @@ async def run_attack(
 
         # --- trigger в НОВОЙ сессии (после границы сессии доставки)
         phase = "trigger_open"
+        _t = time.perf_counter()
         victim_session = await book.open(ctx.victim_user_id)
         trigger_session_ids: list[str] = [victim_session]
         # P06 (M2): снимок новой сессии ДО trigger-вопроса — свидетельство
@@ -354,6 +374,7 @@ async def run_attack(
         victim_trace = await target.get_trace(victim_session)
         phase = "trigger_close"
         await book.close(victim_session)
+        timing["t_trigger"] = round(time.perf_counter() - _t, 6)
 
         phase = "snapshot_after"
         after: SystemSnapshot | None = await target.snapshot()
@@ -459,8 +480,10 @@ async def run_attack(
         delivery_session_ids=tuple(delivery_session_ids),
         trigger_session_ids=tuple(trigger_session_ids),
     )
+    _t = time.perf_counter()
     stages: list[StageResult] = evaluate_all(ec)
     success = composite_success(stages)
+    timing["t_scoring"] = round(time.perf_counter() - _t, 6)
 
     metrics = {s.stage: s.success for s in stages}
     diff_m0_m1 = compute_diff(before, m1) if (before and m1) else None
@@ -488,6 +511,9 @@ async def run_attack(
             "expected_effect": candidate.expected_effect,
         },
         "transcript": transcript.to_wire(),
+        # P12: длительности фаз попытки (см. докстринг run_attack); в историю
+        # попыток попадают аддитивным полем timing.
+        "timing": dict(timing),
     }
 
     return AttackResult(

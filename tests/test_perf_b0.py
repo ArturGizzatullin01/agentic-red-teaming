@@ -109,3 +109,56 @@ def test_snapshot_manifest_versions() -> None:
     assert m["machine"] and m["cpu_count"] >= 1
     assert m["telemetry_schema_version"]
     assert m["spec_version"] == "B0-v1"
+
+
+# -- P12: B0-v2 — reset/finalize/scoring из таймстампов runner (только добавления) --
+
+SPEC_V2 = REPO / "perf" / "b0" / "spec-v2.yaml"
+SNAPSHOT_V2 = REPO / "perf" / "b0" / "snapshot-v2.json"
+
+
+def _spec_v2() -> dict:
+    return yaml.safe_load(SPEC_V2.read_text(encoding="utf-8"))
+
+
+def _snapshot_v2() -> dict:
+    return json.loads(SNAPSHOT_V2.read_text(encoding="utf-8"))
+
+
+def test_spec_v2_updates_stage_sources_only() -> None:
+    """P12: spec-v2 = v1 + версия + источники трёх стадий; состав сценариев,
+    прогоны, правила ошибок и схема метрик — те же; null-источников нет."""
+    spec_v2 = _spec_v2()
+    spec_v1 = _spec()
+    assert spec_v2["version"] == "B0-v2"
+    assert spec_v2["scenario_selection"]["scenarios"] == spec_v1["scenario_selection"]["scenarios"]
+    assert spec_v2["runs"] == spec_v1["runs"]
+    assert spec_v2["error_rules"] == spec_v1["error_rules"]
+    assert spec_v2["metrics"]["per_attempt"] == spec_v1["metrics"]["per_attempt"]
+    sources = spec_v2["metrics"]["stage_sources"]
+    for stage in ("t_reset", "t_finalize", "t_scoring"):
+        assert isinstance(sources[stage], str) and "timing" in sources[stage], stage
+    assert not _spec_null_stages(spec_v2), "в B0-v2 неизвестных стадий нет"
+    # v1 заморожен и не изменяется этой карточкой
+    assert _spec()["version"] == "B0-v1"
+    assert _spec_null_stages(_spec()) == {"t_reset", "t_finalize", "t_scoring"}
+
+
+def test_snapshot_v2_runner_stages_not_null_v1_untouched() -> None:
+    """P12: снимок v2 — t_reset/t_finalize/t_scoring не-null с n>0 (t_scoring
+    ~0 на mock — честное значение); манифест 40-hex sha; v1 остаётся с null-
+    стадиями (заморожен)."""
+    snap = _snapshot_v2()
+    assert snap["spec_version"] == "B0-v2"
+    assert snap["totals"]["null_stages"] == []
+    for stage in ("t_reset", "t_finalize", "t_scoring"):
+        per = snap["runs"][0]["per_metric"][stage]
+        assert per["n"] > 0 and per["nulls"] == 0, (stage, per)
+        median = snap["totals"]["median"][stage]
+        assert isinstance(median, float) and median >= 0, (stage, median)
+    m = snap["manifest"]
+    assert len(m["git_sha"]) == 40 and all(c in "0123456789abcdef" for c in m["git_sha"])
+
+    v1 = _snapshot()
+    assert v1["spec_version"] == "B0-v1"
+    assert v1["totals"]["median"]["t_reset"] is None, "snapshot-v1 заморожен: null-стадии v1 не меняются"

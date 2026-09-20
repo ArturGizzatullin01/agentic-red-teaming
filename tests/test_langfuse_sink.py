@@ -13,7 +13,11 @@ ValueError при создании, не при send.
 при этом побайтово тот же, что без флага; без флага артефакты прогона побайтово
 равны базовым — базовый campaign.py загружается из git-объекта BASE_SHA,
 случайность (uuid/время/идентификаторы) заморожена, деревья артефактов
-сравниваются рекурсивно.
+сравниваются рекурсивно. После P12 (VERDICT-P12-2026-09-20, вариант (b))
+attempts.jsonl и campaign.json сравниваются канонически (sort_keys) после
+рекурсивного удаления всех ключей `timing` — живые perf_counter-длительности
+недетерминированы между прогонами, побайтовая идентичность этих двух файлов
+структурно недостижима; остальные артефакты — по-прежнему побайтово.
 """
 
 from __future__ import annotations
@@ -370,6 +374,59 @@ def _tree(root: Path) -> dict[str, bytes]:
     return out
 
 
+# -- P12: нормализация «минус timing» (VERDICT-P12-2026-09-20, вариант (b)) -----
+#
+# После P12 длительности фаз попытки — живые perf_counter-значения: attempts.jsonl
+# несёт их аддитивным полем строки исхода, campaign.json — через evidence-embed.
+# Они недетерминированы между любыми двумя прогонами, поэтому побайтовая
+# идентичность этих двух файлов структурно недостижима. Замки ниже сравнивают
+# их канонически (sort_keys) после рекурсивного удаления ВСЕХ ключей `timing`:
+# равенство после удаления эквивалентно утверждению «отличаются только
+# timing-значения». Все остальные артефакты сравниваются побайтово без
+# изменений; шире ключа `timing` сравнение не ослабляется (вердикт, п.3).
+
+
+def _strip_timing(obj: object) -> object:
+    if isinstance(obj, dict):
+        return {k: _strip_timing(v) for k, v in obj.items() if k != "timing"}
+    if isinstance(obj, list):
+        return [_strip_timing(v) for v in obj]
+    return obj
+
+
+def _jsonl_parse(blob: bytes) -> list:
+    return [json.loads(line) for line in blob.decode("utf-8").splitlines() if line.strip()]
+
+
+def _normalize_tree(tree: dict[str, bytes]) -> dict[str, bytes]:
+    """attempts.jsonl/campaign.json → канонический JSON без ключей `timing`;
+    остальные файлы — нетронутые байты."""
+    out: dict[str, bytes] = {}
+    for name, blob in tree.items():
+        if name == "attempts.jsonl":
+            rows = [_strip_timing(row) for row in _jsonl_parse(blob)]
+            out[name] = "\n".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows
+            ).encode("utf-8")
+        elif name == "campaign.json":
+            out[name] = json.dumps(
+                _strip_timing(json.loads(blob.decode("utf-8"))),
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        else:
+            out[name] = blob
+    return out
+
+
+def _has_timing(obj: object) -> bool:
+    if isinstance(obj, dict):
+        return "timing" in obj or any(_has_timing(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_has_timing(v) for v in obj)
+    return False
+
+
 def _clear_export_env(monkeypatch) -> None:
     for var in (FLAG_VAR, HOST_VAR, PUBLIC_KEY_VAR, SECRET_KEY_VAR):
         monkeypatch.delenv(var, raising=False)
@@ -380,8 +437,11 @@ def test_flag_off_artifacts_byte_identical_to_base(tmp_path: Path, monkeypatch) 
 
     Базовый campaign.py (git-объект BASE_SHA) и текущий прогонятся на одном
     замороженном генераторе случайности; деревья артефактов обязаны совпасть
-    побайтово (весь набор файлов, включая events.jsonl/cases.jsonl/campaign.json/
-    experiment.json/attempts/ledger/traces/evidence).
+    (весь набор файлов, включая events.jsonl/cases.jsonl/campaign.json/
+    experiment.json/attempts/ledger/traces/evidence). После P12 — по
+    VERDICT-P12-2026-09-20 (вариант (b)): attempts.jsonl/campaign.json
+    сравниваются канонически после удаления ключей `timing` (живые таймеры
+    недетерминированы), остальные файлы — побайтово.
     """
     freeze, base_module = _freeze_everything(monkeypatch, tmp_path)
     _clear_export_env(monkeypatch)
@@ -399,8 +459,31 @@ def test_flag_off_artifacts_byte_identical_to_base(tmp_path: Path, monkeypatch) 
         f"набор файлов разошёлся: только-в-базе={sorted(set(base_tree) - set(branch_tree))} "
         f"только-в-ветке={sorted(set(branch_tree) - set(base_tree))}"
     )
-    differing = [name for name, blob in base_tree.items() if blob != branch_tree[name]]
-    assert not differing, f"артефакты отличаются побайтово: {differing}"
+    # VERDICT-P12-2026-09-20, вариант (b): campaign.json несёт evidence.timing
+    # ОБОИХ прогонов (базовый campaign.py исполняется текущим раннером), и эти
+    # живые значения недетерминированы между прогонами. Нормализация минус
+    # `timing` = доказательство «отличаются только timing-значения»; всё
+    # остальное дерево — побайтово.
+    norm_base = _normalize_tree(base_tree)
+    norm_branch = _normalize_tree(branch_tree)
+    differing = [name for name, blob in norm_base.items() if blob != norm_branch[name]]
+    assert not differing, f"артефакты отличаются (после удаления timing): {differing}"
+
+    # Вердикт п.2 — нормализация не маскирует отсутствие P12-поля. campaign.json:
+    # timing обязан присутствовать в ОБОИХ армах (evidence обоих прогонов).
+    for arm, tree in (("base", base_tree), ("branch", branch_tree)):
+        assert _has_timing(json.loads(tree["campaign.json"])), (
+            f"campaign.json[{arm}] не содержит timing — P12-поле исчезло"
+        )
+    # attempts.jsonl: асимметрия ожидаема и заперта явно — текущий код пишет
+    # timing в строку исхода, базовый campaign.py (BASE_SHA=3a4ea58, pre-P12)
+    # поле в history.record не передаёт.
+    assert any(_has_timing(r) for r in _jsonl_parse(branch_tree["attempts.jsonl"])), (
+        "attempts.jsonl[branch] не содержит timing — P12-поле исчезло"
+    )
+    assert not any(_has_timing(r) for r in _jsonl_parse(base_tree["attempts.jsonl"])), (
+        "attempts.jsonl[base] неожиданно содержит timing"
+    )
     assert not (tmp_path / "out-branch" / "trace-export-spool").exists()
 
 
@@ -408,7 +491,8 @@ def test_flag_on_local_evidence_byte_identical_to_flag_off(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Флаг меняет только экспорт: локальный evidence (events.jsonl и всё
-    дерево, кроме каталога экспорта) побайтово тот же, что без флага."""
+    дерево, кроме каталога экспорта) побайтово тот же, что без флага — после
+    P12 с нормализацией минус `timing` по VERDICT-P12-2026-09-20 (вариант (b))."""
     freeze, _ = _freeze_everything(monkeypatch, tmp_path)
     out_off = tmp_path / "run-off"
     out_on = tmp_path / "run-on"
@@ -437,5 +521,22 @@ def test_flag_on_local_evidence_byte_identical_to_flag_off(
         f"набор файлов разошёлся: только-без-флага={sorted(set(off_tree) - set(on_tree))} "
         f"только-с-флагом={sorted(set(on_tree) - set(off_tree))}"
     )
-    differing = [name for name, blob in off_tree.items() if blob != on_tree[name]]
-    assert not differing, f"локальный evidence изменился от флага: {differing}"
+    # VERDICT-P12-2026-09-20, вариант (b): оба прогона — текущий код, timing
+    # пишется в оба арма (attempts.jsonl строкой исхода, campaign.json через
+    # evidence-embed), живые значения недетерминированы между прогонами.
+    # Замок = «флаг меняет только экспорт»: всё, кроме timing-значений,
+    # побайтово идентично.
+    norm_off = _normalize_tree(off_tree)
+    norm_on = _normalize_tree(on_tree)
+    differing = [name for name, blob in norm_off.items() if blob != norm_on[name]]
+    assert not differing, f"локальный evidence изменился от флага (после удаления timing): {differing}"
+
+    # Вердикт п.2: timing присутствует в ОБОИХ армах и в ОБОИХ файлах-носителях
+    # — нормализация не маскирует отсутствие P12-поля.
+    for arm, tree in (("off", off_tree), ("on", on_tree)):
+        assert _has_timing(json.loads(tree["campaign.json"])), (
+            f"campaign.json[{arm}] не содержит timing — P12-поле исчезло"
+        )
+        assert any(_has_timing(r) for r in _jsonl_parse(tree["attempts.jsonl"])), (
+            f"attempts.jsonl[{arm}] не содержит timing — P12-поле исчезло"
+        )

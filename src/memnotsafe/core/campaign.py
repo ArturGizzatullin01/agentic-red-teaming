@@ -261,6 +261,9 @@ class Campaign:
                 goal_digest=goal_digest_or_none((result.evidence.get("candidate") or {}).get("expected_effect")),
                 seed=ctx.run_seed,
                 session_ids=sessions_from_transcript(result.evidence.get("transcript")),
+                # P12: стадийные таймеры попытки едут в строку исхода
+                # аддитивным полем (раннер их уже посчитал).
+                timing=result.evidence.get("timing"),
             )
             # P10a (фикс приёмки): пакет доказательств — на КАЖДУЮ попытку на
             # target, а не только на финальный результат: начальная попытка

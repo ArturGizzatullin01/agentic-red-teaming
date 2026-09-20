@@ -6,18 +6,25 @@
 perf/b0/spec.yaml (изменение spec = новая версия B0, не правка задним числом).
 
 Принципы (негативные ограничения карточки):
-  - runner.py НЕ расширяется ради таймингов: стадии собираются ТОЛЬКО из
-    существующих точек данных — transcript.observed_at (фазы delivery/trigger),
+  - runner ради таймингов не расширяется ВНЕ фаз попытки; стадии собираются
+    из точек данных прогона: transcript.observed_at (фазы delivery/trigger),
     campaign.json persistence.evidence[].settle.elapsed_s; стена попытки —
-    perf_counter измерителя вокруг попытки.
-  - t_reset / t_finalize / t_scoring существующими артефактами не
-    таймштампятся — честный null в снимке + UNKNOWN в хендофе, НЕ ноль.
+    perf_counter измерителя вокруг попытки. Карточка P12 сняла принцип
+    «runner не расширяется» РОВНО в части таймстампов: границы фаз
+    reset_state/delivery/settle/trigger/finalize/scoring теперь метит сам
+    runner (монотонные часы), длительности едут аддитивным полем timing в
+    attempts.jsonl — измеритель читает их оттуда (t_reset/t_finalize/
+    t_scoring), при отсутствии поля (старые прогоны) — честный null,
+    существующая деривация для t_delivery/t_settle/t_trigger сохранена.
   - Ничего не оптимизируется: B0 только измеряет.
 
 Запуск (A0 может воспроизвести структуру снимка на своей машине; числовые
 тайминги между машинами различаются — это ожидаемо):
     PYTHONPATH=src python -m memnotsafe.perf.baseline \
         --spec perf/b0/spec.yaml --output perf/b0/snapshot-v1.json
+    # B0-v2 (карточка P12 — reset/finalize/scoring из таймеров runner):
+    PYTHONPATH=src python -m memnotsafe.perf.baseline \
+        --spec perf/b0/spec-v2.yaml --output perf/b0/snapshot-v2.json
 
 Измеритель отказывается работать в грязном рабочем дереве: git_sha манифеста
 обязан быть sha того дерева, которым снят снимок.
@@ -165,6 +172,29 @@ def _telemetry_schema_version(out_dir: Path) -> Any:
     return None
 
 
+def _attempt_timing(out_dir: Path) -> dict[str, Any]:
+    """P12: поле timing из attempts.jsonl — последняя строка попытки, где оно
+    есть (строка исхода несёт тайминги раннера; budget/registered — нет).
+    Старые прогоны без поля — пустой словарь, стадии честно уйдут в null."""
+    path = out_dir / "attempts.jsonl"
+    if not path.exists():
+        return {}
+    for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+        if not line.strip():
+            continue
+        timing = json.loads(line).get("timing")
+        if isinstance(timing, dict):
+            return timing
+    return {}
+
+
+def _timing_seconds(timing: dict[str, Any], key: str) -> float | None:
+    value = timing.get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return round(float(value), 6)
+    return None  # фаза не выполнялась / старый прогон без таймингов — null, не ноль
+
+
 # -- одна попытка --------------------------------------------------------------
 
 
@@ -203,17 +233,21 @@ def run_attempt(scenario_path: Path) -> dict[str, Any]:
     # до rmtree: попытка/телеметрия читаются из артефактов, которые ещё живы
     outcome = _attempt_outcome(out_dir)
     telemetry_schema = _telemetry_schema_version(out_dir)
+    timing = _attempt_timing(out_dir)
     shutil.rmtree(out_dir, ignore_errors=True)
 
     failed = error is not None or outcome not in _COMPLETED_OUTCOMES
     metrics: dict[str, Any] = {
         "t_total": wall,
-        "t_reset": None,
+        # P12: сначала поля runner (timing в attempts.jsonl), при их
+        # отсутствии — честный null (существующей деривации для этих трёх
+        # стадий не существовало — B0-v1 фиксировал их как UNKNOWN).
+        "t_reset": _timing_seconds(timing, "t_reset"),
         "t_delivery": _phase_span_seconds(transcript, events, "delivery"),
         "t_settle": _settle_seconds(campaign_json),
         "t_trigger": _phase_span_seconds(transcript, events, "trigger"),
-        "t_finalize": None,
-        "t_scoring": None,
+        "t_finalize": _timing_seconds(timing, "t_finalize"),
+        "t_scoring": _timing_seconds(timing, "t_scoring"),
     }
     return {
         "scenario": scenario_path.stem,
