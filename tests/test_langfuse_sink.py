@@ -27,6 +27,7 @@ import base64
 import http.server
 import importlib.util
 import json
+import math
 import socket
 import subprocess
 import sys
@@ -427,6 +428,48 @@ def _has_timing(obj: object) -> bool:
     return False
 
 
+# CARD-TIMERS-FIX (FINDING-4): шесть фазовых ключей P12 — сверено с
+# runner.py::run_attack (timing-словарь фаз reset/delivery/finalize/settle/
+# trigger/scoring с префиксом t_).
+P12_TIMING_STAGES = (
+    "t_reset", "t_delivery", "t_finalize", "t_settle", "t_trigger", "t_scoring",
+)
+
+
+def _timing_payloads(obj: object) -> list[object]:
+    """Все значения под ключом `timing` в дереве объекта (рекурсивно) — сырьё
+    для содержательной проверки присутствия: ключ без валидного значения
+    присутствием не считается."""
+    found: list[object] = []
+    if isinstance(obj, dict):
+        if "timing" in obj:
+            found.append(obj["timing"])
+        for v in obj.values():
+            found.extend(_timing_payloads(v))
+    elif isinstance(obj, list):
+        for v in obj:
+            found.extend(_timing_payloads(v))
+    return found
+
+
+def _valid_timing_payload(payload: object) -> bool:
+    """CARD-TIMERS-FIX: валидный timing — dict ровно с шестью фазовыми ключами
+    P12, каждое значение — конечное число >= 0 (успешная попытка выполнила
+    все фазы). `{"timing": null}` и `{"timing": {"t_reset": null, …}}` НЕ
+    проходят ассерты присутствия. Транспортные строки истории (timing
+    отсутствует легально, граница CARD-CLOCK) сюда не попадают: у них ключа
+    нет вовсе, absence-замки на базе остаются на `_has_timing`."""
+    if not isinstance(payload, dict) or set(payload) != set(P12_TIMING_STAGES):
+        return False
+    for stage in P12_TIMING_STAGES:
+        value = payload[stage]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        if not math.isfinite(value) or value < 0:
+            return False
+    return True
+
+
 def _clear_export_env(monkeypatch) -> None:
     for var in (FLAG_VAR, HOST_VAR, PUBLIC_KEY_VAR, SECRET_KEY_VAR):
         monkeypatch.delenv(var, raising=False)
@@ -469,17 +512,26 @@ def test_flag_off_artifacts_byte_identical_to_base(tmp_path: Path, monkeypatch) 
     differing = [name for name, blob in norm_base.items() if blob != norm_branch[name]]
     assert not differing, f"артефакты отличаются (после удаления timing): {differing}"
 
-    # Вердикт п.2 — нормализация не маскирует отсутствие P12-поля. campaign.json:
-    # timing обязан присутствовать в ОБОИХ армах (evidence обоих прогонов).
+    # Вердикт п.2 — нормализация не маскирует отсутствие/вырождение P12-поля
+    # (CARD-TIMERS-FIX: присутствие доказывает СОДЕРЖИМОЕ — шесть конечных
+    # неотрицательных фаз). campaign.json: timing в evidence ОБОИХ прогонов
+    # (базовый campaign.py исполняется текущим раннером), все payload валидны.
     for arm, tree in (("base", base_tree), ("branch", branch_tree)):
-        assert _has_timing(json.loads(tree["campaign.json"])), (
-            f"campaign.json[{arm}] не содержит timing — P12-поле исчезло"
+        payloads = _timing_payloads(json.loads(tree["campaign.json"]))
+        assert payloads and all(_valid_timing_payload(p) for p in payloads), (
+            f"campaign.json[{arm}] не содержит валидного timing — P12-поле "
+            "исчезло или вырождено (null/неполный набор фаз)"
         )
     # attempts.jsonl: асимметрия ожидаема и заперта явно — текущий код пишет
     # timing в строку исхода, базовый campaign.py (BASE_SHA=3a4ea58, pre-P12)
-    # поле в history.record не передаёт.
-    assert any(_has_timing(r) for r in _jsonl_parse(branch_tree["attempts.jsonl"])), (
-        "attempts.jsonl[branch] не содержит timing — P12-поле исчезло"
+    # поле в history.record не передаёт. VALID — содержательный замок.
+    assert any(
+        _valid_timing_payload(p)
+        for r in _jsonl_parse(branch_tree["attempts.jsonl"])
+        for p in _timing_payloads(r)
+    ), (
+        "attempts.jsonl[branch] не содержит валидного timing — P12-поле "
+        "исчезло или вырождено"
     )
     assert not any(_has_timing(r) for r in _jsonl_parse(base_tree["attempts.jsonl"])), (
         "attempts.jsonl[base] неожиданно содержит timing"
@@ -531,12 +583,21 @@ def test_flag_on_local_evidence_byte_identical_to_flag_off(
     differing = [name for name, blob in norm_off.items() if blob != norm_on[name]]
     assert not differing, f"локальный evidence изменился от флага (после удаления timing): {differing}"
 
-    # Вердикт п.2: timing присутствует в ОБОИХ армах и в ОБОИХ файлах-носителях
-    # — нормализация не маскирует отсутствие P12-поля.
+    # Вердикт п.2 (CARD-TIMERS-FIX: содержательное присутствие): timing
+    # присутствует в ОБОИХ армах и в ОБОИХ файлах-носителях валидным
+    # содержимым — нормализация не маскирует ни отсутствие, ни вырождение
+    # P12-поля ({"timing": null} присутствием не считается).
     for arm, tree in (("off", off_tree), ("on", on_tree)):
-        assert _has_timing(json.loads(tree["campaign.json"])), (
-            f"campaign.json[{arm}] не содержит timing — P12-поле исчезло"
+        payloads = _timing_payloads(json.loads(tree["campaign.json"]))
+        assert payloads and all(_valid_timing_payload(p) for p in payloads), (
+            f"campaign.json[{arm}] не содержит валидного timing — P12-поле "
+            "исчезло или вырождено"
         )
-        assert any(_has_timing(r) for r in _jsonl_parse(tree["attempts.jsonl"])), (
-            f"attempts.jsonl[{arm}] не содержит timing — P12-поле исчезло"
+        assert any(
+            _valid_timing_payload(p)
+            for r in _jsonl_parse(tree["attempts.jsonl"])
+            for p in _timing_payloads(r)
+        ), (
+            f"attempts.jsonl[{arm}] не содержит валидного timing — P12-поле "
+            "исчезло или вырождено"
         )

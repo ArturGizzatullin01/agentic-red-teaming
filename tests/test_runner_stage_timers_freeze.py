@@ -25,7 +25,11 @@ CARD-CAMPAIGN-CLOCK: Campaign тоже принимает keyword-only clock и 
   3. падение внутри фазы settle: фазы после точки сбоя не выполнялись —
      clock за границей сбоя не вызывается, строка истории попытки НЕ получает
      timing (чтение — честный None): инжектор не фабрикует значения для
-     невыполненных фаз.
+     невыполненных фаз;
+  4. CARD-TIMERS-FIX (FINDING-5): дефолтные часы «дышат» между прогонами —
+     два последовательных прогона без инъекции clock дают различающиеся
+     timing-наборы; регресс «дефолтный clock стал константой» проходит
+     замки 2 (не-null/неотрицательность), но не этот.
 """
 
 from __future__ import annotations
@@ -208,3 +212,31 @@ def test_campaign_explicit_default_clock_completes(tmp_path: Path) -> None:
     for stage in STAGES:
         value = timing[stage]
         assert value is not None and value >= 0, (stage, value)
+
+
+def test_default_clock_breathes_between_runs(tmp_path: Path) -> None:
+    """Замок 4 (CARD-TIMERS-FIX, FINDING-5): дефолтные часы ЖИВЫ между
+    прогонами — не константа. Два последовательных прогона без инъекции
+    clock: timing присутствует в обоих, все шесть значений не-null >= 0, и
+    наборы РАЗЛИЧАЮТСЯ (хотя бы одно значение). Ретраев нет намеренно:
+    побайтовое равенство наборов — регресс «дефолтный clock заморожен», его
+    надо вскрывать, а не маскировать повтором."""
+
+    def _run_once(out: Path) -> dict[str, float]:
+        campaign = Campaign(_mock_scenario(tmp_path), MockTarget(vulnerable=True), out)
+        asyncio.run(campaign.run(repetitions=1))
+        outcome_rows = [r for r in _read_rows(out) if r["outcome"] != "registered"]
+        assert len(outcome_rows) == 1, outcome_rows
+        timing = outcome_rows[0]["timing"]
+        assert set(timing) == set(STAGES), f"набор фаз: {sorted(timing)}"
+        for stage in STAGES:
+            value = timing[stage]
+            assert value is not None and value >= 0, (stage, value)
+        return timing
+
+    first = _run_once(tmp_path / "run-breath-1")
+    second = _run_once(tmp_path / "run-breath-2")
+    assert first != second, (
+        f"timing двух прогонов дефолтных часов побайтово равны ({first!r}) — "
+        "дефолтный clock ведёт себя как константа"
+    )
