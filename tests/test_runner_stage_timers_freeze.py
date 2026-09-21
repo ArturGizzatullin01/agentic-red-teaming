@@ -1,4 +1,4 @@
-"""tests/test_runner_stage_timers_freeze.py — CARD-CLOCK: инжектируемый clock.
+"""tests/test_runner_stage_timers_freeze.py — CARD-CLOCK + CARD-CAMPAIGN-CLOCK.
 
 run_attack принимает keyword-only clock (None → time.perf_counter — поведение
 по умолчанию неизменно; паттерн тот же, что у TraceExporter P11-1). Все точки
@@ -8,15 +8,20 @@ run_attack принимает keyword-only clock (None → time.perf_counter —
 репозитория» — побайтовые замки артефактов обязаны исключать timing либо
 замораживать часы; эта карточка даёт второй инструмент.
 
+CARD-CAMPAIGN-CLOCK: Campaign тоже принимает keyword-only clock и проводит
+его в свой (единственный) вызов run_attack — инъекция идёт штатным
+продукционным параметром, без тестовой подмены модульного имени.
+
 Замки:
 
-  1. scripted clock инжектируется через РЕАЛЬНЫЙ путь кампании (monkeypatch
-     модульного имени run_attack в campaign — сам campaign.py не меняется):
-     timing в строке исхода attempts.jsonl равен заданным длительностям ТОЧНО
-     (значения представимы в double, допусков нет); clock вызван ровно 12 раз
-     — новых точек замера не появилось;
+  1. scripted clock передаётся Campaign(...) напрямую и доезжает до точек
+     замера через РЕАЛЬНЫЙ путь кампании: timing в строке исхода
+     attempts.jsonl равен заданным длительностям ТОЧНО (значения представимы
+     в double, допусков нет); clock вызван ровно 12 раз — новых точек замера
+     не появилось;
   2. дефолт (clock не передан) — тайминги не-null и неотрицательны
-     (регрессионный замок живости дефолтного пути);
+     (регрессионный замок живости дефолтного пути; runner напрямую и
+     Campaign с явным clock=None);
   3. падение внутри фазы settle: фазы после точки сбоя не выполнялись —
      clock за границей сбоя не вызывается, строка истории попытки НЕ получает
      timing (чтение — честный None): инжектор не фабрикует значения для
@@ -28,7 +33,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +42,6 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import memnotsafe.core.campaign as campaign_module  # noqa: E402
 from memnotsafe.adapters.base import SettleResult  # noqa: E402
 from memnotsafe.adapters.mock import MockTarget  # noqa: E402
 from memnotsafe.attacks import get_attack  # noqa: E402
@@ -117,16 +120,14 @@ def _read_rows(out: Path) -> list[dict]:
     ]
 
 
-def test_scripted_clock_freezes_attempts_jsonl_timing(tmp_path: Path, monkeypatch) -> None:
-    """Замок 1: scripted clock через реальный путь кампании — timing в строке
-    исхода attempts.jsonl равен заданным длительностям ТОЧНО; clock вызван
-    ровно 12 раз (только точки P12, новых замеров нет)."""
+def test_scripted_clock_freezes_attempts_jsonl_timing(tmp_path: Path) -> None:
+    """Замок 1: scripted clock передан Campaign напрямую — через реальный
+    путь кампании timing в строке исхода attempts.jsonl равен заданным
+    длительностям ТОЧНО; clock вызван ровно 12 раз (только точки P12,
+    новых замеров нет)."""
     clock = _ScriptedClock(_SCRIPT)
-    # Инъекция без правки campaign.py: кампания зовёт run_attack по
-    # модулю-уровню — подменяем имя на partial с clock (карточка CLOCK §2.1).
-    monkeypatch.setattr(campaign_module, "run_attack", partial(run_attack, clock=clock))
     out = tmp_path / "run"
-    campaign = Campaign(_mock_scenario(tmp_path), MockTarget(vulnerable=True), out)
+    campaign = Campaign(_mock_scenario(tmp_path), MockTarget(vulnerable=True), out, clock=clock)
     asyncio.run(campaign.run(repetitions=1))
 
     assert clock.calls == len(_SCRIPT), (
@@ -172,13 +173,12 @@ def test_phases_after_failure_stay_null_with_injected_clock() -> None:
     )
 
 
-def test_failed_attempt_history_row_keeps_timing_none(tmp_path: Path, monkeypatch) -> None:
+def test_failed_attempt_history_row_keeps_timing_none(tmp_path: Path) -> None:
     """Замок 3b: та же попытка через кампанию — строка transport_error БЕЗ
     timing (чтение истории — честный None), нули не фабрикуются."""
     clock = _ScriptedClock(_SCRIPT[:7])
-    monkeypatch.setattr(campaign_module, "run_attack", partial(run_attack, clock=clock))
     out = tmp_path / "run"
-    campaign = Campaign(_mock_scenario(tmp_path), _SettleFailsTarget(), out)
+    campaign = Campaign(_mock_scenario(tmp_path), _SettleFailsTarget(), out, clock=clock)
     with pytest.raises(RunnerError):
         asyncio.run(campaign.run(repetitions=1))
 
@@ -190,3 +190,21 @@ def test_failed_attempt_history_row_keeps_timing_none(tmp_path: Path, monkeypatc
     )
     entries = read_history(out / "attempts.jsonl")
     assert entries[-1].timing is None
+
+
+def test_campaign_explicit_default_clock_completes(tmp_path: Path) -> None:
+    """CARD-CAMPAIGN-CLOCK §2.3: явный clock=None у Campaign — прогон
+    завершается, проводка параметра дефолт не сломала: timing строки исхода
+    не-null и неотрицательны. (test_default_clock_path_alive бьёт в runner
+    напрямую и остаётся как есть — здесь именно слой кампании.)"""
+    out = tmp_path / "run"
+    campaign = Campaign(_mock_scenario(tmp_path), MockTarget(vulnerable=True), out, clock=None)
+    asyncio.run(campaign.run(repetitions=1))
+
+    outcome_rows = [r for r in _read_rows(out) if r["outcome"] != "registered"]
+    assert len(outcome_rows) == 1, outcome_rows
+    timing = outcome_rows[0]["timing"]
+    assert set(timing) == set(STAGES), f"набор фаз: {sorted(timing)}"
+    for stage in STAGES:
+        value = timing[stage]
+        assert value is not None and value >= 0, (stage, value)

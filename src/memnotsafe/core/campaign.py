@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from memnotsafe.adapters.base import TargetAdapter
@@ -93,6 +93,7 @@ class Campaign:
         attacker_config=None,
         online: bool = False,
         online_attempts: int = 5,
+        clock: Callable[[], float] | None = None,
     ):
         self.scenario = scenario
         self.target = target
@@ -117,6 +118,11 @@ class Campaign:
         # P10b (фича 007): experiment_id появляется в run() и связывает пакеты
         # доказательств и историю попыток с конфигурацией эксперимента.
         self.experiment_id: str | None = None
+        # CARD-CAMPAIGN-CLOCK: источник времени таймеров P12, проводится в
+        # каждый вызов run_attack. None (дефолт) — run_attack сам резолвит в
+        # time.perf_counter: продукционное поведение не меняется; в артефакты
+        # clock не пишется. Только программный слой — без CLI/конфига.
+        self._clock = clock
 
     def _build_judge(self):
         spec = self.scenario.judge
@@ -227,6 +233,7 @@ class Campaign:
                 result = await run_attack(
                     attack, ctx, self.target, run_id=run_id, recorder=recorder, judge=self.judge,
                     require_case_marker=require_marker,
+                    clock=self._clock,
                 )
             except RunnerError as exc:
                 # Транспортный сбой target: в историю как transport_error
