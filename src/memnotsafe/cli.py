@@ -281,6 +281,24 @@ def cmd_campaign(args: argparse.Namespace) -> int:
     return asyncio.run(_run_campaign(args, default_repetitions=args.iterations or 5, command="campaign"))
 
 
+def cmd_orchestrate(args: argparse.Namespace) -> int:
+    """P13-a: оркестратор N воркеров кампании (подпроцессы CLI) с общим
+    experiment_id и lease-каталогом. Новый выход — только новый код команды;
+    контракты существующих команд не затронуты."""
+    from memnotsafe.core.worker import orchestrate_campaign, orchestrator_rc
+
+    outcomes, summary_path = asyncio.run(orchestrate_campaign(
+        args.scenario, output=args.output, workers=args.workers,
+        iterations=args.iterations,
+    ))
+    for o in outcomes:
+        print(f"orchestrator: воркер w{o.index} rc={o.returncode} run={o.run_dir}")
+    rc = orchestrator_rc(outcomes)
+    ok = sum(1 for o in outcomes if o.returncode == 0)
+    print(f"orchestrator: итог rc={rc} ({ok}/{len(outcomes)} ок), сводка: {summary_path}")
+    return rc
+
+
 def _stage_from_dict(s: dict):
     """Восстановление стадии из campaign.json со ВСЕМИ полями провенанса.
 
@@ -682,6 +700,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_judge_flags(pc)
     _add_output_flags(pc)
     pc.set_defaults(func=cmd_campaign)
+
+    porc = sub.add_parser("orchestrate", help="оркестратор N воркеров кампании: общий experiment_id, lease-каталог, сводка (P13-a)")
+    porc.add_argument("--scenario", required=True)
+    porc.add_argument("--output", required=True,
+                      help="база: воркеры <output>-w<i>/, замки <output>/locks, сводка <output>-orchestrator.json")
+    porc.add_argument("--workers", type=int, default=2)
+    porc.add_argument("--iterations", type=int, default=None)
+    porc.set_defaults(func=cmd_orchestrate)
 
     pgen = sub.add_parser("generate", help="precompute-генерация корпуса атак под профиль (US1)")
     pgen.add_argument("--profile", required=True, help="путь к файлу-профилю агента")
