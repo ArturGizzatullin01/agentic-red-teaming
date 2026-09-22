@@ -20,6 +20,12 @@ settle-polling) живёт ЗДЕСЬ — в core/ не переносим (Пр
     target.extra.identities: {user_id: ENV_VAR}. Ключи — в окружении, не в YAML.
   - evidence-канал 2 — прямое чтение Mongo, если задан mongo_uri; иначе snapshot()
     возвращает None (black-box деградация → write/persistence UNKNOWN).
+  - reset_state (P13-b, W7/G3.1): scope="global" — дефолт, прежнее поведение
+    побайтово (delete_many({}) по всем 4 коллекциям, metadata без маркера);
+    scope="namespace" — удаляет только документы сессий ЭТОГО экземпляра
+    адаптера (механика — _namespace_reset), глобальная agent_policy_memories
+    не трогается вовсе. Namespace-режим помечает себя ключом reset_scope в
+    metadata снимков и run_metadata() (дефолт ключ не добавляет).
 
 Не покрыт сетевыми тестами — офлайн-тесты бьют по чистым методам нормализации и
 детекции каналов через поддельные входы (tests/test_investment_stand_adapter.py).
@@ -46,6 +52,9 @@ from memnotsafe.tracing.events import TraceEvent, new_event_id
 _COLLECTIONS = ("dialog_sessions", "episodic_memories", "semantic_memories", "agent_policy_memories")
 _USER_COLLECTIONS = ("dialog_sessions", "episodic_memories", "semantic_memories")
 _GLOBAL_COLLECTION = "agent_policy_memories"
+# P13-b (W7): режимы reset_state. "global" — прежнее поведение (все 4
+# коллекции, дефолт); "namespace" — только документы своих сессий.
+_RESET_SCOPES = ("global", "namespace")
 _PORTFOLIO_TOOL = "portfolio_get_positions_valuation"
 
 
@@ -140,16 +149,25 @@ class InvestmentStandAdapter(TargetAdapter):
         finalize_via_chat_keyword: str = "finalize",
         mongo_uri: str | None = None,
         mongo_db: str = "agent_memory",
+        scope: str = "global",
         settle_timeout_s: float = 10.0,
         timeout_s: float = 60.0,
         **_ignored: Any,
     ):
+        if scope not in _RESET_SCOPES:
+            # Опечатка в scope не имеет права молча включить глобальный reset —
+            # это ровно дыра W7, которую закрывает карточка P13-b.
+            raise ValueError(
+                f"scope={scope!r} не поддерживается (доступны: "
+                f"{', '.join(_RESET_SCOPES)}); сброс памяти настроен неверно"
+            )
         self.base_url = base_url.rstrip("/")
         self.identities = identities or {}
         self.auth_mode = auth_mode
         self.finalize_keyword = finalize_via_chat_keyword
         self.mongo_uri = mongo_uri
         self.mongo_db = mongo_db
+        self._reset_scope = scope
         self.settle_timeout_s = float(settle_timeout_s)
         # ВАЖНО: capabilities — один и тот же объект на всю жизнь адаптера. Раннер
         # захватывает его ссылку через probe() ДО send(); мы мутируем поля НА МЕСТЕ
@@ -191,6 +209,11 @@ class InvestmentStandAdapter(TargetAdapter):
             "evidence_channel": self._evidence_channel,
             "target": self.base_url,
         }
+        if self._reset_scope != "global":
+            # P13-b: маркер режима появляется ТОЛЬКО у namespace — дефолтный
+            # прогон побайтово прежний (требование карточки); namespace-прогон
+            # видим в артефактах явно.
+            meta["reset_scope"] = self._reset_scope
         if self._sampling is not None:
             meta["target_sampling"] = self._sampling
         return meta
@@ -354,11 +377,45 @@ class InvestmentStandAdapter(TargetAdapter):
             self._reset_available = False
             return
         try:
-            for coll in _COLLECTIONS:
-                db[coll].delete_many({})
+            if self._reset_scope == "namespace":
+                self._namespace_reset(db)
+            else:
+                for coll in _COLLECTIONS:
+                    db[coll].delete_many({})
             self._reset_available = True
         except Exception:  # noqa: BLE001 — нет прав на запись/недоступно: честно фиксируем
             self._reset_available = False
+
+    def _namespace_reset(self, db: Any) -> None:
+        """P13-b (W7/G3.1): удалить ТОЛЬКО документы сессий ЭТОГО экземпляра
+        адаптера (self._session_users — сессии, созданные его new_session).
+        Атрибуция — по схеме записи стенда (orchestrator/graph.py:104-152,
+        memory/models.py): dialog_sessions и episodic_memories несут session_id
+        (у эпизодов дублем source_session того же значения); semantic_memories
+        session-поля НЕ имеют — привязка факта к сессии только через
+        source_episode_id → episode_id эпизода финалайза сессии (nullable:
+        None, когда эпизодов нет — такие факты не атрибутируемы и выживают).
+        Совпадение ТОЧНОЕ по session_id, не по префиксу: префикс
+        memnotsafe-{user}-… общий у чужих воркеров того же пользователя и
+        ловил бы ровно чужие документы (сама дыра W7). agent_policy_memories
+        (глобальная коллекция, предмет G3.2) не трогается вовсе."""
+        sessions = list(self._session_users)
+        if not sessions:
+            return  # своих сессий нет (первая попытка воркера) — чистить нечего
+        own_sessions = {"$in": sessions}
+        # id своих эпизодов читаем ДО их удаления: после удаления ссылка
+        # source_episode_id фактов уже не разрешима.
+        episode_ids = [
+            doc["episode_id"]
+            for doc in db["episodic_memories"].find({"session_id": own_sessions})
+            if isinstance(doc, dict) and doc.get("episode_id")
+        ]
+        db["dialog_sessions"].delete_many({"session_id": own_sessions})
+        db["episodic_memories"].delete_many({"session_id": own_sessions})
+        if episode_ids:
+            db["semantic_memories"].delete_many(
+                {"source_episode_id": {"$in": episode_ids}}
+            )
 
     async def new_session(self, user_id: str) -> str:
         session_id = f"memnotsafe-{user_id}-{uuid.uuid4().hex[:8]}"
@@ -762,12 +819,21 @@ class InvestmentStandAdapter(TargetAdapter):
                     global_memory.append(rec)
                 else:
                     users.setdefault(rec["source_user"] or "", []).append(rec)
+        snapshot_metadata: dict[str, Any] = {
+            "auth_mode": self.auth_mode,
+            "finalize_bodies": list(self._finalize_log),
+        }
+        if self._reset_scope != "global":
+            # P13-b: существующий механизм metadata снимка (рядом с auth_mode),
+            # без новых полей в схеме attempts.jsonl; ключ — только у namespace,
+            # дефолт побайтово прежний.
+            snapshot_metadata["reset_scope"] = self._reset_scope
         return SystemSnapshot(
             global_memory=global_memory, users=users,
             # P09-lite: предложенные писателем факты по сессиям — фазовая
             # привязка бесплатна: снимок M0 несёт baseline-finalize, M1 —
             # delivery-finalize, M3 — trigger-finalize
-            metadata={"auth_mode": self.auth_mode, "finalize_bodies": list(self._finalize_log)},
+            metadata=snapshot_metadata,
         )
 
     # ------------------------------------------------------------------- транспорт
