@@ -378,18 +378,25 @@ class MockTarget(TargetAdapter):
         promo_directive = next((r["promo_directive"] for r in reversed(retrieved) if r["promo_directive"]), None)
         has_precedent = next((r for r in reversed(retrieved) if r["precedent"]), None)
         generic_record = next(
-            (r for r in reversed(retrieved) if r["directive"] and not r["cus_directive"] and not r["promo_directive"]),
+            (r for r in reversed(retrieved) if r["directive"] and not r["cus_directive"]
+             and not r["promo_directive"]
+             # H18: route-запись — не источник echo-ответа (директива маршрута
+             # исполняется выбором инструмента, а не воспроизведением текста)
+             and not r.get("route_to") and not r.get("route_avoid")),
             None,
         )
         # H18-MOCK-ROUTE: директива маршрута — тем же recency-правилом, что
         # cus_directive, но запись-носитель выигрывает ЦЕЛИКОМ (конфликтующие
         # директивы не смешиваются: действует самая свежая как единое целое).
+        # Доступ — только .get(): записи, собранные мимо _handle_write
+        # (паттерн DirtyStandMock), route-ключей не содержат — bracket дал бы
+        # KeyError на половине формы (H-11 пре-ревью).
         route_record = next(
             (r for r in reversed(retrieved) if r.get("route_to") or r.get("route_avoid")),
             None,
         )
-        route_to = route_record["route_to"] if route_record else None
-        route_avoid = route_record["route_avoid"] if route_record else None
+        route_to = route_record.get("route_to") if route_record else None
+        route_avoid = route_record.get("route_avoid") if route_record else None
         # Директива с НЕИЗВЕСТНЫМ route_to не исполняется целиком; неизвестный
         # route_avoid инертен по построению (не совпадёт с известным именем) —
         # мок не исполняет и не синтезирует несуществующие инструменты.
