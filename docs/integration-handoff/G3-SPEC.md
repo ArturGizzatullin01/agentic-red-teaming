@@ -6,6 +6,18 @@ P13 (§3) и выбор механизма изоляции (§4.1) не сам�
 выдаёт владелец. Live-часть G3 исполняется ТОЛЬКО по «го» владельца; сам
 этот документ и offline-карточки §3 исполнимы до «го».
 
+Редакция 2026-09-22 (правки A0 по внешнему пре-ревью
+CLAUDE-PREREVIEW-CARDS-2026-09-22, обе подтверждены чтением кода):
+§G3.3 — (а) биекция переформулирована по `attempt_no >= 1` со списком
+исключений из пяти строк (`registered`/`budget_exhausted`/`aborted`/
+`rewrite_rejected`/`rewrite_accepted`, все `attempt_no == 0`) и легитимной
+второй строкой `evidence_error`; прежняя формулировка «все строки кроме
+registered» давала бы ложные дефекты на любом эскалационном прогоне;
+(б) убрано неверное «planned-фаза продюсером не пишется» — продюсер
+существует (`generation/rewrite.py:44`), сверка attacker-расхода ведётся
+по записям `attacker_llm/planned` и `campaign.json.attacker.calls_used`,
+`blocked` (escalation.py:162) расходом не является.
+
 ## 1. Предмет и предпосылки
 
 ### 1.1 Предмет
@@ -186,15 +198,25 @@ global/чужих слоях.
 кросс-сверка: (1) фазы target_call — каждая запись `executed` или
 `unknown_outcome` (третьего нет; `blocked` к target_call не пишется);
 (2) биекция «попытка ↔ списание»: каждая строка исхода attempts.jsonl
-(кроме `registered`) имеет ровно одну target_call-запись с теми же
+с `attempt_no >= 1` имеет ровно одну target_call-запись с теми же
 case_id/candidate_id/attempt_no — они пишутся парами в одном месте кода
-(успех: executed, транспортный сбой: unknown_outcome);
+(успех: executed, транспортный сбой: unknown_outcome). Строки с
+`attempt_no == 0` в биекции НЕ участвуют — это `registered`
+(campaign.py:227), `budget_exhausted` (:316), `aborted` (:499),
+`rewrite_rejected`/`rewrite_accepted` (escalation.py:189/:210): у них нет
+и не должно быть target_call. `evidence_error` (campaign.py:644, реальный
+attempt_no) — легитимная ВТОРАЯ строка той же попытки, не нарушение
+биекции;
 (3) `retry_of`/error — поля существующей записи, повтор не создаёт второй
 записи той же операции; (4) итоговая summary-запись судьи сходится с
-JudgeBudget, attacker-расход — с `CallBudget.used`, отказ бюджета у
-атакера — запись `blocked` (лейджер — наблюдатель, сам не списывает;
-planned-фаза в коде сегодня продюсером не пишется — если появится, обязана
-иметь парный executed/unknown_outcome); (5) суммарный расход по обоим
+JudgeBudget (`calls_used`, campaign.py:360), attacker-расход — с
+`campaign.json.attacker.calls_used` (campaign.py:682) и считается по
+записям `attacker_llm/planned` (одна на вызов, продюсер —
+generation/rewrite.py:44), НЕ по общему числу строк attacker_llm:
+rewrite.py пишет ДВЕ записи на вызов (:44 planned + :63 executed /
+:55 unknown_outcome), planned обязан иметь парный результат; отказ
+бюджета у атакера — запись `blocked` (escalation.py:162; лейджер —
+наблюдатель, сам не списывает; `blocked` расходом не является); (5) суммарный расход по обоим
 воркерам не превышает их суммарных бюджетов. Перерасход относительно
 ОБЩЕГО бюджета эксперимента сегодня не измерим: общего лимита нет —
 бюджеты (`CallBudget`, `JudgeBudget`, online_attempts) на кампанию;
