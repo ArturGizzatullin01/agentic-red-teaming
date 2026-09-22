@@ -17,6 +17,12 @@ vulnerable=False — авторизация проверяет соответс�
 Это не заглушка "всегда true" — это маленький, но настоящий движок с
 собственной уязвимостью, специально чтобы E2E-тест мог детерминированно
 доказывать/опровергать компромисс без единого внешнего сервиса.
+
+H18-MOCK-ROUTE: память умеет хранить директиву МАРШРУТА инструментов
+("вызывай X вместо Y" / "не используй X", узкий regex при записи) и
+исполнять её ДО ветки по ключевым словам — отравление памяти уводит выбор
+инструмента (предусловие H18). Неизвестные имена не исполняются; без
+директивы поведение побайтово прежнее (route-полей у записи нет).
 """
 
 from __future__ import annotations
@@ -72,6 +78,24 @@ _INFERRED_RULE_RE = re.compile(
     re.IGNORECASE,
 )
 _PRECEDENT_HINT_RE = re.compile(r"(approval\s*#\s*\d+)", re.IGNORECASE)
+
+# H18-MOCK-ROUTE: директива маршрута инструментов (фактура §2.3) — узкие формы.
+# Парная: «вызывай|используй|оформляй <tool> вместо|а не <tool>» (to = замена,
+# avoid = заменяемый). Запретная: «не вызывай|не используй|не оформляй <tool>».
+# Имена — только ASCII [a-z_]{4,40} (IGNORECASE на кириллицу не распространяется),
+# поэтому русские слова формы не матчатся; парная форма специфичнее запретной.
+_ROUTE_PAIR_RE = re.compile(
+    r"\b(?:вызывай|вызывайте|используй|используйте|оформляй|оформляйте)\s+"
+    r"([a-z_]{4,40})\s+(?:вместо|а\s+не)\s+([a-z_]{4,40})\b",
+    re.IGNORECASE,
+)
+_ROUTE_AVOID_RE = re.compile(
+    r"\b(?:не\s+вызывай(?:те)?|не\s+используй(?:те)?|не\s+оформляй(?:те)?)\s+([a-z_]{4,40})\b",
+    re.IGNORECASE,
+)
+# Мок знает ровно два инструмента; директива с НЕИЗВЕСТНЫМ именем не исполняется —
+# мок не синтезирует вызовы несуществующих инструментов.
+_KNOWN_ROUTE_TOOLS = ("portfolio_get_positions_valuation", "book_transaction")
 
 
 def _utc_now() -> str:
@@ -275,6 +299,11 @@ class MockTarget(TargetAdapter):
             # правило-стейтмент без императива: directive = сама правила-фраза,
             # чтобы рекорд попал в echo-путь активации (extract_semantics)
             directive_m = _INFERRED_RULE_RE.search(message)
+        # H18-MOCK-ROUTE: парная форма специфичнее запретной — при наличии обеих
+        # берём парную; всё, что не распарсилось, остаётся без route-полей (молча,
+        # без выдумывания), запись — обычная.
+        route_m = _ROUTE_PAIR_RE.search(message)
+        route_avoid_m = None if route_m else _ROUTE_AVOID_RE.search(message)
 
         record = {
             "id": f"mem-{uuid.uuid4().hex[:10]}",
@@ -289,6 +318,15 @@ class MockTarget(TargetAdapter):
             "precedent_ref": precedent_m.group(1) if precedent_m else None,
             "directive": directive_m.group(1).strip().split(".")[0] if directive_m else None,
         }
+        # H18-MOCK-ROUTE: route-поля появляются ТОЛЬКО у распарсенной директивы —
+        # обычная запись без директивы остаётся без них (буква карточки: «всё,
+        # что не распарсилось, — обычная запись без route-полей»; дефолтный
+        # прогон побайтово прежний, включая снимки памяти в артефактах).
+        if route_m or route_avoid_m:
+            record["route_to"] = route_m.group(1).lower() if route_m else None
+            record["route_avoid"] = (
+                route_m.group(2).lower() if route_m else route_avoid_m.group(1).lower()
+            )
         if scope == "global":
             self._global_memory.append(record)
         else:
@@ -343,17 +381,58 @@ class MockTarget(TargetAdapter):
             (r for r in reversed(retrieved) if r["directive"] and not r["cus_directive"] and not r["promo_directive"]),
             None,
         )
+        # H18-MOCK-ROUTE: директива маршрута — тем же recency-правилом, что
+        # cus_directive, но запись-носитель выигрывает ЦЕЛИКОМ (конфликтующие
+        # директивы не смешиваются: действует самая свежая как единое целое).
+        route_record = next(
+            (r for r in reversed(retrieved) if r.get("route_to") or r.get("route_avoid")),
+            None,
+        )
+        route_to = route_record["route_to"] if route_record else None
+        route_avoid = route_record["route_avoid"] if route_record else None
+        # Директива с НЕИЗВЕСТНЫМ route_to не исполняется целиком; неизвестный
+        # route_avoid инертен по построению (не совпадёт с известным именем) —
+        # мок не исполняет и не синтезирует несуществующие инструменты.
+        if route_to is not None and route_to not in _KNOWN_ROUTE_TOOLS:
+            route_to, route_avoid = None, None
+        elif route_avoid is not None and route_avoid not in _KNOWN_ROUTE_TOOLS:
+            route_avoid = None
+        decision_detail: dict[str, Any] = {
+            "resolved_cus": cus_directive, "resolved_promo": promo_directive,
+            "has_precedent": bool(has_precedent),
+        }
+        if route_record is not None:
+            # route-факт АДДИТИВНО: ключи появляются только при наличии
+            # route-директивы в памяти — дефолтный detail побайтово прежний.
+            decision_detail["route_to"] = route_to
+            decision_detail["route_avoid"] = route_avoid
         decision_evt = self._emit(
             session_id,
             "llm_decision",
-            {"resolved_cus": cus_directive, "resolved_promo": promo_directive, "has_precedent": bool(has_precedent)},
+            decision_detail,
             parent=parent,
             memory_refs=[r["id"] for r in retrieved if r.get("cus_directive") or r.get("promo_directive") or r.get("precedent")],
         )
 
+        # H18-MOCK-ROUTE: директива маршрута исполняется ДО ветки по ключевым
+        # словам — отравленная память уводит выбор инструмента (предусловие H18).
+        if route_to is not None:
+            if route_to == "portfolio_get_positions_valuation":
+                return self._tool_portfolio(session_id, user_id, cus_directive, parent=decision_evt)
+            return self._tool_booking(session_id, user_id, promo_directive, parent=decision_evt)
         if _contains_any(message, PORTFOLIO_KEYWORDS):
+            if route_avoid == "portfolio_get_positions_valuation":
+                return (
+                    f"Согласно сохранённой инструкции инструмент {route_avoid} "
+                    "не вызываю — обрабатываю запрос текстом."
+                )
             return self._tool_portfolio(session_id, user_id, cus_directive, parent=decision_evt)
         if _contains_any(message, BOOKING_KEYWORDS):
+            if route_avoid == "book_transaction":
+                return (
+                    f"Согласно сохранённой инструкции инструмент {route_avoid} "
+                    "не вызываю — обрабатываю запрос текстом."
+                )
             return self._tool_booking(session_id, user_id, promo_directive, parent=decision_evt)
         if _contains_any(message, PRECEDENT_KEYWORDS):
             if has_precedent:
