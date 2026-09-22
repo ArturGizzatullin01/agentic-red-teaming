@@ -14,17 +14,26 @@
   эксклюзивности не держит: новый `acquire` снимает orphan-замок (упавший
   воркер) и занимает место с НОВЫМ монотонным токеном; прежний держатель
   отвергается по токену — его `release(старый_токен)` вернёт False и ничего
-  не снимет. Токен нового держателя всегда строго больше заменённого
-  (max(счётчик, токены живых замков) + 1) — fencing при перекладывании
-  безусловен; сквозная строгая монотонность между ОДНОВРЕМЕННЫМИ acquire
-  разных процессов не заявляется (счётчик обновляется best-effort,
-  эксклюзивность держит сам O_EXCL) — offline-контракт P13-a.
+  не снимет. Fencing при перекладывании безусловен (P13-a-r2, краш-окно
+  закрыто): максимум токенов считается ДО снятия перекладываемого замка —
+  его токен читается из самого файла замка, поэтому потеря/повреждение
+  `fencing.counter` монотонность takeover'а не ломают; счётчик инкрементится
+  ДО создания замка и атомарно (временный файл + `os.replace`) — краш между
+  счётчиком и замком оставляет счётчик уже продвинутым, равных токенов у
+  перекладываний одного имени не возникает, устаревший release (точное
+  совпадение токена) не может снять чужой замок. Остаточное окно (по имени,
+  offline-контракт P13-a): ОДНОВРЕМЕННЫЕ acquire РАЗНЫХ имён в разных
+  процессах могут вычислить одинаковый токен (счётчик без межпроцессной
+  сериализации); эксклюзивность имени при этом держит сам O_EXCL,
+  fencing-гарантия — в пределах одного имени.
   `clock` инжектируемый (норма VERDICT-P12, паттерн P11-1): lease-время
   монотонное, дефолт `time.monotonic`; TTL в тестах замораживается скриптом.
 
 * `orchestrate` — запуск N воркеров подпроцессами (asyncio) и сбор их
   исходов: упавший/убитый воркер НЕ блокирует сбор остальных (wait каждого
-  процесса независим). Каждому воркеру — свой env-скоуп:
+  процесса независим), НЕ СТАРТОВАВШИЙ (ошибка спауна) даёт честный исход
+  с returncode=None и причиной в поле error — исходы соседей не теряются
+  (P13-a-r2). Каждому воркеру — свой env-скоуп:
   `MEMNOTSAFE_WORKER_INDEX` (номер, с 1) и `MEMNOTSAFE_LEASE_DIR` (каталог
   замков оркестратора).
 
@@ -76,9 +85,13 @@ class FileLease:
     """Файловый lease с TTL и fencing-токенами в одном каталоге.
 
     Токены глобальны для каталога: каждый успешный acquire получает
-    max(счётчик каталога, токены всех живых замков) + 1 — перекладывание
-    истёкшего замка даёт токен строго больше заменённого (ядро fencing),
-    последовательные приобретения строго возрастают."""
+    max(счётчик каталога, токены всех замков, включая перекладываемый) + 1 —
+    перекладывание истёкшего замка даёт токен строго больше заменённого
+    (ядро fencing), последовательные приобретения строго возрастают. Порядок
+    (P13-a-r2): максимум → атомарная запись счётчика (temp + os.replace) →
+    снятие истёкшего замка → O_EXCL-создание нового. Краш в ЛЮБОЙ точке
+    между ними оставляет счётчик уже продвинутым или замок-предшественник
+    на месте — равных токенов у перекладываний не возникает."""
 
     def __init__(self, directory: str | Path, *, clock: Callable[[], float] = time.monotonic) -> None:
         self.directory = Path(directory)
@@ -90,6 +103,14 @@ class FileLease:
 
     def _lock_path(self, name: str) -> Path:
         return self.directory / f"{name}.lock"
+
+    def _write_counter_atomic(self, token: int) -> None:
+        """Атомарный апдейт счётчика: временный файл в ТОМ ЖЕ каталоге +
+        os.replace (P13-a-r2). Вызывается ДО создания замка — краш-окно
+        «замок записан, счётчик нет» закрыто построением."""
+        tmp = self.directory / f"fencing.counter.{os.getpid()}.{token}.tmp"
+        tmp.write_text(str(token), encoding="utf-8")
+        os.replace(tmp, self._counter_path())
 
     def _max_token_seen(self) -> int:
         highest = 0
@@ -108,15 +129,24 @@ class FileLease:
     def acquire(self, name: str, ttl: float) -> Lease | None:
         """Взять замок `name` на `ttl` секунд. Живой замок — немедленный None
         (политика отказа, докстринг модуля); истёкший/orphan — снят и
-        переложен с новым монотонным токеном."""
+        переложен с новым монотонным токеном. Максимум токенов вычисляется
+        ДО снятия старого замка, счётчик атомарно продвигается ДО создания
+        нового (см. FileLease): потеря/повреждение счётчика монотонность
+        takeover'а не ломают, устаревший release чужой замок не снимет."""
         now = self._clock()
         lock_path = self._lock_path(name)
         if lock_path.exists():
             data = _read_json(lock_path)
             if data is not None and now < float(data["expires_at"]):
                 return None
-            lock_path.unlink()  # TTL истёк: эксклюзивности нет, перекладываем
+        # P13-a-r2: максимум ДО unlink — токен перекладываемого замка читается
+        # из его файла; без этого потеря счётчика давала равные токены.
         token = self._max_token_seen() + 1
+        # P13-a-r2: счётчик ДО замка и атомарно — краш между ними оставляет
+        # счётчик продвинутым (следующий acquire стартует выше).
+        self._write_counter_atomic(token)
+        if lock_path.exists():
+            lock_path.unlink()  # TTL истёк: эксклюзивности нет, перекладываем
         expires_at = now + ttl
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -128,7 +158,6 @@ class FileLease:
             ).encode("utf-8"))
         finally:
             os.close(fd)
-        self._counter_path().write_text(str(token), encoding="utf-8")
         return Lease(name=name, fencing_token=token, expires_at=expires_at, path=lock_path)
 
     def release(self, token: int) -> bool:
@@ -155,13 +184,17 @@ def _read_json(path: Path) -> dict | None:
 
 @dataclass(frozen=True)
 class WorkerOutcome:
-    """Исход одного воркера: argv, ожидаемый run-каталог и rc процесса
-    (отрицательный — убит сигналом; None не встречается: wait всегда даёт rc)."""
+    """Исход одного воркера: argv, ожидаемый run-каталог, rc процесса
+    (отрицательный — убит сигналом) и маркер ошибки спауна. returncode=None —
+    воркер НЕ СТАРТОВАЛ (бинарь не найден и т.п.): поле `error` называет
+    причину (P13-a-r2); исход не теряется и попадает в сводку с честным null
+    вместо rc (новых exit-кодов CLI не вводится — rc оркестратора остаётся 1)."""
 
     index: int
     argv: list[str]
     run_dir: Path
-    returncode: int
+    returncode: int | None
+    error: str | None = None
 
 
 async def orchestrate(
@@ -174,12 +207,28 @@ async def orchestrate(
     """Запустить N воркеров подпроцессами и собрать исходы ВСЕХ независимо:
     упавший/убитый воркер не блокирует сбор остальных (каждый wait свой).
 
+    P13-a-r2: исключение СПАУНА одного воркера (бинарь не найден, OSError)
+    конвертируется в его собственный исход (returncode=None + error) — исходы
+    остальных и сводка не теряются. Политика осиротения (зафиксирована):
+    соседние воркеры НЕ отменяются — отмена asyncio-задачи не убивает
+    подпроцесс и создала бы сирот БЕЗ исходов (ровно дефект FINDING-2);
+    оркестратор ДОЖИДАЕТСЯ всех стартовавших и собирает каждый исход.
+
+    `run_dirs` обязан покрывать `worker_argv` 1:1 (i-му воркеру — i-й
+    run-каталог): расхождение длин — контрактный ValueError с сообщением,
+    не IndexError из задачи.
+
     Воркерам даётся env-скоуп поверх текущего окружения:
     `MEMNOTSAFE_WORKER_INDEX` (1..N) и `MEMNOTSAFE_LEASE_DIR` (каталог замков
     оркестратора `<orchestrator_dir>/locks`; создаётся здесь). Замок сам этот
     слой не берёт — эксклюзивные операции за воркерами/live-карточками.
     `extra_env` — прикладные переменные поверх скоупа (например PYTHONPATH,
     чтобы дочерний CLI видел пакет при запуске из дерева исходников)."""
+    if len(run_dirs) != len(worker_argv):
+        raise ValueError(
+            f"run_dirs ({len(run_dirs)}) не соответствует worker_argv "
+            f"({len(worker_argv)}): каждому воркеру — свой run-каталог 1:1"
+        )
     orchestrator_dir = Path(orchestrator_dir)
     locks_dir = orchestrator_dir / "locks"
     locks_dir.mkdir(parents=True, exist_ok=True)
@@ -190,8 +239,16 @@ async def orchestrate(
             env.update(extra_env)
         env[WORKER_INDEX_ENV] = str(index)
         env[LEASE_DIR_ENV] = str(locks_dir)
-        proc = await asyncio.create_subprocess_exec(*argv, env=env)
-        rc = await proc.wait()
+        try:
+            proc = await asyncio.create_subprocess_exec(*argv, env=env)
+            rc = await proc.wait()
+        except OSError as exc:
+            # спаун/ожидание невозможны — честный маркер, исход не теряется
+            return WorkerOutcome(
+                index=index, argv=list(argv),
+                run_dir=Path(run_dirs[index - 1]), returncode=None,
+                error=f"воркер не стартовал: {type(exc).__name__}: {exc}",
+            )
         return WorkerOutcome(index=index, argv=list(argv),
                              run_dir=Path(run_dirs[index - 1]), returncode=rc)
 
@@ -201,7 +258,8 @@ async def orchestrate(
 
 
 def orchestrator_rc(outcomes: Sequence[WorkerOutcome]) -> int:
-    """0, только если ВСЕ воркеры завершились с 0; иначе 1. Новых кодов нет."""
+    """0, только если ВСЕ воркеры завершились с 0; иначе 1 (нестартовавший
+    rc=None — тоже неуспех). Новых кодов нет."""
     return 0 if outcomes and all(o.returncode == 0 for o in outcomes) else 1
 
 
@@ -212,7 +270,8 @@ def write_orchestrator_summary(
     lease_dir: str | Path,
 ) -> Path:
     """Сводка оркестратора `<output>-orchestrator.json`: состав воркеров,
-    argv, run-каталоги, rc каждого, каталог замков и ОБЩНОСТЬ experiment_id
+    argv, run-каталоги, rc каждого (null — воркер не стартовал, причина —
+    в поле error, P13-a-r2), каталог замков и ОБЩНОСТЬ experiment_id
     (проверена чтением experiment.json готовых run-каталогов; у незавершившихся
     воркеров файла нет — честное null, не выдуманный id)."""
     experiment_ids = [
@@ -225,7 +284,8 @@ def write_orchestrator_summary(
         "schema_version": ORCHESTRATOR_SUMMARY_SCHEMA_VERSION,
         "workers": [
             {"index": o.index, "argv": o.argv, "run_dir": str(o.run_dir),
-             "returncode": o.returncode, "experiment_id": experiment_ids[i]}
+             "returncode": o.returncode, "error": o.error,
+             "experiment_id": experiment_ids[i]}
             for i, o in enumerate(outcomes)
         ],
         "experiment_id_common": common,

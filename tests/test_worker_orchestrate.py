@@ -25,6 +25,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 _SCENARIOS = Path(__file__).resolve().parents[1] / "scenarios"
 MOCK_SCENARIO = str(_SCENARIOS / "cross_user_bac.yaml")
 
@@ -144,3 +146,95 @@ def test_cli_existing_commands_untouched(tmp_path: Path, capsys) -> None:
     out = capsys.readouterr().out
     assert "AGENTIC MEMORY RED TEAMING" in out
     assert "Report:" in out
+
+
+# ================================ CARD-P13-a-r2: честный сбор исходов + контракт
+
+
+def test_spawn_failure_keeps_live_worker_outcome_and_summary(tmp_path: Path) -> None:
+    """P13-a-r2 FINDING-2: исключение спауна одного воркера (бинарь не найден)
+    НЕ теряет исходы остальных: у нестартовавшего — честный маркер
+    (returncode=None + error), живой собран, сводка записана, rc != 0."""
+    from memnotsafe.core.worker import (
+        orchestrate,
+        orchestrator_rc,
+        write_orchestrator_summary,
+    )
+    import asyncio
+
+    broken = [str(tmp_path / "no-such-binary"), "--run"]
+    live = _rc_argv("0", sleep_s=0.05)
+    outcomes = asyncio.run(orchestrate(
+        [broken, live],
+        run_dirs=[tmp_path / "w1", tmp_path / "w2"],
+        orchestrator_dir=tmp_path / "orch",
+    ))
+    assert len(outcomes) == 2, "исход нестартовавшего воркера потерян целиком"
+    w1, w2 = outcomes
+    assert w1.returncode is None and w1.error, "нет честного маркера ошибки спауна"
+    assert w2.returncode == 0, "исход живого воркера потерян из-за соседа"
+    assert orchestrator_rc(outcomes) == 1
+
+    summary_path = write_orchestrator_summary(
+        tmp_path / "orch-summary.json", outcomes, lease_dir=tmp_path / "orch" / "locks"
+    )
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["workers"][0]["returncode"] is None
+    assert summary["workers"][0]["error"] == w1.error
+    assert summary["workers"][1]["returncode"] == 0
+    # experiment_id у нестартовавшего — честный null (норма уже есть)
+    assert summary["workers"][0]["experiment_id"] is None
+
+
+def test_experiment_id_common_false_for_different_ids(tmp_path: Path) -> None:
+    """FINDING-3 (замок против зашитого True): разные experiment_id у
+    run-каталогов → experiment_id_common False; смешанный случай (id только
+    у одного) — тоже False: общность требует ВСЕ воркеры с одним id."""
+    from memnotsafe.core.worker import WorkerOutcome, write_orchestrator_summary
+
+    for i, exp_id in ((1, "exp-aaa"), (2, "exp-bbb")):
+        run_dir = tmp_path / f"w{i}"
+        run_dir.mkdir()
+        (run_dir / "experiment.json").write_text(
+            json.dumps({"experiment_id": exp_id}), encoding="utf-8"
+        )
+    outcomes = [
+        WorkerOutcome(index=i, argv=["x"], run_dir=tmp_path / f"w{i}", returncode=0)
+        for i in (1, 2)
+    ]
+    summary = json.loads(write_orchestrator_summary(
+        tmp_path / "s1.json", outcomes, lease_dir=tmp_path
+    ).read_text(encoding="utf-8"))
+    assert summary["experiment_id_common"] is False
+
+    (tmp_path / "w2" / "experiment.json").unlink()  # незавершившийся воркер
+    summary2 = json.loads(write_orchestrator_summary(
+        tmp_path / "s2.json", outcomes, lease_dir=tmp_path
+    ).read_text(encoding="utf-8"))
+    assert summary2["experiment_id_common"] is False
+    assert summary2["workers"][1]["experiment_id"] is None
+
+
+def test_run_dirs_mismatch_raises_value_error(tmp_path: Path) -> None:
+    """FINDING-3: run_dirs короче worker_argv — контрактный ValueError с
+    сообщением (имя контракта в тексте), а не IndexError из задачи."""
+    from memnotsafe.core.worker import orchestrate
+    import asyncio
+
+    with pytest.raises(ValueError, match="run_dirs"):
+        asyncio.run(orchestrate(
+            [_rc_argv("0")], run_dirs=[], orchestrator_dir=tmp_path / "orch"
+        ))
+
+
+def test_cli_orchestrate_invalid_workers_is_clean_error(tmp_path: Path, capsys) -> None:
+    """CLI-слой: --workers 0 — управляемый отказ (сообщение + exit 1, БЕЗ
+    трейсбека), паттерн соседних команд cli.py (reporter.emit_error)."""
+    from memnotsafe import cli
+
+    rc = cli.main(["orchestrate", "--scenario", MOCK_SCENARIO,
+                   "--output", str(tmp_path / "orch"), "--workers", "0"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "workers" in (captured.err + captured.out)
+    assert "Traceback" not in captured.err + captured.out

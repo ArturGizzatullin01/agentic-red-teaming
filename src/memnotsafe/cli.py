@@ -284,15 +284,26 @@ def cmd_campaign(args: argparse.Namespace) -> int:
 def cmd_orchestrate(args: argparse.Namespace) -> int:
     """P13-a: оркестратор N воркеров кампании (подпроцессы CLI) с общим
     experiment_id и lease-каталогом. Новый выход — только новый код команды;
-    контракты существующих команд не затронуты."""
+    контракты существующих команд не затронуты. P13-a-r2: контрактные ошибки
+    (workers < 1, расхождение run_dirs) и ошибки окружения спауна —
+    управляемый отказ (сообщение + exit 1, без трейсбека), паттерн соседних
+    команд (reporter.emit_error); --json отложен в CLI v2."""
     from memnotsafe.core.worker import orchestrate_campaign, orchestrator_rc
 
-    outcomes, summary_path = asyncio.run(orchestrate_campaign(
-        args.scenario, output=args.output, workers=args.workers,
-        iterations=args.iterations,
-    ))
+    reporter = _reporter(args)
+    try:
+        outcomes, summary_path = asyncio.run(orchestrate_campaign(
+            args.scenario, output=args.output, workers=args.workers,
+            iterations=args.iterations,
+        ))
+    except (ValueError, OSError) as exc:
+        reporter.emit_error(command="orchestrate", message=str(exc))
+        return 1
     for o in outcomes:
-        print(f"orchestrator: воркер w{o.index} rc={o.returncode} run={o.run_dir}")
+        line = f"orchestrator: воркер w{o.index} rc={o.returncode} run={o.run_dir}"
+        if o.error:
+            line += f" error: {o.error}"
+        print(line)
     rc = orchestrator_rc(outcomes)
     ok = sum(1 for o in outcomes if o.returncode == 0)
     print(f"orchestrator: итог rc={rc} ({ok}/{len(outcomes)} ок), сводка: {summary_path}")

@@ -133,3 +133,53 @@ def test_fencing_token_exposed_on_lease(tmp_path: Path) -> None:
     assert held is not None
     assert isinstance(held.fencing_token, int) and held.fencing_token >= 1
     assert held.expires_at == 10.0
+
+
+# ============================================== CARD-P13-a-r2: fencing без крах-окна
+
+
+def test_takeover_with_lost_counter_strictly_increases(tmp_path: Path) -> None:
+    """P13-a-r2 FINDING-1 (ядро, воспроизведение аудита A0): краш-окно
+    «замок записан, счётчик потерян/не записался». Удаление fencing.counter
+    до takeover — takeover обязан дать токен СТРОГО больше заменённого
+    (максимум читается из самого замка до его снятия); устаревший release —
+    False и НЕ снимает замок нового держателя."""
+    from memnotsafe.core.worker import FileLease
+
+    clock = FuncClock(start=0.0)
+    lease = FileLease(_lease_dir(tmp_path), clock=clock)
+    first = lease.acquire("reset", ttl=5.0)
+    assert first is not None
+    (lease.directory / "fencing.counter").unlink()  # краш-окно: счётчика нет
+    clock.now = 6.0
+    second = lease.acquire("reset", ttl=5.0)
+    assert second is not None, "истёкший замок обязан перекладываться"
+    assert second.fencing_token > first.fencing_token, (
+        f"takeover выдал токен не больше заменённого ({second.fencing_token} "
+        f"<= {first.fencing_token}) — краш-окно FINDING-1"
+    )
+    assert lease.release(first.fencing_token) is False, "устаревший токен принят"
+    assert lease.acquire("reset", ttl=5.0) is None, (
+        "замок нового держателя снят устаревшим release"
+    )
+    assert lease.release(second.fencing_token) is True
+
+
+def test_takeover_with_corrupted_counter_strictly_increases(tmp_path: Path) -> None:
+    """FINDING-1, повреждённый счётчик: мусор в fencing.counter — монотонность
+    держится на самом перекладываемом замке (токен читается из файла замка
+    ДО его снятия)."""
+    from memnotsafe.core.worker import FileLease
+
+    clock = FuncClock(start=0.0)
+    lease = FileLease(_lease_dir(tmp_path), clock=clock)
+    first = lease.acquire("reset", ttl=5.0)
+    assert first is not None
+    (lease.directory / "fencing.counter").write_text("не-число", encoding="utf-8")
+    clock.now = 6.0
+    second = lease.acquire("reset", ttl=5.0)
+    assert second is not None
+    assert second.fencing_token > first.fencing_token, (
+        f"повреждённый счётчик сломал монотонность ({second.fencing_token} "
+        f"<= {first.fencing_token})"
+    )
