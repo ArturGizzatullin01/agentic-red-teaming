@@ -212,6 +212,13 @@ def build_adapter(scenario: Scenario, target_override: str | None = None):
             raise ValueError(f"Сценарию {scenario.id} нужен target.base_url или --target <url> для adapter=openai")
         return OpenAICompatibleAdapter(base_url=base_url, **scenario.target.extra)
 
+    if adapter_name == "http_endpoint":
+        from memnotsafe.adapters.http_endpoint import HttpEndpointAdapter
+
+        if not base_url:
+            raise ValueError(f"Сценарию {scenario.id} нужен target.base_url или --target <url> для adapter=http_endpoint")
+        return HttpEndpointAdapter(base_url=base_url, **scenario.target.extra)
+
     if adapter_name == "investment_stand":
         from memnotsafe.adapters.investment_stand import InvestmentStandAdapter
 
