@@ -226,6 +226,10 @@ _DECLARED_INHERITED: dict[str, dict[str, str]] = {
     "InvestmentStandAdapter": {
         "reset": "алиас reset_state на базе, семантика та же",
     },
+    "HttpEndpointAdapter": {
+        "reset": "алиас reset_state на базе, семантика та же",
+        "set_context": "телеметрия для stateless HTTP-таргета непринципиальна",
+    },
 }
 
 _WAIT_MSG = (
