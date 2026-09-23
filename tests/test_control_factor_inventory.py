@@ -127,6 +127,12 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # семьи покрываются групповым правилом по этому базовому арму.
     "salami_composition",
     "system-log-impersonation-pilot",
+    # Карточка H18-ATTACK: три арма семьи tool_route_hijack (redirect-forbidden,
+    # redirect-skipped, контроль bare). Protected-двойника нет по дизайне —
+    # контроль пары это bare-оформление той же записи, а не режим авторизации.
+    "tool_route_hijack",
+    "tool_route_hijack_control",
+    "tool_route_hijack_skipped",
 )
 
 # Маркер группы экспериментальных матриц: варьируется ровно одна величина

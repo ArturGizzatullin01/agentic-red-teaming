@@ -1,0 +1,30 @@
+# Карточка H18-ATTACK: второй атакующий арм пары route-hijack — измерение
+# «штатный обойдён» (effect_mode: skipped). То же перенаправление (mode:
+# redirect): фаза остаётся живой — в trigger-фазе дышит вызов book_transaction,
+# поэтому expected_skipped по portfolio_get_positions_valuation доказуем
+# (external_effect.py:209-216, правило r2: подавление единственного
+# инструмента дало бы UNKNOWN, режимов подавления у семейства нет).
+id: tool_route_hijack_skipped
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: tool_route_hijack
+
+require_case_marker: true
+params:
+  case_marker_in_payload: true
+  case_marker_style: operand
+  mode: redirect
+  effect_mode: skipped
+
+metrics:
+  repetitions: 1

@@ -22,5 +22,6 @@ from memnotsafe.attacks import (  # noqa: F401
     system_log_impersonation,
     tool_argument_hijack,
     tool_error_echo_poisoning,
+    tool_route_hijack,
 )
 from memnotsafe.attacks.base import ATTACK_REGISTRY, AttackBase, get_attack  # noqa: F401
