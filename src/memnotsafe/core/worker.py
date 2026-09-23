@@ -10,7 +10,8 @@
   пробрасывается воркерам env-ом `MEMNOTSAFE_LEASE_DIR` — сам слой P13-a
   замок НЕ берёт: эксклюзивные операции исполняют воркеры/живые карточки.
   Политика второго `acquire` при живом замке — НЕМЕДЛЕННЫЙ ОТКАЗ (None):
-  ожидание — решение живой карточки, не этого слоя. Замок с истёкшим TTL
+  ожидание освобождения замка — решение живой карточки, не этого слоя (слой
+  ждёт только мьютекс каталога на время чужой секции, см. (б) ниже). Замок с истёкшим TTL
   эксклюзивности не держит: новый `acquire` снимает orphan-замок (упавший
   воркер) и занимает место с НОВЫМ монотонным токеном; прежний держатель
   отвергается по токену — его `release(старый_токен)` вернёт False и ничего
@@ -21,11 +22,52 @@
   ДО создания замка и атомарно (временный файл + `os.replace`) — краш между
   счётчиком и замком оставляет счётчик уже продвинутым, равных токенов у
   перекладываний одного имени не возникает, устаревший release (точное
-  совпадение токена) не может снять чужой замок. Остаточное окно (по имени,
-  offline-контракт P13-a): ОДНОВРЕМЕННЫЕ acquire РАЗНЫХ имён в разных
-  процессах могут вычислить одинаковый токен (счётчик без межпроцессной
-  сериализации); эксклюзивность имени при этом держит сам O_EXCL,
-  fencing-гарантия — в пределах одного имени.
+  совпадение токена) не может снять чужой замок.
+  Межпроцессная сериализация (P13-a-r3): критические секции `acquire`
+  (проверка живости → вычисление токена → запись счётчика → снятие истёкшего
+  → O_EXCL-создание → запись содержимого) и `release` (поиск по токену →
+  unlink) исполняются под ОДНИМ мьютексом каталога замков — OS-level lock на
+  дескрипторе инертного файла `fencing.mutex` (Windows: `msvcrt.locking`
+  байта 0 — замок обязательный, посторонний читатель байта 0 на время секции
+  получает EACCES, читать там нечего; POSIX: `fcntl.flock`; вилка —
+  `_mutex_lock`/`_mutex_unlock`). Нормальный выход и исключение внутри секции
+  снимают мьютекс явно (`finally`); краш и kill держателя — сама ОС при
+  закрытии дескриптора, без TTL и без чистки (на Windows освобождение после
+  смерти процесса не мгновенно — порядка миллисекунд, ожидающие переживают
+  это повтором). Файл не несёт состояния, участники протокола его не удаляют
+  и не заменяют (`os.replace` поверх залоченного файла на Windows невозможен
+  — потому не `fencing.counter`), под `*.lock` он не подпадает; появиться он
+  может и от `release` с устаревшим токеном — на замки и счётчик это не
+  влияет. Закрыто построением для участников протокола:
+  (1) takeover одного имени двумя процессами — повторная проверка только
+  `exists()` снимала ЖИВОЙ замок соперника, оба считали себя держателями;
+  (2) полузаписанный замок — пустой файл между O_EXCL и записью читался как
+  «не живой» (Windows: PermissionError на unlink открытого файла, POSIX:
+  молчаливое затирание); (3) release по устаревшему чтению снимал
+  переложенный замок с ДРУГИМ токеном; (4) окно r2 «равные токены РАЗНЫХ
+  имён» — счётчик читается и пишется только под мьютексом; попутно
+  `os.replace` счётчика и unlink замка больше не встречают открытое чтение
+  другого участника (Windows). Остаётся (по имени): (а) держатель,
+  переживший свой TTL, теряет эксклюзивность по контракту lease — ресурс
+  обязан проверять fencing-токен, мьютекс этого не меняет; (б) мьютекс
+  блокирующий и без таймаута — секция это несколько файловых операций плюс
+  один вызов инжектируемого `clock`; медленный или зависший (не мёртвый)
+  держатель, включая медленный `clock`, задерживает соседей на время
+  задержки — в том числе acquire ДРУГИХ имён и отказ по живому замку;
+  (в) участники вне протокола не сериализуются: ручное удаление/правка
+  файлов каталога; чужие открытые дескрипторы `.lock`/счётчика (Windows:
+  unlink/`os.replace` тогда бросают PermissionError наружу — в том числе
+  дескриптор только что убитого участника, доживающий миллисекунды после
+  смерти процесса); процессы на коде ДО r3 в том же каталоге (заново
+  открывают все три окна — каталог замков делят только процессы r3+);
+  удаление/замена `fencing.mutex` посторонним (POSIX: новые участники
+  получают другой inode, мьютекс раздваивается; Windows отказывает sharing
+  violation); удаление самого каталога под живым объектом (release —
+  FileNotFoundError, а не False; acquire падал так и раньше); разные
+  каталоги замков друг с другом не сериализуются; (г) локальная ФС одного
+  хоста — байтовые/flock-замки на сетевых ФС и сравнимость `time.monotonic`
+  между хостами не гарантированы. Ожидание мьютекса — не источник
+  lease-времени: `now` читается инжектируемым `clock` уже под мьютексом.
   `clock` инжектируемый (норма VERDICT-P12, паттерн P11-1): lease-время
   монотонное, дефолт `time.monotonic`; TTL в тестах замораживается скриптом.
 
@@ -54,17 +96,59 @@ id. Общность проверяется после прогона (свод�
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 ORCHESTRATOR_SUMMARY_SCHEMA_VERSION = 1
 WORKER_INDEX_ENV = "MEMNOTSAFE_WORKER_INDEX"
 LEASE_DIR_ENV = "MEMNOTSAFE_LEASE_DIR"
+
+# P13-a-r3: платформенная вилка мьютекса каталога замков (тесты — Windows-хост,
+# live — Linux-контейнеры). Оба примитива — stdlib; замок держится на
+# дескрипторе и снимается ОС при его закрытии, в том числе при смерти процесса.
+if sys.platform == "win32":
+    import msvcrt
+
+    def _mutex_lock(fd: int) -> None:
+        """Заблокировать байт 0 дескриптора, дожидаясь освобождения. `LK_NBLCK`
+        в цикле с короткой паузой вместо `LK_LOCK`: у последнего шаг повтора
+        1 с и потолок 10 попыток — секундная латентность и ложный OSError под
+        очередью. Это опрос без очереди ожидания (в отличие от `flock` на
+        live-Linux): под плотной конкуренцией держатель, входящий повторно,
+        может обгонять спящих — справедливости нет, потолок паузы 5 мс держит
+        хвост ожидания малым. Пауза — ожидание, не источник lease-времени."""
+        delay = 0.001
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as exc:
+                if exc.errno != errno.EACCES:  # занятый байт под LK_NBLCK — только EACCES
+                    raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.005)
+
+    def _mutex_unlock(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _mutex_lock(fd: int) -> None:
+        """Эксклюзивный flock, блокирующий; снимается ОС при закрытии
+        дескриптора и смерти процесса."""
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _mutex_unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 # ---------------------------------------------------------------------- lease
@@ -91,7 +175,10 @@ class FileLease:
     (P13-a-r2): максимум → атомарная запись счётчика (temp + os.replace) →
     снятие истёкшего замка → O_EXCL-создание нового. Краш в ЛЮБОЙ точке
     между ними оставляет счётчик уже продвинутым или замок-предшественник
-    на месте — равных токенов у перекладываний не возникает."""
+    на месте — равных токенов у перекладываний не возникает. Все чтения и
+    записи каталога (счётчик, замки) — только под мьютексом `_serialized`
+    (P13-a-r3): решение «живой/истёкший», токен и файловые операции acquire
+    и release не перемежаются с чужими."""
 
     def __init__(self, directory: str | Path, *, clock: Callable[[], float] = time.monotonic) -> None:
         self.directory = Path(directory)
@@ -103,6 +190,26 @@ class FileLease:
 
     def _lock_path(self, name: str) -> Path:
         return self.directory / f"{name}.lock"
+
+    def _mutex_path(self) -> Path:
+        return self.directory / "fencing.mutex"
+
+    @contextmanager
+    def _serialized(self) -> Iterator[None]:
+        """Критическая секция каталога (P13-a-r3): дескриптор `fencing.mutex`
+        открывается на секцию, OS-lock берётся блокирующе и снимается в
+        finally вместе с закрытием дескриптора — исключение внутри секции,
+        краш и kill держателя мьютекс не удерживают. Реентерабельности нет
+        и не нужно: секции не вкладываются."""
+        fd = os.open(self._mutex_path(), os.O_RDWR | os.O_CREAT)
+        try:
+            _mutex_lock(fd)
+            try:
+                yield
+            finally:
+                _mutex_unlock(fd)
+        finally:
+            os.close(fd)
 
     def _write_counter_atomic(self, token: int) -> None:
         """Атомарный апдейт счётчика: временный файл в ТОМ ЖЕ каталоге +
@@ -127,48 +234,63 @@ class FileLease:
         return highest
 
     def acquire(self, name: str, ttl: float) -> Lease | None:
-        """Взять замок `name` на `ttl` секунд. Живой замок — немедленный None
-        (политика отказа, докстринг модуля); истёкший/orphan — снят и
+        """Взять замок `name` на `ttl` секунд. Живой замок — None без ожидания
+        его освобождения (политика отказа, докстринг модуля; ждём только
+        мьютекс каталога); истёкший/orphan — снят и
         переложен с новым монотонным токеном. Максимум токенов вычисляется
         ДО снятия старого замка, счётчик атомарно продвигается ДО создания
         нового (см. FileLease): потеря/повреждение счётчика монотонность
-        takeover'а не ломают, устаревший release чужой замок не снимет."""
-        now = self._clock()
+        takeover'а не ломают, устаревший release чужой замок не снимет.
+        P13-a-r3: вся последовательность — одна критическая секция под
+        мьютексом каталога; `now` читается уже под мьютексом (ожидание
+        мьютекса не укорачивает TTL и не служит вторым источником времени)."""
         lock_path = self._lock_path(name)
-        if lock_path.exists():
-            data = _read_json(lock_path)
-            if data is not None and now < float(data["expires_at"]):
+        with self._serialized():
+            now = self._clock()
+            if lock_path.exists():
+                data = _read_json(lock_path)
+                if data is not None and now < float(data["expires_at"]):
+                    return None
+            # P13-a-r2: максимум ДО unlink — токен перекладываемого замка читается
+            # из его файла; без этого потеря счётчика давала равные токены.
+            token = self._max_token_seen() + 1
+            # P13-a-r2: счётчик ДО замка и атомарно — краш между ними оставляет
+            # счётчик продвинутым (следующий acquire стартует выше).
+            self._write_counter_atomic(token)
+            if lock_path.exists():
+                # TTL истёк или файл полузаписан крашем создателя: эксклюзивности
+                # нет, перекладываем; под мьютексом файл не открыт ни одним
+                # участником протокола (чужие дескрипторы — окно (в)).
+                lock_path.unlink()
+            expires_at = now + ttl
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                # Под мьютексом для участников протокола недостижимо; страховка
+                # от файла, положенного мимо протокола, — честный отказ.
                 return None
-        # P13-a-r2: максимум ДО unlink — токен перекладываемого замка читается
-        # из его файла; без этого потеря счётчика давала равные токены.
-        token = self._max_token_seen() + 1
-        # P13-a-r2: счётчик ДО замка и атомарно — краш между ними оставляет
-        # счётчик продвинутым (следующий acquire стартует выше).
-        self._write_counter_atomic(token)
-        if lock_path.exists():
-            lock_path.unlink()  # TTL истёк: эксклюзивности нет, перекладываем
-        expires_at = now + ttl
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            return None  # проиграли гонку создания — чужой живой замок
-        try:
-            os.write(fd, json.dumps(
-                {"name": name, "fencing_token": token, "acquired_at": now, "expires_at": expires_at}
-            ).encode("utf-8"))
-        finally:
-            os.close(fd)
-        return Lease(name=name, fencing_token=token, expires_at=expires_at, path=lock_path)
+            try:
+                os.write(fd, json.dumps(
+                    {"name": name, "fencing_token": token, "acquired_at": now, "expires_at": expires_at}
+                ).encode("utf-8"))
+            finally:
+                os.close(fd)
+            return Lease(name=name, fencing_token=token, expires_at=expires_at, path=lock_path)
 
     def release(self, token: int) -> bool:
         """Освободить замок по fencing-токену держателя. Устаревший токен
-        (замок переложен/снят) — False без побочных эффектов."""
-        for lock in self.directory.glob("*.lock"):
-            data = _read_json(lock)
-            if data is not None and int(data.get("fencing_token", -1)) == token:
-                lock.unlink()
-                return True
-        return False
+        (замок переложен/снят) — False без побочных эффектов на замки и
+        счётчик (инертный `fencing.mutex` при этом может появиться). P13-a-r3:
+        поиск и снятие — одна секция под мьютексом каталога: замок,
+        переложенный между чтением и unlink с другим токеном, снят быть
+        не может."""
+        with self._serialized():
+            for lock in self.directory.glob("*.lock"):
+                data = _read_json(lock)
+                if data is not None and int(data.get("fencing_token", -1)) == token:
+                    lock.unlink()
+                    return True
+            return False
 
 
 def _read_json(path: Path) -> dict | None:
