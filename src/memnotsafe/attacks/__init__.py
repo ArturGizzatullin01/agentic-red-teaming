@@ -9,6 +9,7 @@ from memnotsafe.attacks import (  # noqa: F401
     cross_lingual_insertion,
     cross_topic_smuggle,
     cross_user_bac,
+    deferred_payload,
     delimiter_summary_injection,
     direct_poisoning,
     document_regulation_graft,
