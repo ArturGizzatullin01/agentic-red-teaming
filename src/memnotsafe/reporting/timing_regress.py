@@ -981,6 +981,15 @@ def render_text(report: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # CARD-P14-fix-stdout: рендер и справка содержат non-ASCII (′ U+2032, R̂,
+    # русские строки); на cp1251/cp866-консоли Windows запись в stdout падала
+    # UnicodeEncodeError, и счёт suite зависел от локали запускающего. Поток
+    # переводится в utf-8 с заменой некодируемого — вывод не зависит от кодовой
+    # страницы. Гвард — для потоков без reconfigure (подменённый sys.stdout =
+    # io.StringIO, sys.stdout=None под pythonw); потоки pytest capsys/capfd —
+    # TextIOWrapper, для них вызов проходит и безвреден.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         prog="python -m memnotsafe.reporting.timing_regress",
         description="CARD-P14: компаратор тайминг-регресса G3.5 (read-only)",
