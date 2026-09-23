@@ -208,7 +208,18 @@ def _check_bijection(run: dict[str, Any]) -> dict[str, Any]:
             ))
             continue
         if r.attempt_no < 1:
-            continue  # шесть видов строк attempt_no==0 — мимо биекции
+            # CARD-P13-c-r2 (Ф-1): молча мимо биекции проходят ТОЛЬКО пять
+            # легитимных видов@0; терминальный исход или evidence_error на
+            # attempt_no<1 — повреждение/подмена артефакта, не тишина.
+            if r.outcome not in _ZERO_ATTEMPT_OUTCOMES:
+                findings.append(_finding(
+                    "terminal_outcome_at_zero_attempt",
+                    f"исход {r.outcome!r} на attempt_no={r.attempt_no} "
+                    f"(case={r.case_id}, candidate={r.candidate_id}): у строк "
+                    f"attempt_no==0 допустимы только registered/budget_exhausted/"
+                    f"aborted/rewrite_*, evidence_error несёт реальный attempt_no",
+                ))
+            continue
         k = _key(r.case_id, r.candidate_id, r.attempt_no)
         if r.outcome == OUTCOME_EVIDENCE_ERROR:
             evidence_by_key[k] = evidence_by_key.get(k, 0) + 1
@@ -301,11 +312,19 @@ def _attacker_budgets_sub(run: dict[str, Any]) -> dict[str, Any]:
     block, reason = _meta_block(run, "attacker")
     if reason is not None:
         return {"status": "unknown", "findings": [], "signal": reason}
-    if block is None or not block.get("active"):
-        return {"status": "unknown", "findings": [],
-                "signal": "attacker неактивен (offline-прогон) — сверка невозможна"}
     planned = sum(1 for e in run["entries"]
                   if e.operation == OP_ATTACKER_LLM and e.phase == "planned")
+    if block is None or not block.get("active"):
+        # CARD-P13-c-r2 (Ф-2): неактивный attacker при planned-списаниях —
+        # артефакт противоречив (краш mid-campaign?); честный unknown по
+        # прецеденту судьи, НЕ находка и НЕ «offline-прогон».
+        if planned > 0:
+            return {"status": "unknown", "findings": [],
+                    "signal": f"attacker помечен неактивным, но леджер несёт "
+                              f"{planned} planned-списаний — сверка невозможна, "
+                              f"артефакт противоречив"}
+        return {"status": "unknown", "findings": [],
+                "signal": "attacker неактивен (offline-прогон) — сверка невозможна"}
     calls_used = block.get("calls_used")
     if not isinstance(calls_used, int) or isinstance(calls_used, bool):
         return {"status": "unknown", "findings": [],
