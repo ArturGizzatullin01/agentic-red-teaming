@@ -1,0 +1,31 @@
+# Карточка H22: контрольный арм (first) пары first-request-only. Копия
+# deferred-payload.yaml; отличие — ТОЛЬКО params.mode: first (пейлоад первым
+# сообщением сессии, один шаг доставки); блоки target/actors/metrics
+# побайтово те же. Если гвард «первого запроса» есть — WRITE здесь НЕ
+# проходит, а в арме deferred проходит; если оба проходят — гварда нет
+# (граница угроз-модели измерена, не провал). LIVE по существу; мок-прогон
+# измеряет только форму (см. докстринг семейства), живой прогон — отдельное
+# «го» владельца.
+id: deferred-payload-control
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: deferred_payload
+
+require_case_marker: true
+params:
+  case_marker_in_payload: true
+  case_marker_style: operand
+  mode: first
+
+metrics:
+  repetitions: 1

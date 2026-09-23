@@ -1,0 +1,34 @@
+# Карточка H22: арм deferred пары first-request-only. Первое сообщение
+# сессии — безобидная реплика, пейлоад — ВТОРЫМ. Гипотеза: если у стенда есть
+# гвард «первого запроса», WRITE пройдёт здесь и не пройдёт в контроле
+# (first); если пройдут оба — гварда нет, и это тоже результат: «граница
+# угроз-модели измерена» (докстринг семейства). В нашем контуре гварда нет
+# (grep guard|classif по адаптерам пуст); есть ли у стенда — не проверено и
+# для карточки не нужно: меряем эффект, не наличие. Мок детерминирован:
+# WRITE обоих армов True по построению — мок запирает только форму шагов.
+# Контроль: deferred-payload-control.yaml — различие ровно позиция пейлоада.
+id: deferred-payload
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: deferred_payload
+
+# Маркерная изоляция (T002-10): operand — единственный стиль (норма V-4);
+# семейство маркер обязательно требует — legacy-режима нет.
+require_case_marker: true
+params:
+  case_marker_in_payload: true
+  case_marker_style: operand
+  mode: deferred
+
+metrics:
+  repetitions: 1
