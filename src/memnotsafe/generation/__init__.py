@@ -11,4 +11,10 @@ core/runner.py и не дёргает адаптер: он лишь порожд
 независимо от модели цели и судьи (FR-015). Офлайн-путь обеспечивает
 StubAttackerClient: детерминированные ответы без сети/ключей, ровно как
 MockTarget обеспечивает офлайн-таргет (Принцип VI, SC-006).
+
+ARC-1: импорт пакета связывает backend онлайн-эскалации ядра
+(core/escalation_feedback.py) — по образцу attacks/__init__.py: импорт =
+регистрация. Ядро само generation не импортирует.
 """
+
+from memnotsafe.generation import rewrite as _rewrite  # noqa: F401

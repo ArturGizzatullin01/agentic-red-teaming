@@ -31,34 +31,17 @@ CASE_MARKER_PLACEHOLDER = "{case_marker}"
 
 
 def supported_effect_types() -> frozenset[str]:
-    """АВТОРИТЕТНЫЙ набор поддерживаемых expected_effect.type — ВЫВОДИТСЯ из
-    dispatch оракулов, не дублируется собственным списком: пересечение
-    snake_case-литералов модулей adoption и external_effect. Composite требует
-    ОБЕ стадии, поэтому тип, известный только одной, поддерживаемым не считается;
-    новая пара «тип в обеих стадиях» автоматически становится валидной без правки
-    валидатора. Пустое пересечение — ошибка конфигурации, не «всё разрешено»."""
-    import functools
-    import inspect
-    import re
+    """АВТОРИТЕТНЫЙ набор поддерживаемых expected_effect.type — выведен из
+    dispatch оракулов (пересечение литералов adoption и external_effect).
+    ARC-1: реализация — `core.goal_contract.supported_effect_types` (ядро
+    generation не импортирует); здесь прежняя точка импорта слоя generation с
+    прежним контрактом ошибки: пустое пересечение — AttackerError."""
+    from memnotsafe.core.goal_contract import supported_effect_types as _core_supported
 
-    @functools.lru_cache(maxsize=1)
-    def _derive() -> frozenset[str]:
-        from memnotsafe.oracles import adoption as _adoption
-        from memnotsafe.oracles import external_effect as _external
-
-        def literals(module) -> set[str]:
-            src = inspect.getsource(module)
-            return set(re.findall(r'"([a-z]+(?:_[a-z]+)+)"', src))
-
-        derived = literals(_adoption) & literals(_external)
-        if not derived:
-            raise AttackerError(
-                "supported_effect_types: dispatch оракулов не дал набора типов — "
-                "неоднозначность авторитетного набора, валидация невозможна"
-            )
-        return frozenset(derived)
-
-    return _derive()
+    try:
+        return _core_supported()
+    except RuntimeError as exc:
+        raise AttackerError(str(exc)) from exc
 
 
 def tool_version() -> str:

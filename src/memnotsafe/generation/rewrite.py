@@ -9,21 +9,25 @@
 Невалидный/отказной ответ модели → `None` (отбраковка, FR-012): на онлайн-уровне
 это тратит попытку и фиксируется, но не рушит прогон. Сбой самого клиента
 (сеть/ключ) — это `AttackerError`, он пробрасывается выше (research §11).
+
+Слои (ARC-1): `EscalationFeedback` берётся из core/escalation_feedback.py, а не
+из core/escalation.py; в конце модуля periphery связывает `EscalationBackend`
+ядра (rewrite + фабрики записи и исполнителя) — ядро generation не импортирует.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from memnotsafe.core.escalation_feedback import (
+    EscalationBackend,
+    EscalationFeedback,
+    bind_escalation_backend,
+)
 from memnotsafe.generation.attacker_client import AttackerClient
 from memnotsafe.generation.budget import CallBudget
 from memnotsafe.generation.corpus import ORIGIN_ONLINE, CorpusRecord, record_issues
 from memnotsafe.generation.corpus_gen import parse_generation_output
 from memnotsafe.generation.errors import AttackerError
 from memnotsafe.generation.prompts import build_rewrite_prompt
-
-if TYPE_CHECKING:
-    from memnotsafe.core.escalation import EscalationFeedback
 
 
 async def rewrite(
@@ -88,3 +92,23 @@ async def rewrite(
     if record_issues(record):
         return None  # нарушены внутренние инварианты записи (FR-012)
     return record
+
+
+def _generated_attack():
+    """Свежий исполнитель переписанной записи. Импорт ленивый: attacks/generated
+    сам импортирует generation.corpus, а пакет attacks при импорте ещё не готов."""
+    from memnotsafe.attacks.generated import GeneratedAttack
+
+    return GeneratedAttack()
+
+
+# Связывание онлайн-уровня ядра: импорт этого модуля (его тянет
+# generation/__init__.py) = регистрация, по образцу ATTACK_REGISTRY.
+bind_escalation_backend(
+    EscalationBackend(
+        rewrite=rewrite,
+        record_from_dict=CorpusRecord.from_dict,
+        new_record=CorpusRecord,
+        new_attack=_generated_attack,
+    )
+)

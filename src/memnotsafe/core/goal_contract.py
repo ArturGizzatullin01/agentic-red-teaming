@@ -3,7 +3,8 @@
 
 Контракт фиксирует СМЫСЛ атаки до обращения к target:
 - тип ожидаемого эффекта — ТОЛЬКО из авторитетного набора P03
-  (`generation.corpus.supported_effect_types()`, выведен из dispatch оракулов);
+  (`supported_effect_types()` ниже, выведен из dispatch оракулов; слой
+  generation читает его отсюда — ARC-1, ядро generation не импортирует);
   собственных реестров типов здесь нет и не появляется;
 - смысловые инварианты — канонические пары ключ/значение из `expected_effect`
   (tool, field, injected, user scope и другие поля конкретного типа);
@@ -28,6 +29,41 @@ import json
 from dataclasses import dataclass, field
 
 GOAL_CONTRACT_SCHEMA_VERSION = 1
+
+
+def supported_effect_types() -> frozenset[str]:
+    """АВТОРИТЕТНЫЙ набор поддерживаемых expected_effect.type — ВЫВОДИТСЯ из
+    dispatch оракулов, не дублируется собственным списком: пересечение
+    snake_case-литералов модулей adoption и external_effect. Composite требует
+    ОБЕ стадии, поэтому тип, известный только одной, поддерживаемым не считается;
+    новая пара «тип в обеих стадиях» автоматически становится валидной без правки
+    валидатора. Пустое пересечение — ошибка конфигурации, не «всё разрешено»
+    (RuntimeError; слой generation поднимает её как AttackerError).
+
+    ARC-1: реализация живёт в ядре (единственный потребитель в ядре —
+    GoalContract), `generation.corpus.supported_effect_types` делегирует сюда."""
+    import functools
+    import inspect
+    import re
+
+    @functools.lru_cache(maxsize=1)
+    def _derive() -> frozenset[str]:
+        from memnotsafe.oracles import adoption as _adoption
+        from memnotsafe.oracles import external_effect as _external
+
+        def literals(module) -> set[str]:
+            src = inspect.getsource(module)
+            return set(re.findall(r'"([a-z]+(?:_[a-z]+)+)"', src))
+
+        derived = literals(_adoption) & literals(_external)
+        if not derived:
+            raise RuntimeError(
+                "supported_effect_types: dispatch оракулов не дал набора типов — "
+                "неоднозначность авторитетного набора, валидация невозможна"
+            )
+        return frozenset(derived)
+
+    return _derive()
 
 # Каноническая сериализация digest'ов (контракт цели и эксперимента):
 # порядок ключей фиксирован, разделители компактные, кириллица не экранируется.
@@ -82,8 +118,6 @@ class GoalContract:
 
     def __post_init__(self) -> None:
         import copy
-
-        from memnotsafe.generation.corpus import supported_effect_types
 
         effect_type = (self.effect or {}).get("type")
         if not effect_type:
