@@ -5,6 +5,59 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-23 — claude-code — ARC-1: разрыв цикла модулей core ↔ generation (claude/arc1-module-cycle-break-y32txl)
+
+- задача: единственный SCC>1 графа импортов — core.escalation ↔ generation.corpus_gen
+  ↔ generation.prompts ↔ generation.rewrite (держался на TYPE_CHECKING-ребре
+  prompts/rewrite → core.escalation и top-level импортах generation.* в
+  core/escalation.py); ядро зависело от периферии
+- путь (а): новый листовой `core/escalation_feedback.py` — `EscalationFeedback`
+  (реэкспорт из core.escalation, публичное имя прежнее), протокол `AttackRecord`,
+  ORIGIN_CORPUS/ONLINE, шов `EscalationBackend` + `bind_escalation_backend()` /
+  `escalation_backend()`; generation/rewrite.py связывает backend при импорте
+  (rewrite, CorpusRecord.from_dict, CorpusRecord, ленивая фабрика GeneratedAttack),
+  generation/__init__.py импортирует rewrite — импорт пакета = регистрация, по
+  образцу attacks/__init__ (ATTACK_REGISTRY)
+- core/escalation.py: ноль импортов generation/attacks.generated на любом уровне
+  (rewrite/CorpusRecord/GeneratedAttack — через backend; `client`/`budget` — Any,
+  ядро читает только `budget.exhausted`); core/goal_contract.py:
+  `supported_effect_types` перенесён сюда (тело прежнее, ошибка пустого
+  пересечения — RuntimeError), `generation.corpus.supported_effect_types`
+  делегирует и поднимает RuntimeError как прежний AttackerError
+- generation/prompts.py НЕ тронут (в карточке — ребро на снятие): TYPE_CHECKING-
+  ребро periphery → core вне цикла и разрешено правилом; правка файла меняет
+  `writer_prompt_sha256` → experiment_id во всех артефактах (замок 2) — проверено
+  эталонным прогоном, откачено
+- остаточные ленивые рёбра core → периферия вне цикла оставлены (карточка:
+  «трогать только если замыкают цикл»): core/campaign.py (attacker_client,
+  budget, config, corpus, errors, attacks.generated), core/experiment.py
+  (generation.prompts — sha файла промптов); заморожены ТОЧНОЙ таблицей в тесте
+- tests/test_import_layers.py (+4): AST-граф пакета — ARC-1-модули core без
+  периферии; рёбра core → generation/attacks.generated == таблица остатка;
+  SCC>1 нет; runtime в свежем интерпретаторе (листовой модуль без generation →
+  backend не связан, `import memnotsafe.generation.budget` → связан)
+- проверки (venv python 3.12.3, `pip install -e .`, PYTHONIOENCODING=utf-8,
+  `-p no:cacheprovider`): RED на базе c833250 — 4 failed / 0 passed; targeted
+  (import_layers, escalation, goal_contract_p10a, generation_offline,
+  tool_route_hijack, profile_and_corpus, mutators) — 114 passed; полный suite
+  ОДИН раз — **1331 passed / 1 failed** = 1328 + 4, единственный failed —
+  `test_demo_launcher::test_demo_cmd_references_existing_tracked_script`:
+  POSIX-контейнер, путь `%~dp0scripts\demo-run.ps1` с обратным слэшем не
+  существует как файл на Linux (Windows-only проверка, файлы карты не трогает);
+  полный suite шёл на дереве ДО отката prompts.py (отличие — одна
+  TYPE_CHECKING-строка), после отката — targeted import_layers + escalation
+  24 passed; эталонные mock-прогоны `run cross_user_bac` и
+  `run generated_escalation --online` (stub) — 31/31 и 45/45 файлов идентичны
+  базе минус run/case/session/call/record id, timestamps, sha манифестов и timing
+  (нормализатор откалиброван на двух базовых прогонах: 0 различий)
+- вне allowlist карточки, заявлено в PR: generation/__init__.py (1 строка
+  связывания), generation/corpus.py (делегат supported_effect_types)
+- NOTICED (не делалось): core/experiment.py → generation.prompts не в карточке;
+  `supported_effect_types` создаёт lru_cache заново на каждый вызов (кэш не
+  живёт между вызовами) — поведение перенесено как есть; ORIGIN_* константы
+  теперь в трёх местах (corpus.py, campaign.py, escalation_feedback.py)
+- LIVE: не запускался
+
 ### 2026-09-15 — glm — D3 закрыт: L2-драйвер на штатный расчёт исхода (fix/p09-l2-driver)
 
 - дефект: scripts/live_clean_control.py захардкодил `OUTCOME_COMPLETED_FAILURE`

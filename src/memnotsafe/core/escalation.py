@@ -22,6 +22,13 @@
   канарейку, по которой WRITE-матчер атрибутировал бы записи не того случая
   (T002-10, FR-B). Маркер повтора гасится в None: производителем остаётся
   раннер, он выведет его из нового `case_id`.
+
+Слои (ARC-1): ядро не импортирует generation/attacks.generated. Всё, что цикл
+берёт у периферии (rewrite, запись корпуса, исполнитель переписанной записи),
+приходит через `EscalationBackend` из core/escalation_feedback.py — его
+связывает generation при импорте пакета. `EscalationFeedback` живёт там же и
+реэкспортируется отсюда: публичное имя `core.escalation.EscalationFeedback`
+прежнее.
 """
 
 from __future__ import annotations
@@ -37,6 +44,14 @@ from memnotsafe.core.attempt import (
     outcome_of_result,
     sessions_from_transcript,
 )
+from memnotsafe.core.escalation_feedback import (
+    ORIGIN_CORPUS,
+    ORIGIN_ONLINE,
+    AttackRecord,
+    EscalationBackend,
+    EscalationFeedback,
+    escalation_backend,
+)
 from memnotsafe.core.goal_contract import goal_digest_or_none
 from memnotsafe.core.ledger import (
     OP_TARGET_CALL,
@@ -44,28 +59,9 @@ from memnotsafe.core.ledger import (
     PHASE_EXECUTED,
     PHASE_UNKNOWN_OUTCOME,
 )
-from memnotsafe.core.models import AttackResult, StageVerdict
+from memnotsafe.core.models import AttackResult
 from memnotsafe.core.runner import RunnerError, new_case_id, run_attack
-from memnotsafe.generation.attacker_client import AttackerClient
-from memnotsafe.generation.budget import CallBudget
-from memnotsafe.generation.corpus import ORIGIN_CORPUS, ORIGIN_ONLINE, CorpusRecord
-from memnotsafe.generation.rewrite import rewrite
 from memnotsafe.tracing.recorder import TraceRecorder
-
-
-@dataclass
-class EscalationFeedback:
-    """Вход чистой `rewrite()` (research §7). Воронка — тристейт как есть."""
-
-    victim_response: str
-    baseline_response: str
-    funnel: dict[str, StageVerdict]
-    previous: CorpusRecord
-    attempt: int
-    # P10b: привязка расхода атакующей LLM к попытке; заполняет цикл
-    # эскалации, для чистой rewrite() это только данные.
-    case_id: str | None = None
-    candidate_id: str | None = None
 
 
 @dataclass
@@ -76,16 +72,16 @@ class EscalationOutcome:
     budget_exhausted: bool
 
 
-def _initial_record(base_ctx: AttackContext, result: AttackResult) -> CorpusRecord:
+def _initial_record(base_ctx: AttackContext, result: AttackResult, backend: EscalationBackend) -> AttackRecord:
     """Запись, с которой стартует эскалация: из корпуса (params) либо синтез из
     candidate рукописной атаки — так онлайн-уровень работает и над рукописным
     паком (US2 независимость)."""
     raw = (base_ctx.params or {}).get("record")
     if isinstance(raw, dict):
-        return CorpusRecord.from_dict(raw)
+        return backend.record_from_dict(raw)
     cand = result.evidence.get("candidate", {}) or {}
     prov = result.evidence.get("provenance", {}) or {}
-    return CorpusRecord(
+    return backend.new_record(
         attack_class=prov.get("attack_class") or result.scenario_id,
         payload=str(cand.get("payload", "")),
         trigger=str(cand.get("trigger", "")),
@@ -116,8 +112,8 @@ async def escalate(
     initial_result: AttackResult,
     *,
     limit: int,
-    client: AttackerClient,
-    budget: CallBudget,
+    client: Any,
+    budget: Any,
     run_id: str,
     recorder: TraceRecorder | None = None,
     judge: Any | None = None,
@@ -137,8 +133,12 @@ async def escalate(
     `require_case_marker` — то же требование наличия маркера в доставке, что у
     начальной попытки: у повтора маркер НОВЫЙ (производный от нового case_id),
     но объявленное требование не гасится — переписанная запись без плейсхолдера
-    {case_marker} отклоняется раннером до доставки, а не тихо уходит в legacy."""
-    from memnotsafe.attacks.generated import GeneratedAttack
+    {case_marker} отклоняется раннером до доставки, а не тихо уходит в legacy.
+
+    `client` (AttackerClient) и `budget` (CallBudget) — объекты слоя generation;
+    ядро их не типизирует (правило слоёв ARC-1): здесь читается только
+    `budget.exhausted`, остальное уходит в `backend.rewrite` как есть."""
+    backend = escalation_backend()
 
     corpus_id = (base_ctx.params or {}).get("corpus_id")
     attempts = 1
@@ -146,7 +146,7 @@ async def escalate(
     if last.success:
         return EscalationOutcome(last, attempts=attempts, succeeded=True, budget_exhausted=budget.exhausted)
 
-    previous = _initial_record(base_ctx, initial_result)
+    previous = _initial_record(base_ctx, initial_result, backend)
     adapted = False
     # P10b: candidate lineage — первый кандидат = начальный case_id; каждый
     # принятый rewrite = новый кандидат с parent_candidate_id (case_id общий).
@@ -175,7 +175,7 @@ async def escalate(
         )
         # Сбой атакующей LLM (AttackerError) пробрасывается: уже полученные
         # результаты сохранит вызывающий слой кампании (FR-010/FR-011).
-        new_record = await rewrite(feedback, client, budget, ledger=ledger)
+        new_record = await backend.rewrite(feedback, client, budget, ledger=ledger)
         attempts += 1
         adapted = True
         if new_record is None:
@@ -192,7 +192,7 @@ async def escalate(
             continue
 
         previous = new_record
-        gen = GeneratedAttack()  # свежий исполнитель переписанной записи
+        gen = backend.new_attack()  # свежий исполнитель переписанной записи
         new_ctx = replace(
             base_ctx,
             case_id=new_case_id(new_record.attack_class, attempts),
