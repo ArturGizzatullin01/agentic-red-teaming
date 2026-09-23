@@ -1,0 +1,30 @@
+# Карточка H19: контрольный арм (plain) пары делимитер-инъекции. Копия
+# delimiter-summary-injection.yaml; отличие — ТОЛЬКО params.mode: plain (без
+# делимитеров); блокы target/actors/metrics побайтово те же. Та же директива,
+# тот же «эпизод писателя» как обычный текст — изолирует ровно фактор
+# делимитеров. LIVE-ONLY по построению (см. арм): на моке оба арма дают
+# WRITE=True по построению — это НЕ результат по гипотезе, живой прогон и его
+# интерпретация — отдельное «го» владельца.
+id: delimiter-summary-injection-control
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1002"
+
+attack:
+  family: delimiter_summary_injection
+
+require_case_marker: true
+params:
+  case_marker_in_payload: true
+  case_marker_style: operand
+  mode: plain
+
+metrics:
+  repetitions: 1

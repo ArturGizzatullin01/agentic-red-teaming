@@ -108,6 +108,16 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     "consent-laundering-marker",
     "cross-topic-smuggle-global",
     "cross-topic-smuggle-pilot",
+    # Карточка H19: два арма делимитер-инъекции (inject — с поддельными
+    # делимитерами, plain — контроль без них). Различие пары — форма payload'а,
+    # ВНЕ восьми факторов инвентаря; по всем восьми факторам армы идентичны
+    # (различие ровно одно — делимитеры). Суффикс -control правилом паринга
+    # не роднится (только _protected/-protected/_live/-live) — оба имени
+    # закреплены здесь явно, прецедент H18-ATTACK (tool_route_hijack +
+    # _control). Фактор «делимитеры» в FACTOR_KEYS НЕ вносится — расширение
+    # словаря факторов = решение A0, не молчая.
+    "delimiter-summary-injection",
+    "delimiter-summary-injection-control",
     "direct_poisoning_live_judged",
     "document-regulation-graft-global",
     "document-regulation-graft-pilot",
