@@ -820,6 +820,36 @@ def build_parser() -> argparse.ArgumentParser:
     _add_judge_flags(pgo)
     pgo.set_defaults(func=_cmd_go)
 
+    # CARD-P17: пилот одной командой — продуктовая упаковка. Аддитивная врезка
+    # (прецедент P16/P18): вся логика в memnotsafe.pilot_pack, импорт ленивый;
+    # читатель campaign.json передаётся параметром (pilot_pack не импортирует cli),
+    # контракты существующих команд/T1/runner не затронуты.
+    def _cmd_pilot(args: argparse.Namespace) -> int:
+        from memnotsafe.pilot_pack import PilotConfigError, init_template, run_pilot
+
+        if args.init:
+            try:
+                _path, hint = init_template(args.config or "pilot.yaml")
+            except PilotConfigError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            print(hint)
+            return 0
+        if not args.config:
+            print("нужен --init [--config <путь>] или --config pilot.yaml --output runs/<dir>", file=sys.stderr)
+            return 2
+        if not args.output:
+            print("--config требует --output runs/<dir>", file=sys.stderr)
+            return 2
+        return run_pilot(args.config, args.output, load_campaign=load_campaign, baseline=args.baseline)
+
+    ppilot = sub.add_parser("pilot", help="пилот одной командой: --init шаблон | --config прогон стартового пака → threat-report (P17)")
+    ppilot.add_argument("--init", action="store_true", help="записать шаблон pilot.yaml (в --config или ./pilot.yaml) и подсказку шага")
+    ppilot.add_argument("--config", default=None, help="pilot.yaml (для прогона; или путь назначения для --init)")
+    ppilot.add_argument("--output", default=None, help="каталог прогона runs/pilot-<ts>")
+    ppilot.add_argument("--baseline", default=None, help="каталог прошлого пилота для retest-секции (было → стало)")
+    ppilot.set_defaults(func=_cmd_pilot)
+
     return p
 
 

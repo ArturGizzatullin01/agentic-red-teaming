@@ -5,6 +5,53 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-24 — claude-code — P17: пилот одной командой (feat/p17-pilot-pack)
+
+- задача: `memnotsafe pilot` — продуктовая упаковка поверх существующих механик
+  (T1 http_endpoint, probe, preflight, стартовый пак, threat-report P16); атак не
+  сочинять, переиспользовать вызовом, контракты CLI/T1/runner не менять
+- НОВЫЙ src/memnotsafe/pilot_pack.py: `--init` (валидный шаблон pilot.yaml +
+  подсказка); `--config … --output …` — цепочка build_adapter(T1) → probe →
+  run_preflight → стартовый пак (Campaign по существующим сценариям реестра
+  против ручки) → объединённый campaign.json + events → write_threat_report
+  (рендерер P16) → консольная сводка (штамп, N of M, путь); `--baseline …` —
+  retest-секция (FIXED/STILL VULNERABLE/NEW/UNKNOWN)
+- переиспользование ВЫЗОВОМ (логика не копируется): selfserve.load_dotenv +
+  selfserve.attempt_lines, reporting.threat_report.write_threat_report,
+  preflight.run_preflight, core.Campaign, core.config.build_adapter,
+  core.result_readouts.aggregate_metrics, campaign_serialize.campaign_to_dict
+- cli.py: одна аддитивная врезка (маркер CARD-P17, ленивый импорт, load_campaign
+  параметром — pilot_pack не импортирует cli)
+- стартовый пак — данными в модуле из существующих сценариев реестра
+  (cross_user_bac_c_mk_operand, direct_poisoning, cross_user_bac + control
+  cross_user_bac_protected); новых атак нет
+- ЗАМОК UNKNOWN ≠ FIXED: тристейт кейса берётся из вердикта threat-report P16
+  (PROVEN→True, NOT PROVEN→False, INCONCLUSIVE→None); classify_retest никогда не
+  выносит FIXED при новом None (без наблюдаемости «исправлено» не доказать)
+- ошибки человекочитаемые: нет env-ключа → инструкция (rc 2, без traceback);
+  ручка недоступна → причина probe (rc 2); budget_cap обязателен (валидация);
+  секретов ноль — наружу только ИМЯ переменной api_key_env
+- skill/SKILL.md (англ., внешний потребитель): установка → env-ключ → --init →
+  запуск → чтение отчёта (штамп, INCONCLUSIVE ≠ safe) → retest; секретов ноль
+- отклонение: preflight из уже запущенного цикла нельзя звать напрямую
+  (run_preflight внутри делает asyncio.run) — уносим в поток (run_in_executor)
+- отклонение: ветка feat/p17-pilot-pack (новая, не env-pinned) — по требованию
+  карты; коммит на main = eed3bb9
+- отклонение: ultracode сессии OFF — совпало с бюджетом карты; solo, один проход
+  self-review
+- проверки (venv python 3.12.3, `pip install -e .`, PYTHONIOENCODING=utf-8,
+  `-p no:cacheprovider`): RED на базе eed3bb9 — tests/test_pilot_pack.py
+  collection ModuleNotFoundError (pilot_pack нет); полный suite
+  `python -m pytest tests -q` — 1416 passed / 1 failed (единственный failed —
+  test_demo_launcher, Windows-путь в POSIX, вне диффа; = 1407 базовых + 10 новых,
+  на каноне 1417/0); e2e против localhost fake-сервера (probe→preflight→run→
+  threat-report.html со штампом INCONCLUSIVE, pilot-cases.json, retest без FIXED);
+  git diff --check чист, секретов 0
+- NOTICED (не делал): scenarios/ не в wheel — пилот резолвит пак от корня
+  репозитория (parents[2]); из голого pip-install без чекаута пак не найдётся
+  (нужен чекаут/упаковка сценариев — Этап 2); необязательный chat_path в конфиге
+  под нестандартные пути ручки — не добавлял (Этап 2); MAP.md обновляет A0 при влитии
+
 ### 2026-09-24 — claude-code — MULTI-1: планировщик пакетов проверок, Этап 1 офлайн (feat/multi1-plan-orchestrator)
 
 - задача: режим `memnotsafe orchestrate --plan plan.yaml --output runs/<batch>` —
