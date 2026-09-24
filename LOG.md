@@ -5,6 +5,56 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-24 — claude-code — ARC-2: расщепление core/campaign.py (claude/arc1-module-cycle-break-y32txl)
+
+- задача: campaign.py (751 строка) держал последние ленивые рёбра core → периферия
+  (attacker_client/budget/config в _ensure_attacker; corpus + attacks.generated в
+  _corpus_cases; errors в _maybe_escalate); расщепить на связные модули так, чтобы
+  campaign.py не импортировал generation.*/attacks.generated ни на каком уровне
+- путь (а) — расширение шва ARC-1: новый листовой `core/campaign_backend.py`
+  (`CampaignBackend` + bind_campaign_backend/campaign_backend), связывается при
+  импорте пакета generation (generation/__init__.py), по образцу
+  bind_escalation_backend; конструкторы делают ленивый импорт периферии в МОМЕНТ
+  вызова (семантика прежних ленивых импортов в методах — monkeypatch модулей
+  generation в тестах подхватывается); тип AttackerError берётся классом при
+  связывании (нужен для `except` в _maybe_escalate)
+- расщепление: campaign_construction (_build_judge/_ensure_attacker/
+  aclose_attacker), campaign_escalation (_maybe_escalate), campaign_persistence
+  (_persist_case/_write_evidence_bundle), campaign_trace (ExportingRecorder),
+  campaign_serialize (stage/case/campaign_to_dict — публичные имена, алиас на
+  импорте); Campaign(mixins) с __init__/run/_plan_cases/_corpus_cases/
+  _record_declares_marker остался в campaign.py
+- отклонения (замками, не выбором): _plan_cases/_corpus_cases в campaign.py —
+  тесты патчат memnotsafe.core.campaign.{run_attack,new_run_id,new_case_id}
+  (langfuse_sink/attempt_history/ledger_recon/budget_ledger/evidence_foundation),
+  имя обязано резолвиться в модуле campaign; _run_metadata/_attacker_metadata в
+  campaign.py — замок doc↔code sync (test_adapter_contract_conformance грепает
+  hasattr/getattr(self.target,…) по campaign.py, перенос убрал бы run_metadata)
+- ребро experiment.py:175 → generation.prompts НЕ тронуто (якорь prompt-hash →
+  experiment_id); таблица остатка в tests/test_import_layers.py уменьшена РОВНО на
+  рёбра campaign.py (запись core.campaign удалена целиком, остался только
+  core.experiment); attacks.generated тоже снят (правило ARC-1: в core ни
+  generation.*, ни attacks.generated)
+- MAP.md НЕ тронут (вне allowlist ARC-2): карта модулей изменилась (6 новых
+  core/campaign_*.py) — вынесено в NOTICED хендофа, обновление MAP.md отдельной
+  правкой
+- tests/test_import_layers.py: таблица сужена; ARC2_CORE_MODULES (campaign + 6
+  модулей) без периферии; runtime в свежем интерпретаторе (листовой
+  campaign_backend без generation → не связан; import generation.budget → связан;
+  backend.attacker_error == AttackerError, конструкторы callable)
+- проверки (venv python 3.12.3, `pip install -e .`, PYTHONIOENCODING=utf-8,
+  `-p no:cacheprovider`): RED на базе 108e41e — test_import_layers 3 failed /
+  3 passed (ARC-2-границы красные, ARC-1 зелёные); targeted 252 passed; полный
+  suite `python -m pytest tests -q -p no:cacheprovider` — 1333 passed / 1 failed
+  (единственный failed — test_demo_launcher, Windows-only путь с обратным слэшем в
+  POSIX-контейнере, файлы карты не трогает; = 1332 базовых + 2 новых, на каноне
+  1334/0)
+- замок 2 (побайтово): `run cross_user_bac` 31/31 и `run generated_escalation
+  --online` (stub) 45/45 файлов идентичны базе минус id/timing (нормализатор
+  ARC-1, 0 различий); experiment_id неизменен (cub 06ddc1e7…, esc 4fa07b15…),
+  writer_prompt_sha256 19e704fe… неизменен
+- git diff --check чист; секретов 0; новых зависимостей 0; live не запускался
+
 ### 2026-09-23 — claude-code — ARC-1: разрыв цикла модулей core ↔ generation (claude/arc1-module-cycle-break-y32txl)
 
 - задача: единственный SCC>1 графа импортов — core.escalation ↔ generation.corpus_gen

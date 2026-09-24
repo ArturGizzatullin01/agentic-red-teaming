@@ -1,4 +1,4 @@
-"""tests/test_import_layers.py — ARC-1: слои импортов core ↔ generation.
+"""tests/test_import_layers.py — ARC-1/ARC-2: слои импортов core ↔ generation.
 
 Правило слоёв: ядро (`core/*`) не зависит от периферии (`generation/*`,
 `attacks/generated`) — ни top-level, ни в функциях, ни под TYPE_CHECKING;
@@ -10,16 +10,18 @@
 `from pkg import name` даёт ребро на подмодуль `pkg.name`, если такой есть,
 иначе на сам `pkg`.
 
-Остаточные ленивые рёбра композиции core → периферия ВНЕ цикла (campaign —
-точка сборки прогона, experiment — sha промптов) заморожены таблицей
-RESIDUAL_LAZY_EDGES: она сверяется ТОЧНО, поэтому набор может только
-сужаться (расщепление campaign — отдельная карта), а новое ребро
-core → периферия падает здесь.
+Остаточные ленивые рёбра композиции core → периферия ВНЕ цикла заморожены
+таблицей RESIDUAL_LAZY_EDGES: она сверяется ТОЧНО, поэтому набор может только
+сужаться, а новое ребро core → периферия падает здесь. После ARC-2 в таблице
+остаётся единственное ребро core.experiment → generation.prompts (sha промптов,
+якорь experiment_id): рёбра core.campaign сняты расщеплением (шов
+core/campaign_backend, связывается при импорте пакета generation).
 
-RED на базе c833250: SCC {core.escalation, generation.corpus_gen,
-generation.prompts, generation.rewrite}; core.escalation импортирует
-generation.attacker_client/budget/corpus/rewrite и attacks.generated;
-core.goal_contract — generation.corpus.
+RED на базе 108e41e (до ARC-2): core.campaign импортирует
+generation.attacker_client/budget/config/corpus/errors и attacks.generated
+(ленивые рёбра в _ensure_attacker/_corpus_cases/_maybe_escalate), поэтому
+таблица остатка не сходится, ARC2-модули отсутствуют/тянут периферию, а
+core/campaign_backend ещё не существует.
 """
 
 from __future__ import annotations
@@ -44,16 +46,21 @@ ARC1_CORE_MODULES = (
     f"{PKG}.core.goal_contract",
 )
 
+# Модули ядра кампании после ARC-2 (расщепление core/campaign.py): ни один не
+# импортирует периферию — конструирование атакующего клиента, корпусных случаев
+# и граница ошибки атакующей LLM идут через шов core/campaign_backend.
+ARC2_CORE_MODULES = (
+    f"{PKG}.core.campaign",
+    f"{PKG}.core.campaign_backend",
+    f"{PKG}.core.campaign_construction",
+    f"{PKG}.core.campaign_escalation",
+    f"{PKG}.core.campaign_persistence",
+    f"{PKG}.core.campaign_serialize",
+    f"{PKG}.core.campaign_trace",
+)
+
 # Остаточные ленивые рёбра композиции (вне SCC). Сверяются точно.
 RESIDUAL_LAZY_EDGES: dict[str, frozenset[str]] = {
-    f"{PKG}.core.campaign": frozenset({
-        f"{PKG}.attacks.generated",
-        f"{PKG}.generation.attacker_client",
-        f"{PKG}.generation.budget",
-        f"{PKG}.generation.config",
-        f"{PKG}.generation.corpus",
-        f"{PKG}.generation.errors",
-    }),
     f"{PKG}.core.experiment": frozenset({f"{PKG}.generation.prompts"}),
 }
 
@@ -164,6 +171,14 @@ def test_arc1_core_modules_do_not_import_periphery():
         assert not bad, f"{module} импортирует периферию: {bad}"
 
 
+def test_arc2_campaign_modules_do_not_import_periphery():
+    graph = import_graph()
+    for module in ARC2_CORE_MODULES:
+        assert module in graph, f"{module}: модуль отсутствует в src/ (расщепление ARC-2 не на месте)"
+        bad = sorted(d for d in graph[module] if _is_periphery(d))
+        assert not bad, f"{module} импортирует периферию: {bad}"
+
+
 def test_core_periphery_edges_match_frozen_residual_table():
     actual = {m: frozenset(d) for m, d in _periphery_edges(import_graph()).items()}
     assert actual == RESIDUAL_LAZY_EDGES, (
@@ -200,6 +215,34 @@ def test_runtime_layering_in_fresh_interpreter():
         "assert backend.rewrite.__module__ == 'memnotsafe.generation.rewrite', backend\n"
         "import memnotsafe.core.escalation as esc\n"
         "assert esc.EscalationFeedback.__module__ == 'memnotsafe.core.escalation_feedback'\n"
+        "print('OK')\n"
+    )
+    env = dict(os.environ, PYTHONPATH=str(SRC), PYTHONIOENCODING="utf-8")
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0 and proc.stdout.strip() == "OK", proc.stdout + proc.stderr
+
+
+def test_runtime_campaign_backend_binding_in_fresh_interpreter():
+    """ARC-2: листовой шов core/campaign_backend импортируется без периферии
+    (backend не связан → RuntimeError); импорт ЛЮБОГО модуля generation
+    связывает и его (generation/__init__ по образцу ARC-1). После связывания шов
+    отдаёт конструкторы атакующего клиента/корпуса и тип ошибки атакующей LLM."""
+    code = (
+        "import sys\n"
+        "from memnotsafe.core.campaign_backend import campaign_backend\n"
+        "loaded = sorted(m for m in sys.modules if m.startswith('memnotsafe.generation') or m == 'memnotsafe.attacks.generated')\n"
+        "assert not loaded, loaded\n"
+        "try:\n"
+        "    campaign_backend()\n"
+        "except RuntimeError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('campaign backend связан без импорта generation')\n"
+        "import memnotsafe.generation.budget\n"
+        "backend = campaign_backend()\n"
+        "assert backend.attacker_error.__name__ == 'AttackerError', backend.attacker_error\n"
+        "assert callable(backend.build_attacker_client) and callable(backend.new_generated_attack), backend\n"
+        "assert callable(backend.read_corpus) and callable(backend.new_generated_case_params), backend\n"
         "print('OK')\n"
     )
     env = dict(os.environ, PYTHONPATH=str(SRC), PYTHONIOENCODING="utf-8")
