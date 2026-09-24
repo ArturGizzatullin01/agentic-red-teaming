@@ -44,8 +44,8 @@ from memnotsafe.core.ledger import (
     BudgetLedger,
 )
 from memnotsafe.core.models import AttackResult, CampaignResult
+from memnotsafe.core.result_readouts import aggregate_metrics
 from memnotsafe.core.runner import RunnerError, new_case_id, new_run_id, run_attack
-from memnotsafe.reporting.metrics import aggregate_metrics
 from memnotsafe.tracing.langfuse_sink import build_langfuse_exporter
 from memnotsafe.tracing.recorder import TraceRecorder
 

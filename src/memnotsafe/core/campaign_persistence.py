@@ -16,7 +16,7 @@ from memnotsafe.core.attempt import OUTCOME_EVIDENCE_ERROR, AttemptHistory
 from memnotsafe.core.campaign_serialize import case_summary as _case_summary
 from memnotsafe.core.goal_contract import goal_digest_or_none
 from memnotsafe.core.models import AttackResult
-from memnotsafe.reporting.proof import build_proof
+from memnotsafe.core.result_readouts import build_proof
 from memnotsafe.tracing.recorder import TraceRecorder
 
 

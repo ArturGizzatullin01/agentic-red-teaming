@@ -5,6 +5,50 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-24 — claude-code — ARC-3: слои — снятие рёбер core → reporting (feat/arc3-layer-reporting)
+
+- дефект (подтверждён A0): замок test_import_layers не покрывал core → reporting,
+  а рёбра были: core/campaign.py → reporting.metrics.aggregate_metrics,
+  core/campaign_persistence.py → reporting.proof.build_proof; reporting при этом
+  импортирует core в ~10 местах — пакетный цикл не замкнут
+- путь (а) — перенос функций в core с делегатами (прецедент ARC-1): обе функции
+  зависят ТОЛЬКО от core.models (aggregate_metrics — над CampaignResult.results,
+  build_proof — над одним AttackResult), т.е. это ядровые вычисления, ошибочно
+  жившие в reporting; шов (путь б) архитектурно неуместен — внедрять нечего
+- НОВЫЙ core/result_readouts.py: дословные тела aggregate_metrics/build_proof
+  и их приватных помощников (семантика не тронута); reporting/metrics.py и
+  reporting/proof.py стали тонкими делегатами (реэкспорт для cli/threat_report/
+  тестов); core/campaign.py и core/campaign_persistence.py — только переориентация
+  импорта на core (тела не тронуты, «только снятие reporting-импорта»)
+- test_import_layers расширен: (1) абсолютное правило core ↛ reporting без
+  исключений (test_core_modules_do_not_import_reporting); (2) пакетный инвариант
+  «reporting — строго нижестоящий сток»: пакет reporting не входит ни в одну SCC
+  пакетного графа (test_reporting_is_downstream_sink_at_package_level). Полная
+  ацикличность пакетного графа не бралась целью — ядро законно образует SCC с
+  attacks/generation(residual)/evidence/judge/oracles/adapters; цель — вынуть из
+  клубка именно reporting. Замороженная таблица RESIDUAL_LAZY_EDGES не тронута
+- отклонение: путь (а) кладёт перенесённые функции в НОВЫЙ core/result_readouts.py.
+  Allowlist называет «НОВЫЙ файл в core/» под путь б, но campaign.py/persistence.py
+  помечены «только снятие импортов» (тела заморожены) — значит перенесённым
+  функциям нужен новый дом в core; занял единственный слот новым файлом (не два),
+  reporting/metrics.py+proof.py — делегаты по allowlist пути а
+- отклонение: ветка feat/arc3-layer-reporting (новая, не env-pinned) — по прямому
+  требованию карты; коммит на main = bd2c504
+- проверки (venv python 3.12.3, `pip install -e .`, PYTHONIOENCODING=utf-8,
+  `-p no:cacheprovider`): RED на базе bd2c504 — обе новые проверки красные
+  (core → reporting: 2 ребра; reporting втянут в ядровую SCC); полный suite
+  `python -m pytest tests -q` — 1373 passed / 1 failed (единственный failed —
+  test_demo_launcher, Windows-путь с обратным слэшем в POSIX-контейнере, вне
+  диффа; = 1372 базовых + 2 новых, на каноне Windows 1374/0); побайтово —
+  `run cross_user_bac` 31/31 и `run generated_escalation --online` 45/45 файлов
+  идентичны базе минус id/timing (нормализатор), differing=0; experiment_id
+  неизменен (06ddc1e7… / 4fa07b15…); git diff --check чист, секретов 0
+- NOTICED (не делал): reporting.metrics.py потерял приватные помощники
+  (_rate/_stage_counts/…), но их никто не импортировал извне (только
+  aggregate_metrics/build_proof), поверхность сохранена; при желании A0 функции
+  можно разнести на core/metrics.py + core/proof.py — оставил одним файлом ради
+  минимальности
+
 ### 2026-09-24 — claude-code — P18: мастер `memnotsafe go` (claude/arc1-module-cycle-break-y32txl)
 
 - задача: интерактивный мастер `go` — UX-оболочка над probe/preflight/run/
