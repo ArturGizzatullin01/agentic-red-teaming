@@ -5,6 +5,62 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-24 — claude-code — MULTI-1: планировщик пакетов проверок, Этап 1 офлайн (feat/multi1-plan-orchestrator)
+
+- задача: режим `memnotsafe orchestrate --plan plan.yaml --output runs/<batch>` —
+  планировщик тестовых операций поверх существующих команд; движок стадий и
+  старый `orchestrate --scenario` не трогать; тексты сценариев не открывать
+- НОВЫЙ core/plan.py (зависит только от stdlib+yaml, периферию/reporting не тянет):
+  модель Plan/Stand/Job + load_plan/validate_plan (стоп ДО первого запуска,
+  PlanError с конкретной причиной), планировщик run_plan (инжектируемый runner),
+  таксономия исходов + classify_outcome, сводка build_summary/write_batch/
+  rebuild_summary
+- core/worker.py: ОДНА точка входа orchestrate_plan — грузит+валидирует план,
+  гоняет run_plan с дефолтным исполнителем (подпроцесс CLI-кампании, приём
+  PYTHONPATH как у orchestrate_campaign) и дефолтной проверкой чистоты (hook
+  clean_check профиля); пишет summary.json + batch-state.json; rc 0/1 как у
+  orchestrator_rc. Существующие FileLease/orchestrate/orchestrate_campaign не
+  тронуты
+- cli.py: одна аддитивная врезка (маркер CARD-MULTI-1, ленивый импорт); --plan
+  добавлен, --scenario сделан не-required (старый вызов `orchestrate --scenario
+  X --output Y` работает как прежде); --plan и --scenario взаимно исключают
+- планировщик: очередь; 1 активное задание на стенд; общая isolation_group
+  блокирует параллелизм (≤1 активное на группу); ≤ max_parallel_stands активных
+  стендов; committed вызовов ≤ max_total_target_calls (потолок не превышается,
+  оценка ДО выдачи); каждый job_id выдаётся ровно один раз (повторы — только
+  iterations); re-check чистоты перед выдачей (грязный/UNKNOWN — не выдаём); deps
+  requires гейтят выдачу
+- исходы различимы (транспорт/401/429/неполный finalize/неизвестно/бюджет/грязно/
+  UNKNOWN-чистота/blocked), скрытых повторов нет; сводка: batch_id, дочерние
+  experiment_id, статусы, ASR как N of M, расходы, ссылки на артефакты; UNKNOWN ≠
+  False (asr value=None, не 0); секретов нет; rebuild_summary пересобирает из
+  batch-state + артефактов, задания НЕ перезапускает
+- интерпретации (карта оставила детали исполнителю): (1) isolation_group ⟺
+  пересечение принципалов попарно — «общая группа у независимых (непересекающихся)
+  стендов» и «пересечение принципалов у разных групп» оба → стоп; принципалы —
+  из target_profile плана, НЕ из текста сценария; (2) «неизвестный стенд» = пустой/
+  нерезолвимый target_profile (+ проверки уникальности id, requires, циклов);
+  (3) «вызов» бюджета Этапа 1 = запланированная попытка (iterations), фактический
+  расход сверяется из campaign.json
+- отклонение: ветка feat/multi1-plan-orchestrator (новая, не env-pinned) — по
+  требованию карты; коммит на main = 467d16f
+- отклонение: ultracode-режим сессии (Workflow/субагенты) НЕ использован — бюджет
+  карты и STANDING-RULES §6 прямо запрещают рои/субагентов; один проход self-review
+- проверки (venv python 3.12.3, `pip install -e .`, PYTHONIOENCODING=utf-8,
+  `-p no:cacheprovider`): RED на базе 467d16f — tests/test_plan_orchestrator.py
+  collection ModuleNotFoundError (core.plan нет); полный suite
+  `python -m pytest tests -q` — 1406 passed / 1 failed (единственный failed —
+  test_demo_launcher, Windows-путь в POSIX, вне диффа; = 1379 базовых + 28 новых,
+  на каноне 1407/0); офлайн-приёмка (2 стенда параллельно ровно по разу, очередь
+  на освободившийся стенд, общая группа блокирует, cap не превышен) — в
+  test_plan_orchestrator + интеграционный тест на управляемых mock-подпроцессах;
+  git diff --check чист, секретов 0
+- NOTICED (не делал): slots>1 валидируется и пишется в сводку, но Этап 1 держит
+  1 активное на стенд (slots>1 — Этап 2); control-сценарий исполняется как
+  парный прогон и пишется в сводку, но «контроль удержал» булевом не сводится
+  (Этап 2); job→стенд без привязки по принципалам (любое готовое задание — на
+  любой чистый свободный стенд); MAP.md (новый core/plan.py) обновляет A0 при влитии
+
 ### 2026-09-24 — claude-code — ARC-3: слои — снятие рёбер core → reporting (feat/arc3-layer-reporting)
 
 - дефект (подтверждён A0): замок test_import_layers не покрывал core → reporting,
