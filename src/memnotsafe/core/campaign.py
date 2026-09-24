@@ -21,15 +21,19 @@ from pathlib import Path
 from memnotsafe.adapters.base import TargetAdapter
 from memnotsafe.attacks.base import AttackBase, AttackContext, get_attack
 from memnotsafe.core.attempt import (
-    OUTCOME_ABORTED,
     OUTCOME_BUDGET_EXHAUSTED,
-    OUTCOME_EVIDENCE_ERROR,
     OUTCOME_REGISTERED,
     OUTCOME_TRANSPORT_ERROR,
     AttemptHistory,
     outcome_of_result,
     sessions_from_transcript,
 )
+from memnotsafe.core.campaign_backend import campaign_backend
+from memnotsafe.core.campaign_construction import CampaignConstructionMixin
+from memnotsafe.core.campaign_escalation import CampaignEscalationMixin
+from memnotsafe.core.campaign_persistence import CampaignPersistenceMixin
+from memnotsafe.core.campaign_serialize import campaign_to_dict as _campaign_to_dict
+from memnotsafe.core.campaign_trace import ExportingRecorder as _ExportingRecorder
 from memnotsafe.core.config import Scenario
 from memnotsafe.core.goal_contract import goal_digest_or_none
 from memnotsafe.core.ledger import (
@@ -42,7 +46,6 @@ from memnotsafe.core.ledger import (
 from memnotsafe.core.models import AttackResult, CampaignResult
 from memnotsafe.core.runner import RunnerError, new_case_id, new_run_id, run_attack
 from memnotsafe.reporting.metrics import aggregate_metrics
-from memnotsafe.reporting.proof import build_proof
 from memnotsafe.tracing.langfuse_sink import build_langfuse_exporter
 from memnotsafe.tracing.recorder import TraceRecorder
 
@@ -53,36 +56,7 @@ ORIGIN_CORPUS = "corpus"
 ORIGIN_ONLINE = "online"
 
 
-class _ExportingRecorder:
-    """P11-3: прозрачный дубль событий в экспортёр поверх настоящего рекордера.
-
-    Recorder остаётся источником истины и пишет ПЕРВЫМ (полный локальный
-    JSONL, без масок); затем тот же plain-dict уходит в
-    TraceExporter.record(), где маскируется на входе (P11-2) и доставляется
-    по семантике P11-1 (батчинг, спул при отказе, backoff). Всё, кроме записи
-    событий, делегируется рекордеру как есть — для раннера и слоёв кампании
-    прокси неотличим от TraceRecorder.
-    """
-
-    __slots__ = ("_recorder", "_exporter")
-
-    def __init__(self, recorder: TraceRecorder, exporter) -> None:
-        self._recorder = recorder
-        self._exporter = exporter
-
-    def record(self, event) -> None:
-        self._recorder.record(event)
-        self._exporter.record(event.to_dict() if hasattr(event, "to_dict") else event)
-
-    def record_raw(self, row: dict) -> None:
-        self._recorder.record_raw(row)
-        self._exporter.record(row)
-
-    def __getattr__(self, name: str):  # делегирование всего прочего рекордеру
-        return getattr(self._recorder, name)
-
-
-class Campaign:
+class Campaign(CampaignConstructionMixin, CampaignEscalationMixin, CampaignPersistenceMixin):
     def __init__(
         self,
         scenario: Scenario,
@@ -123,32 +97,6 @@ class Campaign:
         # time.perf_counter: продукционное поведение не меняется; в артефакты
         # clock не пишется. Только программный слой — без CLI/конфига.
         self._clock = clock
-
-    def _build_judge(self):
-        spec = self.scenario.judge
-        if not spec.enabled:
-            return None
-        from memnotsafe.judge.runtime import LLMJudge
-
-        return LLMJudge(
-            spec,
-            repetitions=self.scenario.repetitions,
-            artifacts_dir=self.output_dir / "judge",
-        )
-
-    def _ensure_attacker(self):
-        """Ленивое создание атакующего клиента и бюджета — только когда онлайн-
-        уровень реально включён. Без `--online` этот путь не исполняется (SC-003)."""
-        if self._attacker_client is not None:
-            return
-        from memnotsafe.generation.attacker_client import build_attacker_client
-        from memnotsafe.generation.budget import CallBudget
-        from memnotsafe.generation.config import AttackerConfig
-
-        config = self.attacker_config or AttackerConfig()
-        self.attacker_config = config
-        self._attacker_client = build_attacker_client(config)
-        self._budget = CallBudget(limit=config.budget)
 
     async def run(self, repetitions: int | None = None) -> CampaignResult:
         repetitions = repetitions or self.scenario.repetitions
@@ -393,29 +341,28 @@ class Campaign:
             yield attack, ctx, provenance
 
     def _corpus_cases(self, repetitions: int) -> Iterator[tuple[AttackBase, AttackContext, dict]]:
-        from memnotsafe.attacks.generated import PARAM_CORPUS_ID, PARAM_RECORD, GeneratedAttack
-        from memnotsafe.generation.corpus import read_corpus, valid_records
+        backend = campaign_backend()
 
         if not self.scenario.corpus_path:
             raise RunnerError(
                 f"Сценарий {self.scenario.id}: family=generated требует attack.corpus (путь к корпусу)"
             )
-        corpus = read_corpus(self.scenario.corpus_path)
-        records = valid_records(corpus)
+        corpus = backend.read_corpus(self.scenario.corpus_path)
+        records = backend.valid_records(corpus)
         corpus_id = corpus.provenance.profile_id or Path(self.scenario.corpus_path).stem
 
         n = 0
         for attempt in range(1, repetitions + 1):
             for record in records:
                 n += 1
-                attack = GeneratedAttack()  # свежий экземпляр: metadata подменяется в generate()
+                attack = backend.new_generated_attack()  # свежий экземпляр: metadata подменяется в generate()
                 case_id = new_case_id(record.attack_class, n)
                 ctx = AttackContext(
                     attacker_user_id=self.scenario.attacker.user_id,
                     victim_user_id=self.scenario.victim.user_id,
                     run_seed=attempt,
                     case_id=case_id,
-                    params={PARAM_RECORD: record.to_dict(), PARAM_CORPUS_ID: corpus_id},
+                    params=backend.new_generated_case_params(record.to_dict(), corpus_id),
                     # Маркер, заявленный записью, едет в контекст ДО раннера:
                     # None → раннер выведет CM-<6hex> из case_id (плейсхолдер
                     # {case_marker} подставит GeneratedAttack). Раннер требует
@@ -436,217 +383,6 @@ class Campaign:
         """Запись корпуса в params заявила собственный маркер (P04)."""
         raw = (ctx.params or {}).get("record")
         return isinstance(raw, dict) and raw.get("case_marker") is not None
-
-    async def _maybe_escalate(
-        self,
-        attack: AttackBase,
-        ctx: AttackContext,
-        result: AttackResult,
-        *,
-        run_id: str,
-        recorder: TraceRecorder,
-        require_case_marker: bool = False,
-        history: AttemptHistory | None = None,
-        ledger: BudgetLedger | None = None,
-        bundle_writer=None,
-    ) -> AttackResult:
-        """Онлайн-уровень (US2/US3). Реализация цикла — в core/escalation.py; здесь
-        только точка вызова при `--online` и `success=False`. При выключенном
-        онлайне (по умолчанию) возвращает result без изменений (SC-003)."""
-        if not self.online or result.success:
-            return result
-
-        self._ensure_attacker()
-        from memnotsafe.core.escalation import escalate
-        from memnotsafe.generation.errors import AttackerError
-
-        try:
-            outcome = await escalate(
-                attack,
-                ctx,
-                self.target,
-                result,
-                limit=self.online_attempts,
-                client=self._attacker_client,
-                budget=self._budget,
-                run_id=run_id,
-                recorder=recorder,
-                # тот же судья, что судил первую попытку: иначе вердикты попыток
-                # одного случая несопоставимы (см. докстринг core/escalation.py)
-                judge=self.judge,
-                # и то же требование маркера: повтор получает НОВЫЙ маркер
-                # (case_id новый), но наличие его в доставке проверяется так же
-                # строго, как у первой попытки (единый план P04)
-                require_case_marker=require_case_marker,
-                history=history,
-                ledger=ledger,
-                bundle_writer=bundle_writer,
-            )
-        except AttackerError as exc:
-            # Сбой атакующей LLM ≠ «атака не пробила защиту» (FR-011). Фиксируем
-            # ошибку (CLI вернёт exit 1), но возвращаем уже полученный результат —
-            # он и всё собранное до него сохранятся в runs/ (FR-010, SC-005).
-            self.attacker_error = str(exc)
-            self.attacker_calls = self._budget.used if self._budget else self.attacker_calls
-            prov = dict(result.evidence.get("provenance") or {})
-            prov["attacker_error"] = str(exc)
-            result.evidence["provenance"] = prov
-            if history is not None:
-                history.record(
-                    case_id=ctx.case_id,
-                    candidate_id=result.case_id,
-                    outcome=OUTCOME_ABORTED,
-                    attempt_no=0,
-                    error=str(exc),
-                )
-            return result
-
-        self.attacker_calls = self._budget.used if self._budget else self.attacker_calls
-        if outcome.budget_exhausted:
-            self.budget_exhausted = True
-        return outcome.result
-
-    # ------------------------------------------------------------------ запись артефактов случая
-
-    def _persist_case(
-        self,
-        result: AttackResult,
-        recorder: TraceRecorder,
-        evidence_dir: Path,
-        cases_path: Path,
-    ) -> None:
-        case_id = result.case_id
-        with cases_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(_case_summary(result), ensure_ascii=False) + "\n")
-        (evidence_dir / f"{case_id}-before.json").write_text(
-            json.dumps(result.evidence.get("before"), ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        (evidence_dir / f"{case_id}-after.json").write_text(
-            json.dumps(result.evidence.get("after"), ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        (evidence_dir / f"{case_id}-diff.json").write_text(
-            json.dumps(result.evidence.get("diff"), ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        (evidence_dir / f"{case_id}-transcript.json").write_text(
-            json.dumps(result.evidence.get("transcript"), ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        if result.success:
-            # Proof artifact — только для подтверждённых находок:
-            # достаточно, чтобы предъявить/воспроизвести finding без повторного
-            # прогона и без поиска по всему run'у.
-            proof = build_proof(
-                result, scenario_id=self.scenario.id, trace_events=recorder.case_events(case_id)
-            )
-            (evidence_dir / f"{case_id}-proof.json").write_text(
-                json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-
-    def _write_evidence_bundle(
-        self,
-        result: AttackResult,
-        recorder: TraceRecorder,
-        *,
-        logical_case: str,
-        candidate_id: str,
-        parent_candidate_id: str | None,
-        attempt_no: int,
-        history: AttemptHistory | None = None,
-    ) -> None:
-        """P10a (фича 007): пакет доказательств для КАЖДОЙ попытки на target
-        (фикс приёмки: не только финальный результат) — каталог
-        bundles/<candidate_id>, attempt_no/parent_candidate_id согласованы с
-        attempts.jsonl. Слоты без телеметрии честно получают unavailable (не
-        «доказанное отсутствие»). Сбой записи НЕ роняет прогон (вердикты уже
-        сохранены штатно), но НЕ остаётся невидимым: сбой фиксируется в
-        attempts.jsonl, а недописанный каталог виден replay через
-        verify_run_bundles → exit 1."""
-        from memnotsafe.evidence.bundle import write_bundle
-
-        ev = result.evidence
-        phases = ev.get("phases") or {}
-        candidate = ev.get("candidate") or {}
-        tool_events = [e for e in recorder.case_events(candidate_id) if e.get("tool")]
-        trace_file = self.output_dir / "traces" / f"{candidate_id}.json"
-        # рукописная/нестандартная цель → None: digest не выдумываем
-        goal_digest = goal_digest_or_none(candidate.get("expected_effect"))
-        # P09-full: слот context_tool_evidence — ФАКТЫ эффективного контекста
-        # и аргументов (адаптер/фактические), фазы — из транскрипта раннера.
-        # Адаптер без канала → слот не упоминается (absent, «не предусмотрен»);
-        # канал есть, данных нет → unavailable; сбой канала → unavailable +
-        # причина в provenance. Никакая телеметрия не роняет прогон.
-        ctx_tool: dict | None = None
-        facts_getter = getattr(self.target, "context_tool_evidence", None)
-        if callable(facts_getter):
-            from memnotsafe.evidence.telemetry import (
-                baseline_sessions_from_transcript,
-                build_context_tool_evidence,
-                session_phases_from_transcript,
-            )
-
-            transcript = ev.get("transcript")
-            try:
-                facts = facts_getter()
-                if facts is None:
-                    # канал заявлен, но фактов нет (у investment_stand канал
-                    # телеметрии отсутствует): unavailable с точной причиной,
-                    # НЕ absent и не синтетические «факты»
-                    ctx_tool = None
-                    prov = dict(ev.get("provenance") or {})
-                    prov["context_tool_evidence_error"] = (
-                        "адаптер заявил канал context_tool_evidence, но фактов не отдал "
-                        "(телеметрия стенда недоступна) — слот unavailable, "
-                        "effective_context/actual args остаются UNKNOWN"
-                    )
-                    ev["provenance"] = prov
-                else:
-                    ctx_tool = build_context_tool_evidence(
-                        facts,
-                        session_phase=session_phases_from_transcript(transcript),
-                        excluded_sessions=baseline_sessions_from_transcript(transcript),
-                    )
-            except Exception as exc:  # noqa: BLE001 — телеметрия не роняет прогон
-                prov = dict(ev.get("provenance") or {})
-                prov["context_tool_evidence_error"] = f"{type(exc).__name__}: {exc}"
-                ev["provenance"] = prov
-                ctx_tool = None
-        try:
-            write_bundle(
-                self.output_dir / "bundles" / candidate_id,
-                run_id=result.run_id,
-                case_id=logical_case,
-                attempt_no=attempt_no,
-                experiment_id=getattr(self, "experiment_id", None),
-                candidate_id=candidate_id,
-                parent_candidate_id=parent_candidate_id,
-                goal_digest=goal_digest,
-                payloads={
-                    "m0": ev.get("before"),
-                    "m1": phases.get("m1"),
-                    "m2": phases.get("m2"),
-                    "m3": ev.get("after"),
-                    "transcript": ev.get("transcript"),
-                    "settle": ev.get("settle"),
-                    "candidate": candidate or None,
-                    "memory_diff": ev.get("diff_m0_m1"),
-                    "tool_events": tool_events or None,
-                    **({"context_tool_evidence": ctx_tool} if facts_getter is not None else {}),
-                },
-                files={"trace": trace_file if trace_file.exists() else None},
-            )
-        except OSError as exc:
-            # Диск/права — прогон важнее пакета, но сбой обязан быть виден:
-            # запись в историю + недописанный каталог (без манифеста) рано или
-            # поздно срежется верификацией replay.
-            if history is not None:
-                history.record(
-                    case_id=logical_case,
-                    candidate_id=candidate_id,
-                    outcome=OUTCOME_EVIDENCE_ERROR,
-                    attempt_no=attempt_no,
-                    error=f"пакет доказательств не записан: {exc}",
-                )
-            return
-        result.evidence["evidence_bundle"] = f"bundles/{candidate_id}"
 
     def _run_metadata(self, run_id: str, attempts: int) -> dict:
         """Метаданные прогона для campaign.json (FR-007/FR-012, data-model §7).
@@ -683,69 +419,3 @@ class Campaign:
             "budget_limit": self.attacker_config.budget,
             "budget_exhausted": self.budget_exhausted,
         }
-
-    async def aclose_attacker(self) -> None:
-        if self._attacker_client is not None:
-            await self._attacker_client.aclose()
-
-
-def _stage_to_dict(s) -> dict:
-    """Сериализация стадии с провенансом (contracts/report-provenance.md).
-
-    Ни одно существующее поле не переименовано и не удалено — только добавлены
-    новые. При выключенном судье `judge` и `deterministic` равны null, а
-    `verdict_source` — "deterministic": отчёт остаётся читаемым тем же кодом,
-    что читал его до фичи."""
-    return {
-        "stage": s.stage,
-        "success": s.success,
-        "reason": s.reason,
-        "evidence": s.evidence,
-        "confidence": s.confidence,
-        "verdict_source": s.verdict_source,
-        "evidence_kind": s.evidence_kind,
-        "disagreement": s.disagreement,
-        "deterministic": s.deterministic.to_dict() if s.deterministic else None,
-        "judge": s.judge.to_dict() if s.judge else None,
-    }
-
-
-def _case_summary(result: AttackResult) -> dict:
-    return {
-        "case_id": result.case_id,
-        "attack_id": result.attack_id,
-        "family": result.family,
-        "success": result.success,
-        "stages": {s.stage: s.success for s in result.stages},
-        "attacker_user_id": result.attacker_user_id,
-        "victim_user_id": result.victim_user_id,
-    }
-
-
-def _campaign_to_dict(cr: CampaignResult, metadata: dict | None = None) -> dict:
-    """Сериализация кампании. `family` (002, FR-003/FR-013) пишется РЯДОМ с
-    `attack_id`, а не вместо него: у сгенерированного случая `attack_id` — имя
-    класса-источника и сам по себе валидный ключ ATTACK_REGISTRY, так что
-    восстановить по нему семью нельзя — прочитается рукописная атака вместо
-    корпусной. Поле аддитивное: ни одно существующее не переименовано, старые
-    файлы читаются прежним fallback'ом читателя (cli.load_campaign)."""
-    return {
-        "run_id": cr.run_id,
-        "scenario_id": cr.scenario_id,
-        "attempts": cr.attempts,
-        "metadata": metadata or {},
-        "aggregate_metrics": cr.aggregate_metrics,
-        "results": [
-            {
-                "case_id": r.case_id,
-                "attack_id": r.attack_id,
-                "family": r.family,
-                "success": r.success,
-                "stages": [_stage_to_dict(s) for s in r.stages],
-                "attacker_user_id": r.attacker_user_id,
-                "victim_user_id": r.victim_user_id,
-                "evidence": r.evidence,
-            }
-            for r in cr.results
-        ],
-    }
