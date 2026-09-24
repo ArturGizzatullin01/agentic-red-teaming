@@ -288,9 +288,33 @@ def cmd_orchestrate(args: argparse.Namespace) -> int:
     (workers < 1, расхождение run_dirs) и ошибки окружения спауна —
     управляемый отказ (сообщение + exit 1, без трейсбека), паттерн соседних
     команд (reporter.emit_error); --json отложен в CLI v2."""
+    reporter = _reporter(args)
+
+    # CARD-MULTI-1: режим планировщика пакетов проверок — аддитивная врезка
+    # (ленивый импорт, маркер CARD-MULTI-1). Валидация плана и исполнение живут
+    # в core.plan/core.worker.orchestrate_plan; движок стадий и старый
+    # orchestrate --scenario не затрагиваются. --plan и --scenario взаимно
+    # исключают друг друга.
+    if getattr(args, "plan", None):
+        from memnotsafe.core.plan import PlanError
+        from memnotsafe.core.worker import orchestrate_plan
+
+        try:
+            summary_path, rc = asyncio.run(orchestrate_plan(args.plan, output=args.output))
+        except PlanError as exc:
+            # контрактная ошибка плана — управляемый отказ (сообщение + exit 1,
+            # без трейсбека), паттерн соседних команд
+            reporter.emit_error(command="orchestrate", message=str(exc))
+            return 1
+        print(f"orchestrate --plan: пакет собран, сводка: {summary_path}")
+        return rc
+
+    if not getattr(args, "scenario", None):
+        reporter.emit_error(command="orchestrate", message="нужен --plan <plan.yaml> или --scenario <сценарий.yaml>")
+        return 1
+
     from memnotsafe.core.worker import orchestrate_campaign, orchestrator_rc
 
-    reporter = _reporter(args)
     try:
         outcomes, summary_path = asyncio.run(orchestrate_campaign(
             args.scenario, output=args.output, workers=args.workers,
@@ -712,10 +736,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_flags(pc)
     pc.set_defaults(func=cmd_campaign)
 
-    porc = sub.add_parser("orchestrate", help="оркестратор N воркеров кампании: общий experiment_id, lease-каталог, сводка (P13-a)")
-    porc.add_argument("--scenario", required=True)
+    porc = sub.add_parser("orchestrate", help="оркестратор N воркеров кампании (P13-a) ИЛИ планировщик пакета проверок --plan (CARD-MULTI-1)")
+    # CARD-MULTI-1: --scenario теперь не required (альтернатива — --plan); старый
+    # вызов `orchestrate --scenario X --output Y` работает как прежде.
+    porc.add_argument("--scenario", default=None)
+    porc.add_argument("--plan", default=None, help="YAML-план пакета проверок (режим планировщика, Этап 1 офлайн)")
     porc.add_argument("--output", required=True,
-                      help="база: воркеры <output>-w<i>/, замки <output>/locks, сводка <output>-orchestrator.json")
+                      help="база: воркеры <output>-w<i>/, замки <output>/locks, сводка <output>-orchestrator.json; для --plan — каталог пакета runs/<batch>")
     porc.add_argument("--workers", type=int, default=2)
     porc.add_argument("--iterations", type=int, default=None)
     porc.set_defaults(func=cmd_orchestrate)

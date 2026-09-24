@@ -457,3 +457,86 @@ async def orchestrate_campaign(
         Path(f"{output}-orchestrator.json"), outcomes, lease_dir=output / "locks"
     )
     return outcomes, summary
+
+
+async def orchestrate_plan(plan_path: str | Path, *, output: str | Path) -> tuple[Path, int]:
+    """CARD-MULTI-1 — точка входа планировщика пакетов проверок (Этап 1, офлайн).
+
+    Загружает и ВАЛИДИРУЕТ план (PlanError — стоп ДО первого запуска), затем
+    отдаёт его планировщику `core.plan.run_plan` с дефолтным исполнителем задания
+    — подпроцессом CLI-кампании (тот же приём PYTHONPATH, что у
+    orchestrate_campaign) — и дефолтной проверкой чистоты (hook clean_check
+    профиля). Пишет summary.json + batch-state.json. rc: 0, если ВСЕ задания
+    выполнились (COMPLETED); иначе 1 (новых exit-кодов нет). Движок стадий и
+    старый orchestrate --scenario не затрагиваются."""
+    import subprocess
+
+    from memnotsafe.core import plan as plan_mod
+
+    output = Path(output)
+    the_plan = plan_mod.load_plan(plan_path)
+    plan_mod.validate_plan(the_plan)  # стоп ДО первого запуска
+
+    # Дочерний CLI обязан видеть пакет из дерева исходников (как orchestrate_campaign).
+    src_root = Path(__file__).resolve().parents[2]
+    child_env = dict(os.environ)
+    if (src_root / "memnotsafe").is_dir():
+        existing = os.environ.get("PYTHONPATH", "")
+        child_env["PYTHONPATH"] = str(src_root) + (os.pathsep + existing if existing else "")
+
+    async def _run_child(scenario: str, target: str, iterations: int, run_dir: Path) -> tuple[int | None, dict | None, str]:
+        argv = [sys.executable, "-m", "memnotsafe.cli", "campaign",
+                "--scenario", str(scenario), "--target", str(target),
+                "--iterations", str(iterations), "--output", str(run_dir), "--quiet"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, env=child_env,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            rc: int | None = proc.returncode
+            stderr_text = (stderr or b"").decode("utf-8", "replace")
+        except OSError as exc:
+            rc, stderr_text = None, f"{type(exc).__name__}: {exc}"
+        campaign = plan_mod.read_campaign(run_dir)
+        return rc, campaign, stderr_text
+
+    async def _runner(job: "plan_mod.Job", stand: "plan_mod.Stand", out: Path) -> "plan_mod.JobRun":
+        run_dir = out / job.id
+        rc, campaign, stderr_text = await _run_child(job.scenario, stand.target, job.iterations, run_dir)
+        n, m, value = plan_mod.asr_from_campaign(campaign)
+        run = plan_mod.JobRun(
+            job_id=job.id, stand_id=stand.id,
+            outcome=plan_mod.classify_outcome(rc, campaign, stderr_text),
+            experiment_id=plan_mod.read_experiment_id(run_dir),
+            asr_n=n, asr_m=m, asr_value=value,
+            target_calls_actual=(m if isinstance(m, int) else None),
+            run_dir=str(run_dir), control_scenario=job.control,
+        )
+        if job.control:
+            ctrl_dir = out / f"{job.id}-control"
+            crc, ccamp, cerr = await _run_child(job.control, stand.target, job.iterations, ctrl_dir)
+            run.control_outcome = plan_mod.classify_outcome(crc, ccamp, cerr)
+            run.control_run_dir = str(ctrl_dir)
+            _cn, cm, _cv = plan_mod.asr_from_campaign(ccamp)
+            if isinstance(run.target_calls_actual, int) and isinstance(cm, int):
+                run.target_calls_actual += cm
+        return run
+
+    def _clean_checker(stand: "plan_mod.Stand") -> "plan_mod.CleanResult":
+        if not stand.clean_check:
+            return plan_mod.CleanResult(status="unknown", detail="нет hook clean_check в профиле")
+        try:
+            proc = subprocess.run(
+                list(stand.clean_check), env=child_env, timeout=30,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return plan_mod.CleanResult(status="dirty", detail=f"clean_check не запустился: {type(exc).__name__}")
+        return (plan_mod.CleanResult(status="clean") if proc.returncode == 0
+                else plan_mod.CleanResult(status="dirty", detail=f"clean_check rc={proc.returncode}"))
+
+    runs = await plan_mod.run_plan(the_plan, output, runner=_runner, clean_checker=_clean_checker)
+    summary_path, _state_path = plan_mod.write_batch(the_plan, output, runs)
+    rc = 0 if runs and all(r.outcome == plan_mod.OUTCOME_COMPLETED for r in runs.values()) else 1
+    return summary_path, rc
