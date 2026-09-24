@@ -27,7 +27,7 @@ target:
     "1001": SK_GENAI_1001
   mongo_uri: "mongodb://localhost:28017"
   mongo_db: agent_memory
-  settle_timeout_s: 10
+  settle_timeout_s: 60
 
 actors:
   attacker:
