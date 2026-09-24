@@ -1,9 +1,25 @@
-"""tests/test_import_layers.py — ARC-1/ARC-2: слои импортов core ↔ generation.
+"""tests/test_import_layers.py — ARC-1/ARC-2/ARC-3: слои импортов core ↔ периферия
+и core ↛ reporting.
 
 Правило слоёв: ядро (`core/*`) не зависит от периферии (`generation/*`,
 `attacks/generated`) — ни top-level, ни в функциях, ни под TYPE_CHECKING;
 обратное разрешено. В графе импортов пакета нет компонент сильной связности
 больше одного модуля (SCC>1): ядро не держится на ленивых импортах периферии.
+
+ARC-3: ядро (`core/*`) также не импортирует презентационный слой `reporting/*`
+ни на одном уровне — это абсолютное правило без исключений (обе функции,
+формально жившие в reporting, но зависящие только от core.models —
+aggregate_metrics и build_proof — перенесены в core.result_readouts, а
+reporting.metrics/proof остались тонкими делегатами). На пакетном уровне это
+выражено инвариантом «reporting — строго нижестоящий сток»: пакет
+`memnotsafe.reporting` не входит НИ В ОДНУ компоненту сильной связности
+пакетного графа. Полная ацикличность пакетного графа недостижима и не является
+целью: ядро законно образует цикл с attacks (core импортирует attacks.base,
+attacks — core.models), с generation (единственное замороженное ребро
+core.experiment → generation.prompts + generation → core.models) и с
+evidence/judge/oracles/adapters. Цель ARC-3 — вынуть из этого клубка именно
+reporting: core (и всё, что core тянет транзитивно) больше не зависит от
+reporting.
 
 Граф строится AST-обходом (не импортом): ребро `A → B` — любой `import`/`from
 ... import` в модуле A на модуль B пакета, на любом уровне вложенности.
@@ -39,6 +55,9 @@ PKG_ROOT = SRC / PKG
 PERIPHERY_PREFIX = f"{PKG}.generation"
 PERIPHERY_MODULES = frozenset({f"{PKG}.attacks.generated"})
 
+# ARC-3: презентационный слой. core/* не импортирует его ни на одном уровне.
+REPORTING_PREFIX = f"{PKG}.reporting"
+
 # Модули ядра, замкнутые циклом ARC-1: после карты — ноль рёбер на периферию.
 ARC1_CORE_MODULES = (
     f"{PKG}.core.escalation",
@@ -67,6 +86,30 @@ RESIDUAL_LAZY_EDGES: dict[str, frozenset[str]] = {
 
 def _is_periphery(module: str) -> bool:
     return module.startswith(PERIPHERY_PREFIX + ".") or module == PERIPHERY_PREFIX or module in PERIPHERY_MODULES
+
+
+def _is_reporting(module: str) -> bool:
+    return module.startswith(REPORTING_PREFIX + ".") or module == REPORTING_PREFIX
+
+
+def _package_layer(module: str) -> str:
+    """Свёртка модуля к пакету верхнего уровня: memnotsafe.core.campaign →
+    memnotsafe.core; memnotsafe.cli → memnotsafe.cli."""
+    parts = module.split(".")
+    return ".".join(parts[:2]) if len(parts) >= 2 else module
+
+
+def package_import_graph(graph: dict[str, set[str]]) -> dict[str, set[str]]:
+    """Пакетный граф: модульные рёбра свёрнуты к пакетам, self-петли отброшены."""
+    pkg_graph: dict[str, set[str]] = {}
+    for module, deps in graph.items():
+        src = _package_layer(module)
+        pkg_graph.setdefault(src, set())
+        for dep in deps:
+            dst = _package_layer(dep)
+            if dst != src:
+                pkg_graph[src].add(dst)
+    return pkg_graph
 
 
 def _module_name(path: Path) -> str:
@@ -191,6 +234,40 @@ def test_core_periphery_edges_match_frozen_residual_table():
 def test_package_import_graph_has_no_cycles():
     sccs = strongly_connected_components(import_graph())
     assert sccs == [], f"циклы импортов (SCC>1): {sccs}"
+
+
+def test_core_modules_do_not_import_reporting():
+    """ARC-3 (правило слоёв): ни один модуль core/* не импортирует reporting/*
+    ни на одном уровне. Абсолютное правило без исключений — обе core-level
+    функции (aggregate_metrics/build_proof) живут в core.result_readouts, а
+    reporting.metrics/proof остались делегатами.
+
+    RED на базе bd2c504: core.campaign → reporting.metrics и
+    core.campaign_persistence → reporting.proof."""
+    graph = import_graph()
+    offenders = {
+        m: sorted(d for d in deps if _is_reporting(d))
+        for m, deps in graph.items()
+        if m.startswith(f"{PKG}.core") and any(_is_reporting(d) for d in deps)
+    }
+    assert not offenders, f"core → reporting (запрещено ARC-3): {offenders}"
+
+
+def test_reporting_is_downstream_sink_at_package_level():
+    """ARC-3 (пакетный уровень): пакет reporting — строго нижестоящий сток, он
+    не входит ни в одну компоненту сильной связности пакетного графа. Значит
+    core (и всё, что core тянет транзитивно) не зависит от reporting.
+
+    Полная ацикличность пакетного графа не проверяется: ядро законно образует
+    цикл с attacks/generation(residual)/evidence/judge/oracles/adapters. Проверка
+    прицельная — вынимаем из клубка именно презентационный слой.
+
+    RED на базе bd2c504: reporting втянут в ядровую SCC ребром core → reporting."""
+    pkg_sccs = strongly_connected_components(package_import_graph(import_graph()))
+    in_cycle = sorted(scc for scc in pkg_sccs if REPORTING_PREFIX in scc)
+    assert not in_cycle, (
+        f"{REPORTING_PREFIX} входит в пакетный цикл (должен быть нижестоящим стоком): {in_cycle}"
+    )
 
 
 def test_runtime_layering_in_fresh_interpreter():
