@@ -752,6 +752,24 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_flags(prepl)
     prepl.set_defaults(func=cmd_replay)
 
+    # CARD-P16: бизнес-отчёт из доказательного пакета прогона (read-only,
+    # паттерн B4). Аддитивная врезка: команда и её коды выхода 0/1/2 живут в
+    # reporting/threat_report.py; модуль импортируется внутри обёртки — только
+    # при вызове самой команды, другие команды рендерер не тянут (прецедент
+    # cmd_preflight/cmd_orchestrate); читатель campaign.json (load_campaign)
+    # передаётся параметром — reporting не импортирует cli, слои ацикличны
+    # (test_import_layers); контракты существующих команд не затронуты.
+    def _cmd_threat_report(args: argparse.Namespace) -> int:
+        from memnotsafe.reporting.threat_report import cmd_threat_report
+
+        return cmd_threat_report(args, load_campaign=load_campaign)
+
+    ptr = sub.add_parser("threat-report", help="бизнес-отчёт threat-report.html из сохранённого runs/<name> (P16)")
+    ptr.add_argument("--input", required=True, help="каталог прогона runs/<name> (нужен campaign.json)")
+    ptr.add_argument("--output", default=None, help="путь threat-report.html или каталог (по умолчанию — рядом с прогоном)")
+    _add_output_flags(ptr)
+    ptr.set_defaults(func=_cmd_threat_report)
+
     return p
 
 
