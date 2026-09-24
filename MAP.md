@@ -28,7 +28,7 @@ python3 -m pytest tests/ -q
 | Путь | Роль |
 |---|---|
 | `cli.py` | вход: probe / run / campaign / report |
-| `core/` | runner, склейка стадий; GoalContract / ExperimentSpec / AttemptHistory / BudgetLedger (фича 007); `escalation_feedback.py` — контракт онлайн-уровня (ARC-1): ядро не импортирует generation |
+| `core/` | runner, склейка стадий; GoalContract / ExperimentSpec / AttemptHistory / BudgetLedger (фича 007); `escalation_feedback.py` — контракт онлайн-уровня (ARC-1); `campaign.py` — тонкий оркестратор + `campaign_construction.py` / `campaign_escalation.py` / `campaign_persistence.py` / `campaign_serialize.py` / `campaign_trace.py` и шов `campaign_backend.py` (ARC-2): ядро не импортирует generation |
 | `attacks/` | семьи атак, регистрация по `metadata.family` |
 | `adapters/` | `mock.py` (офлайн канон), `investment_stand.py` (live) |
 | `oracles/` | успех/провал по evidence |
@@ -61,7 +61,7 @@ python3 -m pytest tests/ -q
 3. `cross_user_bac_protected.yaml` должен давать success=False при внешней утечке. Это регресс контроля, не баг раннера.
 4. src-layout: без `pip install -e .` или `PYTHONPATH=src` CLI не найдёт пакет.
 5. Судить семантику и читать состояние памяти — разные каналы. Не подменять oracle одним judge.
-6. Правило слоёв (ARC-1): `core/*` не импортирует `generation/*` и `attacks/generated` ни на каком уровне; обратное разрешено. Проверяет `tests/test_import_layers.py` (AST-граф, SCC>1 нет); остаточные ленивые рёбра campaign/experiment заморожены точной таблицей там же — сужать можно, добавлять нельзя.
+6. Правило слоёв (ARC-1): `core/*` не импортирует `generation/*` и `attacks/generated` ни на каком уровне; обратное разрешено. Проверяет `tests/test_import_layers.py` (AST-граф, SCC>1 нет); осталось единственное ленивое ребро `core.experiment → generation.prompts` (якорь prompt-hash→experiment_id), заморожено точной таблицей там же — сужать можно, добавлять нельзя.
 
 ## Проверка по умолчанию
 ```
