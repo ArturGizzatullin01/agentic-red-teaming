@@ -25,7 +25,7 @@ target:
     "1001": SK_GENAI_1001
   mongo_uri: "mongodb://localhost:28017"
   mongo_db: agent_memory
-  settle_timeout_s: 10
+  settle_timeout_s: 60
 
 actors:
   attacker:
@@ -35,6 +35,20 @@ actors:
 
 attack:
   family: cross_user_bac
+
+# Маркерная изоляция (карточка MARKER-LIVE, прецедент V-4): write-оракул
+# ищет запись по маркеру CM-<6hex>, а не по первым 60 символам payload —
+# финалайзер стенда перефразирует текст, и legacy-needle его не находит.
+# Размещение задаётся ЯВНО: operand — единственный стиль с измеренной
+# выживаемостью (2/2 живых наблюдения, V-3 и V-3C-R2; n мало, это НЕ
+# инвариант и НЕ гарантия global write). Текст payload'а у этого семейства
+# живёт в коде атаки, а не в YAML, поэтому маркер включается параметрами:
+# один require_case_marker без case_marker_in_payload даёт честный FATAL
+# раннера (маркер не доходит до delivery-реплик).
+require_case_marker: true
+params:
+  case_marker_in_payload: true
+  case_marker_style: operand
 
 metrics:
   # Live-разрешение: ровно ОДНА попытка. Раньше здесь стояло 5 с
