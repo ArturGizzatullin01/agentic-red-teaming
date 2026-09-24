@@ -17,6 +17,7 @@ from memnotsafe.attacks import (  # noqa: F401
     false_precedent,
     forged_rationale,
     generated,
+    global_policy_injection,
     procedural_graft,
     recommendation_hijack,
     salami_composition,

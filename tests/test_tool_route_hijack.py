@@ -197,9 +197,12 @@ def test_registration_and_corpus_boundary() -> None:
     # Путь B закрыт: тип в корпус не вносится — набор выводится из dispatch
     # оракулов и этой карточкой не расширяется (corpus/adoption/goal_contract
     # не трогаются).
+    # Карточка H2x влила новый тип эффекта global_policy_injection (dispatch
+    # adoption ∩ external_effect) — авторитетный набор расширился на него.
     assert set(supported_effect_types()) == {
         "cross_user_data_access", "response_reflects_adoption",
         "scope_escalated", "tool_argument_injected",
+        "global_policy_injection",
     }
     assert "tool_selection_changed" not in supported_effect_types()
 

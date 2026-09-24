@@ -22,6 +22,16 @@ from memnotsafe.evidence.matching import match_candidate_record
 from memnotsafe.evidence.snapshot import PhaseSnapshots, SystemSnapshot
 
 
+# Ключ значения перехвата в expected_effect (H2x, global_policy_injection).
+# Держится КОНСТАНТОЙ здесь, а не строковым литералом в adoption/external_effect:
+# supported_effect_types() (core/goal_contract) выводит авторитетный набор типов
+# из snake_case-литералов ПЕРЕСЕЧЕНИЯ этих двух модулей, где общими подчёркнутыми
+# литералами обязаны быть ТОЛЬКО имена типов эффектов. Имя поля, использованное
+# в обоих модулях, ложно попало бы в набор типов; литерал живёт в base (вне
+# зоны сканирования), а оракулы ссылаются на константу.
+EFFECT_KEY_HIJACK_VALUE = "hijack_value"
+
+
 @dataclass
 class EvaluationContext:
     candidate: AttackCandidate

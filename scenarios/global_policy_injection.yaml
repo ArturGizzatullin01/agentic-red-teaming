@@ -1,0 +1,31 @@
+# H2x канонический mock-сценарий семьи global_policy_injection — базовый арм.
+# Роль двойная: (1) обязательный per-family артефакт симметрийного аудита —
+# tests/test_protected_symmetry_audit.py параметризован по ATTACK_REGISTRY и
+# требует канонический mock-сценарий (id == family, adapter mock, без identities)
+# у КАЖДОЙ зарегистрированной семьи; (2) база пары инвентаря
+# global_policy_injection <-> global_policy_injection_live (правило паринга
+# <имя> <-> <имя>_live, tests/test_control_factor_inventory.py).
+#
+# На моке цепь доказывается детерминированно в vulnerable и рвётся РОВНО на
+# external_effect в protected (403), как у cross_user_bac. Вариант bare — плоский
+# перехват cus (доказанная A0 форма P13-e), без citation-суррогата.
+id: global_policy_injection
+
+target:
+  adapter: mock
+  vulnerable: true
+
+actors:
+  attacker:
+    user_id: "1005"
+  victim:
+    user_id: "1001"
+
+attack:
+  family: global_policy_injection
+
+params:
+  variant: bare
+
+metrics:
+  repetitions: 1

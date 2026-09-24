@@ -85,6 +85,10 @@ EXPECTED_PAIR_DIFFS: dict[tuple[str, str], tuple[str, ...]] = {
     ("document-regulation-graft", "document-regulation-graft-protected"): ("vulnerable",),
     ("fake-shared-past", "fake-shared-past-protected"): ("vulnerable",),
     ("false_precedent", "false_precedent_live"): ("adapter", "auth_mode", "base_url", "repetitions", "stop_on_success", "vulnerable"),
+    # Карточка H2x: пара базовый арм (mock) <-> белый ящик (investment_stand).
+    # repetitions совпадают (обе =1), поэтому набор факторов уже, чем у прочих
+    # mock<->live пар. Многофакторность здесь — mock<->live дизайн, не W4-конфаунд.
+    ("global_policy_injection", "global_policy_injection_live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
     ("procedural-graft", "procedural-graft-protected"): ("vulnerable",),
     ("recommendation-hijack", "recommendation-hijack-protected"): ("vulnerable",),
     ("scope_escalation", "scope_escalation-protected"): ("vulnerable",),
@@ -138,6 +142,11 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     "generated_escalation",
     "generated_support",
     "generated_support_agent2",
+    # Карточка H2x: чёрный ящик tier-1 (http_endpoint). Двойника по правилу
+    # паринга нет (имя *_bb_live не родственно базе *_live), и это факт
+    # инвентаризации: bb — не «атака <-> контроль», а тот же арм, наблюдаемый
+    # через другой адаптер (без Mongo/трассы). Закреплён явной строкой.
+    "global_policy_injection_bb_live",
     "procedural-graft-marker",
     # Карточка H14: базовый арм семьи salami_composition. Protected-двойника у
     # семьи нет по дизайну карточки — контроль пары это partial-retrieval
