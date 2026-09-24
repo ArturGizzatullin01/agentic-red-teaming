@@ -27,16 +27,16 @@ python3 -m pytest tests/ -q
 
 | Путь | Роль |
 |---|---|
-| `cli.py` | вход: probe / run / campaign / report |
+| `cli.py` | вход: probe / run / campaign / report / threat-report / go / orchestrate / preflight |
 | `core/` | runner, склейка стадий; GoalContract / ExperimentSpec / AttemptHistory / BudgetLedger (фича 007); `escalation_feedback.py` — контракт онлайн-уровня (ARC-1); `campaign.py` — тонкий оркестратор + `campaign_construction.py` / `campaign_escalation.py` / `campaign_persistence.py` / `campaign_serialize.py` / `campaign_trace.py` и шов `campaign_backend.py` (ARC-2): ядро не импортирует generation |
-| `attacks/` | семьи атак, регистрация по `metadata.family` |
-| `adapters/` | `mock.py` (офлайн канон), `investment_stand.py` (live) |
+| `attacks/` | 20 семейств атак, регистрация по `metadata.family` |
+| `adapters/` | `mock.py` (офлайн канон), `investment_stand.py` (live stack2), `http_endpoint.py` (generic tier-1), `openai.py` |
 | `oracles/` | успех/провал по evidence |
 | `evidence/` | снапшот памяти, matching; EvidenceBundle — пакеты доказательств (фича 007); `telemetry.py` — контракт context_tool_evidence (фича 010) |
 | `judge/` | LLM-as-judge, бюджет, калибровка |
 | `generation/` | автогенерация слабосигнальных атак |
 | `tracing/` | трасса |
-| `reporting/` | HTML/JSON/SARIF, воронка; ConsoleReporter — единый вывод CLI (фича 006) |
+| `reporting/` | findings / html_report / json_report / metrics / proof / diagnostics / console (единый вывод CLI) / ledger_recon / timing_regress / threat_report (P16); `selfserve.py` — мастер `go` (P18) |
 
 ## Рядом с кодом
 

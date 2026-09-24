@@ -99,7 +99,7 @@ memnotsafe campaign --scenario scenarios/cross_user_bac.yaml --output runs/camp 
 
 | Уровень | Что работает | Какие ключи |
 |---------|--------------|-------------|
-| 0 · mock | вся батарея из 5 атак, отчёты, тесты | не нужны вообще |
+| 0 · mock | вся батарея из 20 семейств атак, отчёты, тесты | не нужны вообще |
 | 1 · mock + судья | + семантический оракул и калибровка | `OPENROUTER_API_KEY` |
 | 2 · живой стенд | воспроизведение на реальном агенте | `SK_GENAI_1001…1005` |
 | 3 · стенд + судья | боевой прогон целиком | оба набора |
@@ -544,7 +544,7 @@ python3 -m pytest tests/ -v
 `tests/test_e2e_cross_user.py` — обязательный E2E: полный pipeline
 на mock-таргете, `vulnerable=True` доказывает компромисс сквозь все стадии,
 `vulnerable=False` — честный отрицательный регресс (не ошибка раннера).
-`tests/test_all_attacks.py` — то же для всех 5 атак battery.
+`tests/test_all_attacks.py` — то же для всех семейств battery.
 `tests/test_investment_stand_adapter.py` и `tests/test_campaign_budget.py` —
 офлайн-unit живого адаптера (нормализация, evidence-каналы, паритет воронки) и
 бюджет N повторов с early-exit — всё на поддельных входах, без стенда.

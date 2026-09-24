@@ -23,7 +23,7 @@
   дерева; всё, что нужно, доступно в git-истории (см. §2).
 - **Как запустить прямо сейчас** (без сети, ключей, Docker):
   `memnotsafe run --scenario scenarios/cross_user_bac.yaml --output runs/demo`
-- **Статус.** P0 закрыт, 12 тестов зелёные (`python3 -m pytest tests/ -q`).
+- **Статус.** ДОКУМЕНТ ИСТОРИЧЕСКИЙ (снимок после P0: «12 тестов, 5 атак»). Актуальное состояние — `MAP.md` и `docs/integration-handoff/MASTER-PLAN.md` (хвост синхронизаций; main `2813bb2`, 1372 теста, 20 семейств).
 
 ---
 
