@@ -770,6 +770,29 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_flags(ptr)
     ptr.set_defaults(func=_cmd_threat_report)
 
+    # CARD-P18: интерактивный мастер `go` — UX-оболочка над preflight/run/
+    # threat-report. Аддитивная врезка (прецедент P16): вся логика в
+    # memnotsafe.selfserve, импорт ленивый (только при вызове go); штатный `run`
+    # и читатель campaign.json передаются параметрами — selfserve не импортирует
+    # cli, движок и контракты существующих команд не затронуты. (Рядом позже
+    # встанет врезка P17.)
+    def _cmd_go(args: argparse.Namespace) -> int:
+        from memnotsafe.selfserve import run_go
+
+        return run_go(args, run_command=cmd_run, load_campaign=load_campaign)
+
+    pgo = sub.add_parser("go", help="интерактивный мастер: сценарий → preflight → прогон → threat-report (P18)")
+    pgo.add_argument("--scenario", default=None, help="путь к сценарию; без него — выбор из каталога")
+    pgo.add_argument("--target", default=None, help="URL таргета или 'mock' (по умолчанию из сценария)")
+    pgo.add_argument("--output", default=None, help="каталог прогона (по умолчанию ASCII runs/go-<id>-<UTC>)")
+    pgo.add_argument("--yes", action="store_true", help="тихий режим: без вопросов и без автооткрытия отчёта")
+    pgo.add_argument("--ping", action="store_true", help="отдельный ПЛАТНЫЙ шаг проверки связи судьи (по явному согласию)")
+    pgo.add_argument("--no-color", action="store_true", help="выключить цвет (ANSI)")
+    _add_online_flags(pgo)
+    _add_attacker_flags(pgo)
+    _add_judge_flags(pgo)
+    pgo.set_defaults(func=_cmd_go)
+
     return p
 
 

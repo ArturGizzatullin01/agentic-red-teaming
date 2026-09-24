@@ -5,6 +5,42 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+### 2026-09-24 — claude-code — P18: мастер `memnotsafe go` (claude/arc1-module-cycle-break-y32txl)
+
+- задача: интерактивный мастер `go` — UX-оболочка над probe/preflight/run/
+  threat-report; движок и контракты команд не трогать, тексты сценариев не
+  открывать, каталог из метаданных
+- логика в НОВОМ `src/memnotsafe/selfserve.py`: `.env` (собственный разбор
+  KEY=VALUE, окружение сильнее файла, наружу только имена), каталог из метаданных
+  (`build_catalog`/`group_by_adapter`, имена из ATTACK_REGISTRY.metadata.name +
+  FAMILY_PLAYBOOK, контроль по имени `*protected*`/`*control*`), карточка «до»
+  (стенд/сценарий/попытки/потолок судьи из `resolve_max_calls`/расход с честным
+  UNKNOWN), `run_preflight` (красный = `[БЛОКЕР] check_id`, не traceback),
+  подтверждение, штатный `run` (инжектируется `run_command=cmd_run`, тихо), строка
+  на попытку с таймерами P12 из `attempts.jsonl`, `write_threat_report`, карточка
+  «после» (штамп + пути), «Открыть?» только по y; `--yes` — тихий режим; `--ping`
+  — отдельный ПЛАТНЫЙ шаг судьи по явному согласию, в бесплатный preflight не
+  входит; UTF-8 в точке входа (прецедент CARD-P14-fix-stdout), ASCII-имена
+  автоген run-каталогов, Ctrl+C → выход 130
+- cli.py: одна аддитивная врезка (маркер CARD-P18, ленивый импорт selfserve,
+  `run_command=cmd_run` и `load_campaign` параметрами — selfserve не импортирует
+  cli, прецедент P16); контракты существующих команд не тронуты
+- core/config.py: аддитивный опциональный `title:` в схеме сценария (default None,
+  старые YAML — как раньше; ключ в YAML не расставлялся — только поддержка + тест)
+- отклонение: ветка `claude/arc1-module-cycle-break-y32txl` (закреплена окружением)
+  вместо `feat/p18-selfserve-go` из карты
+- проверки (venv python 3.12.3, `pip install -e .`, PYTHONIOENCODING=utf-8,
+  `-p no:cacheprovider`): RED на базе 3861a32 — `tests/test_selfserve.py`
+  collection ImportError (модуля `memnotsafe.selfserve`, поля `title`, команды
+  `go` на базе нет); targeted `tests/test_selfserve.py` — 14 passed; полный suite
+  `python -m pytest tests -q` — 1371 passed / 1 failed (единственный failed —
+  test_demo_launcher, Windows-only путь с обратным слэшем в POSIX-контейнере, вне
+  диффа P18; = 1358 базовых + 14 новых, на каноне Windows 1372/0); git diff
+  --check чист, секретов 0
+- NOTICED (не делал): MAP.md строку `cli.py` можно дополнить `go` — вне минимального
+  диффа; `--ping` живой вызов судьи офлайн-тестами не покрыт (только гейтинг), т.к.
+  live запрещён; в существующие сценарии `title:` не проставлен (только поддержка)
+
 ### 2026-09-24 — claude-code — ARC-2: расщепление core/campaign.py (claude/arc1-module-cycle-break-y32txl)
 
 - задача: campaign.py (751 строка) держал последние ленивые рёбра core → периферия
