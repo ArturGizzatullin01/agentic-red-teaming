@@ -64,6 +64,11 @@ class Scenario:
     victim: ActorConfig
     attack_family: str
     repetitions: int = 1
+    # P18 (CARD-P18): человекочитаемое имя сценария для каталога мастера `go`.
+    # Аддитивно и опционально: default None, старые YAML без ключа `title:`
+    # грузятся как раньше; ключ в существующие сценарии не расставляется —
+    # мастер падает на имя семейства из реестра, если title не задан.
+    title: str | None = None
     stop_on_success: bool = False
     trigger_override: str | None = None
     oracle_overrides: dict[str, Any] = field(default_factory=dict)
@@ -118,6 +123,7 @@ def load_scenario(path: str | Path) -> Scenario:
         victim=ActorConfig(user_id=str(victim_raw["user_id"])),
         attack_family=attack["family"],
         repetitions=int((raw.get("metrics") or {}).get("repetitions", 1)),
+        title=(str(raw["title"]) if raw.get("title") is not None else None),
         stop_on_success=bool((raw.get("metrics") or {}).get("stop_on_success", False)),
         trigger_override=(raw.get("trigger") or {}).get("prompt"),
         oracle_overrides=raw.get("oracle", {}) or {},
