@@ -22,6 +22,12 @@ memnotsafe = "memnotsafe.cli:main"
 where = ["src"]
 include = ["memnotsafe*"]
 
+# P19 (часть 2): стартовый набор сценариев пилота едет в wheel как package data
+# пакета memnotsafe.pilot_scenarios — из голого pip install репозиторный
+# scenarios/ недоступен, а pilot читает их через importlib.resources.
+[tool.setuptools.package-data]
+"memnotsafe.pilot_scenarios" = ["*.yaml"]
+
 [tool.pytest.ini_options]
 # src-layout: пакет живёт в src/, поэтому тесты запускаются без установки пакета.
 pythonpath = ["src"]

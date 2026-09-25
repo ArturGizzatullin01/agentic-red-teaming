@@ -24,35 +24,14 @@ em-dash вынесен из f-строки в переменную) — их н�
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 from memnotsafe.reporting import threat_report as mod
 
-
-def _fstring_expr_backslash_offenders(path: Path) -> list[tuple[int, str]]:
-    """Список (строка, исходный сегмент) для каждого выражения f-строки, чей
-    текст содержит бэкслэш — то, что запрещено грамматикой до PEP 701.
-
-    Обходим ВЕСЬ модуль (ast.walk рекурсивен, вложенные f-строки и format_spec
-    тоже попадают), берём исходный сегмент именно выражения — литеральные части
-    f-строки, где бэкслэш всегда был легален, не проверяем."""
-    src = path.read_text(encoding="utf-8")
-    tree = ast.parse(src, filename=str(path))
-    offenders: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.JoinedStr):
-            continue
-        for part in node.values:
-            if not isinstance(part, ast.FormattedValue):
-                continue
-            for sub in (part.value, part.format_spec):
-                if sub is None:
-                    continue
-                seg = ast.get_source_segment(src, sub)
-                if seg and "\\" in seg:
-                    offenders.append((getattr(sub, "lineno", -1), seg))
-    return offenders
+# P19 (часть 1): сканер FIX-E вынесен в общий хелпер и обобщён на весь пакет.
+# Здесь переиспользуем его — поведение этого замка (ровно threat_report.py)
+# не меняется.
+from tests.test_py311_fstring_hygiene import fstring_expr_backslash_offenders
 
 
 def test_threat_report_has_no_backslash_in_fstring_expression():
@@ -60,7 +39,7 @@ def test_threat_report_has_no_backslash_in_fstring_expression():
     на Python <3.12 → модуль неимпортируем → threat-report мёртв на демо. База:
     ровно один такой узел (строка 1396); после FIX-E: ни одного."""
     path = Path(mod.__file__)
-    offenders = _fstring_expr_backslash_offenders(path)
+    offenders = fstring_expr_backslash_offenders(path)
     assert offenders == [], (
         "выражение(я) f-строки содержат бэкслэш — модуль неимпортируем на "
         f"Python <3.12 (грамматика до PEP 701): {offenders}"

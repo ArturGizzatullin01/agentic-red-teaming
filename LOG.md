@@ -6,6 +6,42 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-25 — claude-code — P19: PEP 701 замок на весь пакет + wheel со сценариями пилота (для пилота Влада)
+
+- база: main = `9043476`; ветка сессии `claude/dazzling-goodall-l7hww1` (карта
+  просила `feat/p19-py311-smoke-wheel` — расхождение отмечено в PR). НЕ атаки, НЕ live
+- ALLOWLIST соблюдён: `pyproject.toml`, `pilot_pack.py` (только резолвинг),
+  `tests/test_py311_fstring_hygiene.py` (new), `test_pilot_pack.py`,
+  `test_threat_report_fstring_py311.py` (переиспользование хелпера) + новый
+  package data `src/memnotsafe/pilot_scenarios/`. MANIFEST.in НЕ понадобился
+  (package-data кладёт .yaml в wheel). Сценарии не редактировались (копии байт-в-байт)
+- **Часть 1** — обобщён AST-сканер FIX-E на весь `src/memnotsafe/`: общий хелпер
+  `fstring_expr_backslash_offenders` в новом тесте; `test_all_package_modules_*`
+  падает, если хоть одно выражение FormattedValue (вкл. format_spec и вложенные
+  f-строки) содержит бэкслэш. FIX-E-тест теперь переиспользует хелпер (поведение
+  замка на threat_report.py не изменено). Точность позиций — на 3.12+ (интерпретатор
+  suite); на 3.11 реальный дефект и так не даёт ast.parse. RED показан на
+  искусственном дефектном модуле (в tmp_path сканер ловит бэкслэш; отдельно —
+  временный дефектный модуль в src → whole-tree gate краснеет → удалён → зелено)
+- **Часть 2** — стартовый набор сценариев пилота упакован в wheel как package
+  data пакета `memnotsafe.pilot_scenarios` (4 файла, копии `scenarios/<name>.yaml`
+  байт-в-байт). `pilot_pack._resolve_pack_path` резолвит: importlib.resources →
+  fallback на repo-путь (dev). Контракт CLI не менялся. Единый источник истины
+  защищён `test_packaged_pilot_scenarios_match_repo_originals` (дрейф = красный).
+  Замки: ресурс виден через importlib.resources; pilot резолвит сценарий с
+  подменённым (мёртвым) `_REPO_ROOT` — RED→GREEN
+- проверка wheel: `pip wheel . --no-deps` → 4 сценария внутри
+  `memnotsafe/pilot_scenarios/`; офлайн-установка (`--no-index --no-deps`) в свежий
+  venv → importlib.resources видит все 4 БЕЗ каталога репозитория
+- проверки: RED→GREEN по каждой части (per-test, стэш src + скрытие пакета);
+  полный `pytest tests/` — **1491 passed** на Python 3.12 (1 пред-существующий
+  провал `test_demo_launcher.py` — Windows-разделитель `\` на Linux, вне P19).
+  `git diff --check` чист, секретов ноль
+- НЕ самопринимаю: приёмка A0
+- открытые/пред-существующие: `test_demo_launcher.py` (Windows-путь на POSIX) —
+  платформенный артефакт канона, не связан с P19
+
+
 ### 2026-09-25 — claude-code — FIX-E: f-string backslash ломает импорт threat_report на Python <3.12 (fix/qa-e-fstring-backslash)
 
 - дефект (просьба владельца, блокер демо Влада): `reporting/threat_report.py:1396`
