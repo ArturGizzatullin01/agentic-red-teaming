@@ -1392,8 +1392,12 @@ def _steps_html(c: CaseThreat) -> str:
         )
     # Причины оракулов — данные прогона на языке прогона: доступны по клику,
     # первый экран остаётся английским хромом + цитаты.
+    # em-dash пустой причины вынесен из выражения f-строки: бэкслэш внутри
+    # `{...}` — SyntaxError на Python <3.12 (грамматика до PEP 701), из-за чего
+    # модуль неимпортируем и threat-report не открывается на демо (FIX-E).
+    muted_dash = '<span class="muted">—</span>'
     reasons = "".join(
-        f"<tr><td>{_esc(v.label)}</td><td>{_esc(v.reason) if v.reason else '<span class=\"muted\">—</span>'}</td></tr>"
+        f"<tr><td>{_esc(v.label)}</td><td>{_esc(v.reason) if v.reason else muted_dash}</td></tr>"
         for v in c.stages if v.applicable
     )
     return ('<ol class="steps">' + "\n".join(items) + "</ol>"
