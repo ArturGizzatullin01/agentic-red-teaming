@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from memnotsafe.reporting.findings import Finding
+from memnotsafe.reporting.severity_map import UNRATED
 
 _SEVERITY_TO_SARIF_LEVEL = {
     "CRITICAL": "error",
@@ -14,6 +15,9 @@ _SEVERITY_TO_SARIF_LEVEL = {
     "MEDIUM": "warning",
     "LOW": "note",
     "INFO": "note",
+    # FIX-B: семья без канонической severity → информационный уровень, а не
+    # молчаливый warning (иначе неоценённая находка читалась бы как MEDIUM).
+    UNRATED: "note",
 }
 
 

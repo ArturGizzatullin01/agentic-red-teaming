@@ -68,6 +68,49 @@ project: memnotsafe
   budget-ledger.jsonl с известным числом target_call)
 - открытые/пред-существующие: `test_demo_launcher.py` падает на Linux (Windows-разделитель
   `\` в demo.cmd) — платформенный артефакт канона (Windows), вне FIX-PACK-2
+### 2026-09-25 — claude-code — FIX-B: единый источник severity (fix/qa-b-unified-severity)
+
+- дефект (перепроверен): `reporting/findings.py::_SEVERITY_BY_FAMILY` знал 4
+  семьи, остальные 18 молча падали в MEDIUM (`.get(f,"MEDIUM")`) и так уходили в
+  SARIF/JSON — расходясь с каноном эталона `threat_report.IMPACT_SEVERITY` по
+  `FAMILY_PLAYBOOK[family].impact`. Одна находка = CRITICAL в threat-report, MEDIUM
+  в SARIF (global_policy_injection; tool_route_hijack — HIGH vs MEDIUM)
+- цикл: `threat_report` импортирует `findings` (:119) + инвариант ацикличности
+  `tests/test_import_layers.py` (SCC>1 запрещён, граф по AST ловит и ленивые
+  импорты) → findings НЕ может импортировать threat_report ни на каком уровне.
+  Поэтому канон вынесен в НОВЫЙ лист `reporting/severity_map.py` (импортирует
+  только typing) — его берут и findings, и threat_report, без цикла
+- (1) `severity_map.py`: `IMPACT_SEVERITY`/`_SEVERITY_RANK`/`FAMILY_PLAYBOOK`
+  перенесены дословно из threat_report + `impact_severity_for_family(family)`
+  (severity по канону; None = семья без записи) + сентинел `UNRATED`
+- (2) `threat_report.py`: таблицы заменены импортом-реэкспортом из severity_map
+  (внешние читатели `tr.FAMILY_PLAYBOOK`/`IMPACT_SEVERITY` — selfserve, тесты —
+  видят их по-прежнему; `_severity`/`_observed_impact` не тронуты)
+- (3) `findings.py`: удалён `_SEVERITY_BY_FAMILY`; severity SUCCESS-находки =
+  `impact_severity_for_family(display_key)`; None → `UNRATED` с причиной в
+  `status_reason`, НЕ молчаливый MEDIUM. Композит/ASR не тронуты
+- (4) `sarif.py`: `UNRATED → level=note` (иначе неоценённая находка читалась бы
+  как warning≈MEDIUM)
+- изменились ровно 2 семьи (обе были занижены): global_policy_injection
+  MEDIUM→CRITICAL, tool_route_hijack MEDIUM→HIGH; прочие 20 не изменились; все 22
+  семьи реестра есть в FAMILY_PLAYBOOK (UNRATED — защитная ветка для будущих семей)
+- замок `tests/test_severity_single_source.py` (25 тестов): сверка severity
+  каждой находки с каноном эталона (параметризовано по всему ATTACK_REGISTRY);
+  tool_route_hijack → SARIF error/HIGH; cross-user → CRITICAL в обоих выходах;
+  неизвестная семья → UNRATED/note. Канон в тесте берётся из threat_report-таблиц
+  (есть на базе и после) → RED краснеет ПО СУТИ
+- DEVIATION: карта предлагала «findings берёт правило вызовом/импортом из
+  threat_report». Прямой импорт НЕВОЗМОЖЕН (цикл + test_import_layers). Реализовано
+  эквивалентно через общий лист severity_map — это и есть «вынос общего доступа»
+  из ALLOWLIST, просто отдельным модулем (иначе SCC-инвариант красный)
+- DEVIATION: новый файл `reporting/severity_map.py` — вне буквального списка
+  ALLOWLIST (findings/threat_report/sarif/tests/LOG), но требуется ацикличностью;
+  MAP.md строка 39 стоит дополнить `severity_map` (и там уже нет `sarif`) — не
+  трогал, MAP вне ALLOWLIST, оставил A0
+- DEVIATION: база `bf56518` (свежий main), FIX-E ещё не влит — пересечений с ним нет
+- проверки (по разу): RED на базе bf56518 → 4 failed / 21 passed; targeted →
+  146 passed; полный suite → 1469 passed / 0 (= 1444 базовых + 25 новых);
+  git diff --check чист; секретов 0
 
 
 ### 2026-09-25 — claude-code — FIX-A: мягкое доказательство ≠ доказанное без судьи (fix/qa-a-adoption-channel)
