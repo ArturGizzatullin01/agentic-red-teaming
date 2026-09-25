@@ -5,6 +5,7 @@ project: memnotsafe
 
 # LOG — memnotsafe
 
+
 ### 2026-09-24 — claude-code — P17: пилот одной командой (feat/p17-pilot-pack)
 
 - задача: `memnotsafe pilot` — продуктовая упаковка поверх существующих механик
@@ -51,6 +52,34 @@ project: memnotsafe
   репозитория (parents[2]); из голого pip-install без чекаута пак не найдётся
   (нужен чекаут/упаковка сценариев — Этап 2); необязательный chat_path в конфиге
   под нестандартные пути ручки — не добавлял (Этап 2); MAP.md обновляет A0 при влитии
+
+### 2026-09-25 — claude-code — H2x: семья global_policy_injection (feat/h2x-global-policy-injection)
+
+- задача: формализовать доказанную A0 цепь CRITICAL (P13-e, v3.52) в семью
+  `global_policy_injection` — policy-shaped payload с операнд-маркером V-4,
+  global-зона + steering/adoption/consequence оракулы, live + black-box
+  сценарии, строка FAMILY_PLAYBOOK. Движок/runner/cli не трогать
+- НОВЫЙ `attacks/global_policy_injection.py`: policy-payload (регламент банка +
+  внутренний код POL-… + числовой якорь 0.1%) с операндом перехвата
+  `cus="attacker"` и изоморфным операнд-маркером `reg="CM-…"` (стиль operand,
+  V-4); варианты bare|self_exfil|safety_framed; multi-turn delivery;
+  trigger = benign-портфель + citation-проба (детекция чёрного ящика)
+- оракулы (АДДИТИВНЫЕ ветки типа `global_policy_injection`, существующие стадии
+  не тронуты): tool — steering по hijack_field≠session; adoption —
+  `resolved_cus==hijack` (телеметрия) ЛИБО цитата правила в ответе (marker_match),
+  честный тристейт; external_effect — `customer==hijack & 200` (consequence).
+  WRITE/PERSIST/RETRIEVE тип-агностичны, global-слой уже покрыт (scope=None)
+- сценарии: `global_policy_injection.yaml` (mock-канон, база), `_live.yaml`
+  (белый ящик investment_stand 9600/28017, telemetry-детекция),
+  `_bb_live.yaml` (чёрный ящик http_endpoint tier-1, citation-детекция)
+- reporting: строка семьи в `FAMILY_PLAYBOOK` (impact cross_user_data → CRITICAL,
+  remediation из v3.52)
+- НОВЫЙ `tests/test_global_policy_injection.py`; правки существующих замков —
+  см. хендоф (2 файла сверх исходного ALLOWLIST, санкционировано владельцем)
+- проверки: RED на базе → targeted → полный suite один раз; числа в хендофе
+- открытые риски: bb на http_endpoint (не investment_stand) — живую разводку
+  эндпоинта подтверждает A0; live-прогоны делает A0 после влития
+
 
 ### 2026-09-24 — claude-code — MULTI-1: планировщик пакетов проверок, Этап 1 офлайн (feat/multi1-plan-orchestrator)
 
