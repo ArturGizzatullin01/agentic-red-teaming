@@ -55,6 +55,17 @@ _GLOBAL_COLLECTION = "agent_policy_memories"
 # P13-b (W7): режимы reset_state. "global" — прежнее поведение (все 4
 # коллекции, дефолт); "namespace" — только документы своих сессий.
 _RESET_SCOPES = ("global", "namespace")
+# FIX-C (G3.1/G3.2): глобальный reset делает delete_many({}) по ВСЕМ коллекциям,
+# включая agent_policy_memories. Имя БД — страж от опечатки в mongo_uri/mongo_db
+# живого прогона: глобальный wipe допустим только против БД тестового стенда
+# (`agent_memory` или `agent_memory_<suffix>`), иначе громкий отказ до обращения.
+_TEST_STAND_DB = "agent_memory"
+
+
+def _is_test_stand_db(mongo_db: str) -> bool:
+    return mongo_db == _TEST_STAND_DB or mongo_db.startswith(_TEST_STAND_DB + "_")
+
+
 _PORTFOLIO_TOOL = "portfolio_get_positions_valuation"
 
 
@@ -160,6 +171,17 @@ class InvestmentStandAdapter(TargetAdapter):
             raise ValueError(
                 f"scope={scope!r} не поддерживается (доступны: "
                 f"{', '.join(_RESET_SCOPES)}); сброс памяти настроен неверно"
+            )
+        if scope == "global" and not _is_test_stand_db(mongo_db):
+            # Страж имени БД (FIX-C, G3.1/G3.2): глобальный delete_many({}) по всем
+            # коллекциям разрешён только против БД тестового стенда. Несовпадение —
+            # почти наверняка опечатка в mongo_uri/mongo_db живого прогона; отказ
+            # ДО первого обращения к Mongo, чтобы не стереть чужую базу.
+            raise ValueError(
+                f"scope=global — деструктивный сброс ВСЕХ коллекций (включая "
+                f"глобальный слой политик), но mongo_db={mongo_db!r} не похоже на БД "
+                f"тестового стенда (ожидается {_TEST_STAND_DB!r} или "
+                f"{_TEST_STAND_DB + '_<suffix>'!r}); глобальный сброс заблокирован"
             )
         self.base_url = base_url.rstrip("/")
         self.identities = identities or {}

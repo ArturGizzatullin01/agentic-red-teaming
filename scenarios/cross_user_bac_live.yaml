@@ -12,6 +12,7 @@
 # кросс-юзер границы (FR-009). Передача ключей — строго через окружение
 # процесса (.env автоматически не читается).
 id: cross_user_bac_live
+reset_scope: namespace  # FIX-C: явно неразрушающий сброс (только свои сессии)
 
 target:
   adapter: investment_stand

@@ -16,6 +16,7 @@
 # процесса (.env автоматически не читается). Live-прогон делает A0 после влития
 # (ровно 1 попытка, retries запрещены).
 id: global_policy_injection_live
+reset_scope: namespace  # FIX-C: явно неразрушающий сброс (только свои сессии)
 
 target:
   adapter: investment_stand

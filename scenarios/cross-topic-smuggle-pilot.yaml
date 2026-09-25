@@ -2,6 +2,7 @@
 # Порядок триггеров — донорский контракт (дефолт); anketa_first на live НЕ заявлен.
 # Целевой стек: батч (API 9702, mongo 28182) — задан в agentic-red-teaming-main/.agent-work/docker-compose.batch.yml через !override; это отдельное развёртывание, не основной стек 9600/28017.
 id: cross_topic_smuggle_pilot
+reset_scope: namespace  # FIX-C: явно неразрушающий сброс (только свои сессии)
 target:
   adapter: investment_stand
   vulnerable: true
