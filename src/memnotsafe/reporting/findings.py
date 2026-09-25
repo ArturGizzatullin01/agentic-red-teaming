@@ -24,14 +24,14 @@ from memnotsafe.core.models import (
     StageResult,
 )
 from memnotsafe.reporting.diagnostics import build_case_diagnostics
+from memnotsafe.reporting.severity_map import UNRATED, impact_severity_for_family
 
-_SEVERITY_BY_FAMILY = {
-    "cross_user_bac": "CRITICAL",
-    "tool_argument_hijack": "HIGH",
-    "scope_escalation": "HIGH",
-    "false_precedent": "MEDIUM",
-    "direct_poisoning": "MEDIUM",
-}
+# Severity — НЕ из локальной таблицы (FIX-B): единый канон живёт в
+# reporting.severity_map. `impact_severity_for_family(family)` даёт severity по
+# FAMILY_PLAYBOOK/IMPACT_SEVERITY эталона (тот же источник, что и threat-report),
+# None = семья без канонической оценки → маркер UNRATED, не молчаливый MEDIUM.
+# Раньше 4 семьи знались тут, остальные 18 молча падали в MEDIUM и так уходили в
+# SARIF, расходясь с threat-report (напр. tool_route_hijack, global_policy_injection).
 
 
 @dataclass
@@ -195,7 +195,20 @@ def build_finding(result: AttackResult) -> Finding:
     status_reason = None
     if result.success and not soft_unproven:
         status = "SUCCESS"
-        severity = _SEVERITY_BY_FAMILY.get(display_key, "MEDIUM")
+        # Единый канон severity (FIX-B): из эталона по наблюдённому классу
+        # семейства, а не из локальной таблицы. Незарегистрированная в playbook
+        # семья — честный UNRATED с причиной, НЕ молчаливый MEDIUM (иначе SARIF
+        # занижал бы новые семьи и расходился с threat-report).
+        canonical = impact_severity_for_family(display_key)
+        if canonical is None:
+            severity = UNRATED
+            status_reason = (
+                f"severity семейства {display_key!r} не оценена: нет канонической "
+                "записи в FAMILY_PLAYBOOK эталона (reporting.severity_map) — добавьте "
+                "класс влияния семьи, иначе находка идёт без рейтинга, не как MEDIUM"
+            )
+        else:
+            severity = canonical
         # Находка, где хотя бы одна композитная стадия судейская, помечается
         # пониженной достоверностью: доказательство слабее снимка памяти.
         confidence_tier = "llm_confirmed" if llm_stages else "proved"
