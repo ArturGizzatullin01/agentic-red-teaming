@@ -109,6 +109,24 @@ from pathlib import Path
 ORCHESTRATOR_SUMMARY_SCHEMA_VERSION = 1
 WORKER_INDEX_ENV = "MEMNOTSAFE_WORKER_INDEX"
 LEASE_DIR_ENV = "MEMNOTSAFE_LEASE_DIR"
+# FIX-PACK-2 D6: привязка дочернего прогона к стенду (record-only, для
+# атрибуции). Дочерний CLI эти переменные ИГНОРИРУЕТ — принципалы берутся из
+# профиля плана, а не из env; поле нужно, чтобы сводка знала, на каком стенде
+# (с какими принципалами) выполнилось задание.
+BATCH_STAND_ID_ENV = "MEMNOTSAFE_BATCH_STAND_ID"
+BATCH_PRINCIPALS_ENV = "MEMNOTSAFE_BATCH_PRINCIPALS"
+
+
+def batch_child_env(base_env: dict[str, str], stand) -> dict[str, str]:
+    """env дочернего прогона со стенд-атрибуцией (FIX-PACK-2 D6, record-only):
+    КОПИЯ base_env + MEMNOTSAFE_BATCH_STAND_ID / MEMNOTSAFE_BATCH_PRINCIPALS
+    (принципалы через запятую). Дочерний CLI эти переменные НЕ читает —
+    принципалы берутся из профиля плана; поле нужно, чтобы фиксировать, на каком
+    стенде выполнилось задание. base_env не мутируется."""
+    env = dict(base_env)
+    env[BATCH_STAND_ID_ENV] = stand.id
+    env[BATCH_PRINCIPALS_ENV] = ",".join(stand.principals)
+    return env
 
 # P13-a-r3: платформенная вилка мьютекса каталога замков (тесты — Windows-хост,
 # live — Linux-контейнеры). Оба примитива — stdlib; замок держится на
@@ -468,7 +486,12 @@ async def orchestrate_plan(plan_path: str | Path, *, output: str | Path) -> tupl
     orchestrate_campaign) — и дефолтной проверкой чистоты (hook clean_check
     профиля). Пишет summary.json + batch-state.json. rc: 0, если ВСЕ задания
     выполнились (COMPLETED); иначе 1 (новых exit-кодов нет). Движок стадий и
-    старый orchestrate --scenario не затрагиваются."""
+    старый orchestrate --scenario не затрагиваются.
+
+    FIX-PACK-2: расход задания — ФАКТ из budget-ledger.jsonl (D1); сводка
+    пишется даже при исключении воркера, недовыполненные помечаются UNKNOWN
+    (D3); стенд/принципалы пробрасываются дочернему процессу env-ом и
+    попадают в сводку (D6, record-only)."""
     import subprocess
 
     from memnotsafe.core import plan as plan_mod
@@ -484,13 +507,17 @@ async def orchestrate_plan(plan_path: str | Path, *, output: str | Path) -> tupl
         existing = os.environ.get("PYTHONPATH", "")
         child_env["PYTHONPATH"] = str(src_root) + (os.pathsep + existing if existing else "")
 
-    async def _run_child(scenario: str, target: str, iterations: int, run_dir: Path) -> tuple[int | None, dict | None, str]:
+    async def _run_child(scenario: str, target: str, iterations: int, run_dir: Path,
+                         stand: "plan_mod.Stand | None" = None) -> tuple[int | None, dict | None, str]:
         argv = [sys.executable, "-m", "memnotsafe.cli", "campaign",
                 "--scenario", str(scenario), "--target", str(target),
                 "--iterations", str(iterations), "--output", str(run_dir), "--quiet"]
+        # D6: пробрасываем стенд/принципалы дочернему процессу env-ом (record-only;
+        # дочерний CLI их не читает). Копируем env только когда есть что добавить.
+        env = batch_child_env(child_env, stand) if stand is not None else child_env
         try:
             proc = await asyncio.create_subprocess_exec(
-                *argv, env=child_env,
+                *argv, env=env,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
             )
             _, stderr = await proc.communicate()
@@ -503,24 +530,34 @@ async def orchestrate_plan(plan_path: str | Path, *, output: str | Path) -> tupl
 
     async def _runner(job: "plan_mod.Job", stand: "plan_mod.Stand", out: Path) -> "plan_mod.JobRun":
         run_dir = out / job.id
-        rc, campaign, stderr_text = await _run_child(job.scenario, stand.target, job.iterations, run_dir)
+        rc, campaign, stderr_text = await _run_child(job.scenario, stand.target, job.iterations, run_dir, stand)
         n, m, value = plan_mod.asr_from_campaign(campaign)
+        # D1: расход — ФАКТ из budget-ledger.jsonl (executed target_call), а не
+        # знаменатель ASR (число КЕЙСОВ). Леджера нет → грубая оценка m с пометкой.
+        actual, estimate = plan_mod.resolve_target_calls_actual(str(run_dir), m)
         run = plan_mod.JobRun(
             job_id=job.id, stand_id=stand.id,
             outcome=plan_mod.classify_outcome(rc, campaign, stderr_text),
             experiment_id=plan_mod.read_experiment_id(run_dir),
             asr_n=n, asr_m=m, asr_value=value,
-            target_calls_actual=(m if isinstance(m, int) else None),
+            target_calls_actual=actual, target_calls_estimate=estimate,
             run_dir=str(run_dir), control_scenario=job.control,
+            stand_principals=stand.principals,   # D6: атрибуция прогона к стенду
         )
         if job.control:
             ctrl_dir = out / f"{job.id}-control"
-            crc, ccamp, cerr = await _run_child(job.control, stand.target, job.iterations, ctrl_dir)
+            crc, ccamp, cerr = await _run_child(job.control, stand.target, job.iterations, ctrl_dir, stand)
             run.control_outcome = plan_mod.classify_outcome(crc, ccamp, cerr)
             run.control_run_dir = str(ctrl_dir)
             _cn, cm, _cv = plan_mod.asr_from_campaign(ccamp)
-            if isinstance(run.target_calls_actual, int) and isinstance(cm, int):
-                run.target_calls_actual += cm
+            # D1: расход контроля — тоже факт из его леджера (симметрично атаке).
+            c_actual, c_est = plan_mod.resolve_target_calls_actual(str(ctrl_dir), cm)
+            if isinstance(c_actual, int):
+                run.target_calls_actual = (
+                    c_actual if not isinstance(run.target_calls_actual, int)
+                    else run.target_calls_actual + c_actual
+                )
+            run.target_calls_estimate = bool(run.target_calls_estimate or c_est)
         return run
 
     def _clean_checker(stand: "plan_mod.Stand") -> "plan_mod.CleanResult":
@@ -536,7 +573,28 @@ async def orchestrate_plan(plan_path: str | Path, *, output: str | Path) -> tupl
         return (plan_mod.CleanResult(status="clean") if proc.returncode == 0
                 else plan_mod.CleanResult(status="dirty", detail=f"clean_check rc={proc.returncode}"))
 
-    runs = await plan_mod.run_plan(the_plan, output, runner=_runner, clean_checker=_clean_checker)
-    summary_path, _state_path = plan_mod.write_batch(the_plan, output, runs)
+    # FIX-PACK-2 D3: краш/исключение воркера НЕ должен обрывать пакет без сводки.
+    # run_plan наполняет ИМЕННО этот `runs` (тот же объект) — при исключении мы
+    # видим частичный прогресс, помечаем недовыполненные задания UNKNOWN
+    # (detail = тип исключения), ВСЁ РАВНО пишем summary.json + batch-state.json,
+    # затем пробрасываем исключение дальше (rc-путь при этом не исполняется).
+    runs: dict[str, plan_mod.JobRun] = {}
+    summary_path = output / "summary.json"
+    interrupted: str | None = None
+    try:
+        await plan_mod.run_plan(the_plan, output, runner=_runner,
+                                clean_checker=_clean_checker, results=runs)
+    except BaseException as exc:  # noqa: BLE001 — метка исхода + проброс, не глотаем
+        interrupted = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        for job in the_plan.jobs:
+            if job.id not in runs:
+                runs[job.id] = plan_mod.JobRun(
+                    job_id=job.id, stand_id=None, outcome=plan_mod.OUTCOME_UNKNOWN,
+                    detail=(f"пакет прерван исключением: {interrupted}" if interrupted
+                            else "задание не попало в результаты планировщика"),
+                )
+        plan_mod.write_batch(the_plan, output, runs)
     rc = 0 if runs and all(r.outcome == plan_mod.OUTCOME_COMPLETED for r in runs.values()) else 1
     return summary_path, rc

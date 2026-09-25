@@ -37,7 +37,18 @@ from typing import Any
 
 import yaml
 
+from memnotsafe.core.ledger import (
+    OP_TARGET_CALL,
+    PHASE_EXECUTED,
+    LedgerError,
+    read_ledger,
+)
+
 BATCH_SUMMARY_SCHEMA_VERSION = 1
+
+# Имя файла бюджетного леджера в run-каталоге дочернего прогона
+# (core/ledger.py, campaign.py) — источник ФАКТА вызовов цели (FIX-PACK-2 D1).
+LEDGER_FILE = "budget-ledger.jsonl"
 
 # ---- Таксономия исходов задания (различимы, скрытых повторов нет) -----------
 OUTCOME_COMPLETED = "completed"                 # дочерний прогон завершился, есть campaign.json
@@ -102,11 +113,13 @@ class JobRun:
     asr_m: int | None = None           # всего попыток (знаменатель)
     asr_value: float | None = None     # end_to_end_asr; None = UNKNOWN (≠ 0)
     target_calls_committed: int = 0
-    target_calls_actual: int | None = None
+    target_calls_actual: int | None = None    # ФАКТ из леджера (D1); None = UNKNOWN
+    target_calls_estimate: bool = False        # True = actual — грубая оценка, леджера не было (D1)
     run_dir: str | None = None
     control_scenario: str | None = None
     control_outcome: str | None = None
     control_run_dir: str | None = None
+    stand_principals: tuple[str, ...] | None = None  # принципалы стенда прогона (D6, атрибуция)
     detail: str | None = None
 
 
@@ -176,9 +189,16 @@ def load_plan(path: str | Path) -> Plan:
 def validate_plan(plan: Plan, *, scenario_exists: Callable[[str], bool] | None = None) -> None:
     """Стоп ДО первого запуска с конкретной причиной (PlanError). Проверяет:
     пустые обязательные поля; неизвестный сценарий/контроль/зависимость;
-    целостность id; общую isolation_group у независимых (непересекающихся по
-    принципалам) стендов; пересечение принципалов у стендов из разных групп
-    (они бы шли параллельно и затёрли общий scope); циклы зависимостей."""
+    целостность id; циклы зависимостей.
+
+    FIX-PACK-2 D5: изоляция по принципалам БОЛЬШЕ НЕ валидируется как ошибка.
+    `isolation_group` — маркер ОБЩЕГО РЕСУРСА (одна Mongo → одна группа →
+    сериализация планировщиком), а не утверждение о независимости стендов.
+    Две независимые копии стенда с ОДНИМИ принципалами легальны и идут
+    параллельно; общая группа при непересекающихся принципалах тоже легальна.
+    Пересечение принципалов у стендов из РАЗНЫХ групп теперь неблокирующее
+    предупреждение сводки (`plan_warnings`), не PlanError. Гейт параллелизма
+    (общая группа ≤1 активного) не изменён."""
     exists = scenario_exists if scenario_exists is not None else (lambda s: Path(s).exists())
 
     # --- пустые обязательные поля / базовая форма
@@ -233,23 +253,9 @@ def validate_plan(plan: Plan, *, scenario_exists: Callable[[str], bool] | None =
             if dep == j.id:
                 raise PlanError(f"задание {j.id!r}: requires ссылается само на себя")
     _assert_no_requires_cycle(plan)
-
-    # --- изоляция: isolation_group ⟺ пересечение принципалов (попарно)
-    for a, b in combinations(plan.stands, 2):
-        overlap = set(a.principals) & set(b.principals)
-        same_group = a.isolation_group == b.isolation_group
-        if same_group and not overlap:
-            raise PlanError(
-                f"стенды {a.id!r} и {b.id!r} делят isolation_group {a.isolation_group!r}, но их "
-                f"принципалы не пересекаются ({list(a.principals)} vs {list(b.principals)}) — "
-                "независимые стенды не должны делить группу (дайте разные группы)"
-            )
-        if not same_group and overlap:
-            raise PlanError(
-                f"стенды {a.id!r} и {b.id!r} в разных isolation_group "
-                f"({a.isolation_group!r} vs {b.isolation_group!r}), но их принципалы пересекаются "
-                f"({sorted(overlap)}) — параллельный прогон затёр бы общий scope"
-            )
+    # FIX-PACK-2 D5: изоляция по принципалам больше не блокирует план — см.
+    # docstring и plan_warnings (пересечение принципалов у РАЗНЫХ групп —
+    # предупреждение сводки, не ошибка).
 
 
 def _assert_no_requires_cycle(plan: Plan) -> None:
@@ -302,6 +308,42 @@ def asr_from_campaign(campaign: dict | None) -> tuple[int | None, int | None, fl
             float(value) if isinstance(value, (int, float)) else None)
 
 
+def count_executed_target_calls(run_dir: str | Path | None) -> int | None:
+    """ФАКТ вызовов цели из `<run_dir>/budget-ledger.jsonl` (FIX-PACK-2 D1):
+    число записей operation=target_call, phase=executed. Одна попытка кампании
+    посылает цели несколько вызовов (baseline/delivery/trigger/контроль), поэтому
+    знаменатель ASR (число КЕЙСОВ) занижает расход — его нельзя выдавать за факт.
+
+    Возвращает None, когда факт недоступен: леджера нет (исторический прогон),
+    файл не читается или строка повреждена. Вызывающий откатывается на грубую
+    оценку и помечает её (`estimate=True`) — выдуманного факта не появляется.
+    Читается каноническим `ledger.read_ledger`; его LedgerError (битая строка/
+    несовместимая schema_version) НЕ роняет сводку пакета — тоже откат к оценке."""
+    if not run_dir:
+        return None
+    path = Path(run_dir) / LEDGER_FILE
+    if not path.exists():
+        return None
+    try:
+        entries = read_ledger(path)
+    except (LedgerError, OSError):
+        return None
+    return sum(1 for e in entries
+               if e.operation == OP_TARGET_CALL and e.phase == PHASE_EXECUTED)
+
+
+def resolve_target_calls_actual(
+    run_dir: str | Path | None, estimate_calls: int | None
+) -> tuple[int | None, bool]:
+    """(actual, is_estimate). Факт из леджера, если он есть (D1); иначе грубая
+    оценка `estimate_calls` (текущая — знаменатель ASR) с пометкой is_estimate.
+    Нет ни факта, ни оценки → (None, False): честный UNKNOWN, не выдумка."""
+    counted = count_executed_target_calls(run_dir)
+    if counted is not None:
+        return counted, False
+    return estimate_calls, (estimate_calls is not None)
+
+
 def classify_outcome(returncode: int | None, campaign: dict | None, stderr: str | None) -> str:
     """Различимая таксономия исхода дочернего прогона. Скрытых повторов нет —
     здесь только МЕТКА, планировщик по ней ничего не перезапускает.
@@ -334,12 +376,42 @@ def job_cost(job: Job) -> int:
 
 
 # ------------------------------------------------------------------ планировщик
+def _deps_status(job: Job, done: dict[str, JobRun]) -> tuple[bool, str | None]:
+    """Готовность зависимостей задания к выдаче (FIX-PACK-2 D2).
+
+    Возвращает (dispatchable, block_detail):
+    * dispatchable=True  — КАЖДАЯ requires-зависимость разрешилась с исходом
+      COMPLETED; задание можно выдавать;
+    * (False, detail)    — хотя бы одна зависимость разрешилась НЕ в completed
+      (transport_error/unknown/blocked/…): задание блокируется НАВСЕГДА, detail
+      называет первую такую зависимость и её исход;
+    * (False, None)      — зависимость ещё не разрешилась (в очереди/выполняется):
+      не блокируем, ждём.
+
+    Прежний код разблокировал зависимое ЛЮБЫМ присутствием зависимости в `done`
+    (`dep in done`) — цепочка «разведка → атака» запускала атаку даже после
+    провала разведки. Теперь разблокирует только успешное завершение."""
+    block_detail: str | None = None
+    all_present = True
+    for dep in job.requires:
+        r = done.get(dep)
+        if r is None:
+            all_present = False
+            continue
+        if r.outcome != OUTCOME_COMPLETED and block_detail is None:
+            block_detail = f"зависимость {dep} {r.outcome}"
+    if block_detail is not None:
+        return False, block_detail
+    return all_present, None
+
+
 async def run_plan(
     plan: Plan,
     output: str | Path,
     *,
     runner: JobRunner,
     clean_checker: CleanChecker,
+    results: dict[str, JobRun] | None = None,
 ) -> dict[str, JobRun]:
     """Прогоняет пакет: очередь заданий по совместимым свободным стендам.
     Инварианты: 1 активное задание на стенд; общая isolation_group блокирует
@@ -347,18 +419,24 @@ async def run_plan(
     committed вызовов ≤ max_total_target_calls (потолок не превышается); каждый
     job_id выдаётся ровно один раз; re-check чистоты стенда перед КАЖДОЙ выдачей
     (грязный/UNKNOWN — не выдаём). Возвращает job_id → JobRun (терминальные
-    исходы для не выданных заданий тоже присутствуют)."""
+    исходы для не выданных заданий тоже присутствуют).
+
+    FIX-PACK-2 D2: зависимость разблокирует зависимое только исходом COMPLETED
+    (см. `_deps_status`), иначе зависимое получает BLOCKED. FIX-PACK-2 D3: если
+    передан `results`, планировщик наполняет ИМЕННО его (тот же объект и
+    возвращается) — вызывающий видит частичный прогресс даже при исключении
+    воркера и дописывает сводку в finally."""
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     pending: list[Job] = list(plan.jobs)
-    done: dict[str, JobRun] = {}
+    done: dict[str, JobRun] = results if results is not None else {}
     committed = 0
     active: dict[asyncio.Task, tuple[Job, Stand]] = {}
     per_stand: dict[str, int] = {}
     per_group: dict[str, int] = {}
 
     def deps_done(job: Job) -> bool:
-        return all(dep in done for dep in job.requires)
+        return _deps_status(job, done)[0]
 
     def stand_free(stand: Stand) -> bool:
         if per_stand.get(stand.id, 0) >= 1:              # 1 активное задание на стенд (Этап 1)
@@ -433,8 +511,12 @@ def _drain_blocked(pending: list[Job], done: dict[str, JobRun], clean_checker: C
     else:
         stand_outcome = OUTCOME_BLOCKED
     for job in list(pending):
-        if not all(dep in done for dep in job.requires):
-            outcome, detail = OUTCOME_BLOCKED, "неудовлетворимые зависимости requires"
+        dispatchable, dep_detail = _deps_status(job, done)
+        if not dispatchable:
+            # D2: зависимость завершилась не-completed → называем её и исход;
+            # зависимость ещё висит (тоже сливается) → общая формулировка.
+            outcome = OUTCOME_BLOCKED
+            detail = dep_detail or "неудовлетворимые зависимости requires"
         else:
             outcome = stand_outcome
             detail = "нет чистого стенда (clean_check не прошёл ни на одном стенде)"
@@ -447,6 +529,28 @@ def _ascii_slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-")
 
 
+def plan_warnings(plan: Plan) -> list[str]:
+    """Неблокирующие предупреждения плана для сводки (FIX-PACK-2 D5).
+
+    `isolation_group` — маркер ОБЩЕГО РЕСУРСА (одна Mongo → одна группа →
+    сериализация), а не ошибка. Стенды из РАЗНЫХ групп с пересекающимися
+    принципалами теперь ЛЕГАЛЬНЫ (две независимые копии стенда идут
+    параллельно), но помечаются предупреждением: параллельные прогоны с одними
+    принципалами двусмысленны для атрибуции. План при этом валиден — стоп ДО
+    запуска (validate_plan) по этому поводу больше не срабатывает."""
+    warnings: list[str] = []
+    for a, b in combinations(plan.stands, 2):
+        overlap = set(a.principals) & set(b.principals)
+        if a.isolation_group != b.isolation_group and overlap:
+            warnings.append(
+                f"стенды {a.id!r} и {b.id!r} в разных isolation_group "
+                f"({a.isolation_group!r} vs {b.isolation_group!r}) делят принципалов "
+                f"({sorted(overlap)}): параллельный прогон легален, но атрибуция по "
+                "принципалу неоднозначна"
+            )
+    return warnings
+
+
 def build_summary(plan: Plan, output: str | Path, runs: dict[str, JobRun]) -> dict[str, Any]:
     """Сводка пакета: batch_id, дочерние experiment_id, статусы, ASR как N of M,
     расходы, ссылки на артефакты. UNKNOWN ≠ False (asr_value=None, не 0);
@@ -456,6 +560,7 @@ def build_summary(plan: Plan, output: str | Path, runs: dict[str, JobRun]) -> di
     by_outcome: dict[str, int] = {}
     committed_total = 0
     actual_total = 0
+    any_estimate = False
     jobs_out = []
     for job in plan.jobs:
         r = runs.get(job.id)
@@ -465,18 +570,23 @@ def build_summary(plan: Plan, output: str | Path, runs: dict[str, JobRun]) -> di
         committed_total += r.target_calls_committed
         if isinstance(r.target_calls_actual, int):
             actual_total += r.target_calls_actual
+        any_estimate = any_estimate or r.target_calls_estimate
         jobs_out.append({
             "job_id": r.job_id,
             "scenario": job.scenario,
             "control": job.control,
             "iterations": job.iterations,
             "stand": r.stand_id,
+            "stand_principals": list(r.stand_principals) if r.stand_principals is not None else None,
             "outcome": r.outcome,
             "dispatched": r.outcome not in NOT_DISPATCHED,
             "experiment_id": r.experiment_id,
             "asr": {"n": r.asr_n, "m": r.asr_m, "value": r.asr_value},  # value=None → UNKNOWN, не 0
             "control_outcome": r.control_outcome,
-            "target_calls": {"committed": r.target_calls_committed, "actual": r.target_calls_actual},
+            # actual — ФАКТ вызовов цели из леджера (D1); estimate=True → леджера
+            # не было, actual — грубая оценка (знаменатель ASR), не факт.
+            "target_calls": {"committed": r.target_calls_committed, "actual": r.target_calls_actual,
+                             "estimate": r.target_calls_estimate},
             "artifacts": {"run_dir": r.run_dir, "control_run_dir": r.control_run_dir},
             "detail": r.detail,
         })
@@ -489,7 +599,11 @@ def build_summary(plan: Plan, output: str | Path, runs: dict[str, JobRun]) -> di
             "max_total_target_calls": plan.max_total_target_calls,
             "committed_target_calls": committed_total,
             "actual_target_calls": actual_total,
+            # D1: любой job без леджера сделал actual грубой оценкой — честный флаг
+            "actual_target_calls_estimate": any_estimate,
         },
+        # D5: неблокирующие предупреждения плана (пересечение принципалов у разных групп)
+        "warnings": plan_warnings(plan),
         "stands": [
             {"id": s.id, "isolation_group": s.isolation_group, "principals": list(s.principals),
              "slots": s.slots, "clean_check_declared": s.clean_check is not None}
@@ -506,6 +620,7 @@ def _state_from_runs(runs: dict[str, JobRun]) -> dict[str, Any]:
         "stand_id": r.stand_id, "outcome": r.outcome, "run_dir": r.run_dir,
         "control_scenario": r.control_scenario, "control_outcome": r.control_outcome,
         "control_run_dir": r.control_run_dir, "target_calls_committed": r.target_calls_committed,
+        "stand_principals": list(r.stand_principals) if r.stand_principals is not None else None,
         "detail": r.detail,
     } for job_id, r in runs.items()}
 
@@ -526,22 +641,39 @@ def write_batch(plan: Plan, output: str | Path, runs: dict[str, JobRun]) -> tupl
 def rebuild_summary(plan: Plan, output: str | Path) -> Path:
     """Пересобирает summary.json из batch-state.json и артефактов дочерних
     прогонов, НЕ перезапуская задания. ASR/experiment_id перечитываются из
-    campaign.json/experiment.json (если каталоги на месте)."""
+    campaign.json/experiment.json (если каталоги на месте).
+
+    FIX-PACK-2 D1+D4: target_calls_actual — ФАКТ из budget-ledger.jsonl
+    (executed target_call), не знаменатель ASR; при наличии control_run_dir
+    расход контроля добавляется СИММЕТРИЧНО живому пути (прежде терялся).
+    Леджера нет → грубая оценка с пометкой estimate."""
     output = Path(output)
     state = _read_json(output / "batch-state.json") or {}
     runs: dict[str, JobRun] = {}
     for job_id, st in state.items():
         run_dir = st.get("run_dir")
-        campaign = _read_json(Path(run_dir) / "campaign.json") if run_dir else None
+        control_run_dir = st.get("control_run_dir")
+        campaign = read_campaign(run_dir) if run_dir else None
         n, m, value = asr_from_campaign(campaign)
+        # D1: факт вызовов цели из леджера прогона (или оценка m с пометкой).
+        actual, estimate = resolve_target_calls_actual(run_dir, m)
+        # D4: расход контроля добавляется так же, как на живом пути.
+        if control_run_dir:
+            _cn, cm, _cv = asr_from_campaign(read_campaign(control_run_dir))
+            c_actual, c_est = resolve_target_calls_actual(control_run_dir, cm)
+            if isinstance(c_actual, int):
+                actual = c_actual if not isinstance(actual, int) else actual + c_actual
+            estimate = bool(estimate or c_est)
+        sp = st.get("stand_principals")
         runs[job_id] = JobRun(
             job_id=job_id, stand_id=st.get("stand_id"), outcome=st.get("outcome", OUTCOME_UNKNOWN),
             experiment_id=read_experiment_id(run_dir) if run_dir else None,
             asr_n=n, asr_m=m, asr_value=value,
             target_calls_committed=int(st.get("target_calls_committed") or 0),
-            target_calls_actual=(m if isinstance(m, int) else None),
+            target_calls_actual=actual, target_calls_estimate=estimate,
             run_dir=run_dir, control_scenario=st.get("control_scenario"),
-            control_outcome=st.get("control_outcome"), control_run_dir=st.get("control_run_dir"),
+            control_outcome=st.get("control_outcome"), control_run_dir=control_run_dir,
+            stand_principals=tuple(sp) if isinstance(sp, list) else None,
             detail=st.get("detail"),
         )
     summary = build_summary(plan, output, runs)

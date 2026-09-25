@@ -103,16 +103,26 @@ def test_valid_plan_passes():
     validate_plan(plan, scenario_exists=lambda s: True)  # не бросает
 
 
-def test_stop_shared_isolation_group_for_independent_stands():
+# FIX-PACK-2 D5: изоляция по принципалам — не ошибка. isolation_group маркирует
+# ОБЩИЙ РЕСУРС (одна Mongo → одна группа → сериализация), а не независимость.
+# Две прежние PlanError-проверки заменены: общая группа при разных принципалах
+# теперь легальна, пересечение принципалов у разных групп — предупреждение
+# сводки (было: два `test_stop_*`, ждавших PlanError).
+def test_shared_isolation_group_with_independent_principals_is_legal():
+    # прежде: PlanError «делят isolation_group». Теперь — легальный план
+    # (общий ресурс, планировщик его сериализует), без предупреждений.
     plan = _plan([_stand("a", "shared", ["p1"]), _stand("b", "shared", ["p2"])], [_job("j1")])
-    with pytest.raises(PlanError, match="делят isolation_group"):
-        validate_plan(plan, scenario_exists=lambda s: True)
+    validate_plan(plan, scenario_exists=lambda s: True)          # не бросает
+    assert build_summary(plan, "runs/d5-shared", {})["warnings"] == []
 
 
-def test_stop_principal_overlap_across_groups():
+def test_cross_group_principal_overlap_is_warning_not_error():
+    # прежде: PlanError «принципалы пересекаются». Теперь — легально (две
+    # независимые копии стенда с одними принципалами), но помечено в сводке.
     plan = _plan([_stand("a", "g1", ["shared"]), _stand("b", "g2", ["shared"])], [_job("j1")])
-    with pytest.raises(PlanError, match="принципалы пересекаются"):
-        validate_plan(plan, scenario_exists=lambda s: True)
+    validate_plan(plan, scenario_exists=lambda s: True)          # не бросает
+    warnings = build_summary(plan, "runs/d5-cross", {})["warnings"]
+    assert any("shared" in w and "разных isolation_group" in w for w in warnings), warnings
 
 
 def test_stop_unknown_scenario():
@@ -336,11 +346,19 @@ def test_orchestrate_plan_integration_two_stands_offline(tmp_path, monkeypatch):
     assert outcomes["job-bac"]["outcome"] == OUTCOME_COMPLETED
     assert outcomes["job-dp"]["outcome"] == OUTCOME_COMPLETED
     # каждое задание — свой каталог с реальными артефактами и experiment_id
+    stand_principals = {"stand-a": ["acct-a"], "stand-b": ["acct-b"]}
     for jid in ("job-bac", "job-dp"):
         assert (out / jid / "campaign.json").exists()
         assert (out / jid / "experiment.json").exists()
         assert outcomes[jid]["experiment_id"]
         assert outcomes[jid]["asr"]["m"] == 1        # N of M
+        # FIX-PACK-2 D1: расход — ФАКТ из budget-ledger.jsonl (не знаменатель ASR);
+        # mock пишет 1 executed target_call на попытку → actual=1, estimate=False.
+        assert (out / jid / "budget-ledger.jsonl").exists()
+        assert outcomes[jid]["target_calls"]["actual"] == 1
+        assert outcomes[jid]["target_calls"]["estimate"] is False
+        # FIX-PACK-2 D6: принципалы стенда прогона записаны в сводку (record-only)
+        assert outcomes[jid]["stand_principals"] == stand_principals[outcomes[jid]["stand"]]
     assert summary["caps"]["committed_target_calls"] <= doc["max_total_target_calls"]
 
     # пересборка сводки НЕ перезапускает задания: удалить summary, зафиксировать
