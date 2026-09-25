@@ -6,6 +6,49 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-26 — claude-code — FIX-D: порядок маркера H19/H22 + ловушка W10 (fix/qa-d-marker-order)
+
+Два в одном (последняя карта FIX-PACK-QA).
+
+**(а) порядок маркера H19/H22.**
+- дефект (перепроверен): `core/campaign.py` в REGISTERED-записи истории (attempt 0)
+  звал `attack.expected_effect(ctx)` ДО того, как runner выводит `ctx.case_marker`
+  (инвариант T002-10/FR-B «producer маркера — runner»). У маркерных семей
+  `deferred_payload` (H22) и `delimiter_summary_injection` (H19) `expected_effect`
+  требует маркер → `_require_marker` бросал ValueError НАРУЖУ трейсбеком; эти семьи
+  были непрогоняемы через run/go
+- фикс: новый `_registered_goal_digest(attack, ctx)` откладывает goal_digest
+  REGISTERED-записи (None), если маркер ещё не выведен; на пост-ран записи (attempt 1)
+  он и так считается из `candidate.expected_effect` с уже выведенным маркером.
+  Контракт истории не изменён (goal_digest и так Optional). Реальные ошибки
+  expected_effect не глотаются — всплывают в run_attack (generate зовёт его с
+  маркером). Producer маркера остался в runner (маркер в campaign НЕ вывожу)
+- выбор обоснования: «отложить запись expected_effect», а не «получать маркер
+  заранее» — последнее нарушило бы инвариант «producer маркера — runner»
+
+**(б) ловушка W10 (editable-install).**
+- дефект (QA W10): `pip install -e` мог указывать на СТАРЫЙ checkout — «голый»
+  `memnotsafe` молча исполнял старую версию
+- фикс: `selfserve.render_provenance(console)` печатает версию/путь пакета при
+  старте `go` и `pilot` и предупреждает, если пакет импортирован НЕ из текущего
+  дерева (сравнение `Path(memnotsafe.__file__)` с `cwd/src`|`cwd`). Ничего не
+  блокирует — только предупреждение. Общий хелпер в selfserve, pilot_pack его
+  импортирует (существующее ребро pilot_pack→selfserve)
+
+- замок `tests/test_marker_order_and_provenance.py` (8): deferred-payload и
+  delimiter-summary-injection прогоняются через Campaign без трейсбека (главный
+  замок карты); `_registered_goal_digest` откладывает без маркера / считает с
+  маркером и у обычных семей; `_package_is_in_tree` true/false; render_provenance
+  предупреждает вне дерева и молчит в дереве (печатая провенанс всегда)
+- проверки (по разу): RED на базе 864cace → 8 failed (2 — реальный ValueError из
+  expected_effect через Campaign; 6 — новые символы); targeted → 72 passed;
+  полный suite → 1493 passed / 0 (= 1485 базовых + 8 новых); git diff --check чист;
+  секретов 0
+- ALLOWLIST: core/campaign.py, selfserve.py/pilot_pack.py (только провенанс/
+  предупреждение), тест, LOG — соблюдён
+- DEVIATION: база `864cace` (свежий main из постановки владельца), не `0685392`
+
+
 ### 2026-09-25 — claude-code — FIX-E: f-string backslash ломает импорт threat_report на Python <3.12 (fix/qa-e-fstring-backslash)
 
 - дефект (просьба владельца, блокер демо Влада): `reporting/threat_report.py:1396`
