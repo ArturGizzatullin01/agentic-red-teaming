@@ -43,7 +43,7 @@ from memnotsafe.core.models import CampaignResult
 from memnotsafe.core.result_readouts import aggregate_metrics
 from memnotsafe.preflight import BLOCKER, run_preflight
 from memnotsafe.reporting.threat_report import write_threat_report
-from memnotsafe.selfserve import attempt_lines, load_dotenv
+from memnotsafe.selfserve import attempt_lines, load_dotenv, render_provenance
 
 DEFAULT_API_KEY_ENV = "MEMNOTSAFE_TARGET_API_KEY"
 CampaignLoader = Callable[[Path], Any]
@@ -348,6 +348,7 @@ def run_pilot(config_path: str | Path, output: str | Path, *, load_campaign: Cam
     человекочитаемые, без traceback."""
     _reconfigure_stdout()
     console = console or Console()
+    render_provenance(console)  # W10: версия/путь пакета + предупреждение о чужом дереве
     load_dotenv(Path(".env"), os.environ)  # переиспользуем механику P18: подхват .env (только имена)
     try:
         cfg = load_pilot_config(config_path)

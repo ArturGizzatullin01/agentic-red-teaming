@@ -239,6 +239,52 @@ def _reconfigure_stdout_utf8() -> None:
                 pass
 
 
+def _package_provenance() -> tuple[str, Path]:
+    """Версия и путь фактически импортированного пакета memnotsafe."""
+    import memnotsafe
+
+    try:
+        from importlib.metadata import version as _dist_version
+
+        ver = _dist_version("memnotsafe")
+    except Exception:  # noqa: BLE001 — метаданные могут отсутствовать (не установлен как dist)
+        ver = str(getattr(memnotsafe, "__version__", "unknown"))
+    pkg_dir = Path(memnotsafe.__file__).resolve().parent  # .../src/memnotsafe
+    return ver, pkg_dir
+
+
+def _package_is_in_tree(pkg_dir: Path, cwd: Path) -> bool:
+    """Импортированный пакет лежит в дереве текущего каталога (его src/ или он
+    сам)? Ловушка W10: editable-venv указывает на СТАРЫЙ checkout, и «голый»
+    memnotsafe молча исполняет старый код из другого дерева."""
+    pkg_dir = pkg_dir.resolve()
+    for root in (cwd / "src", cwd):
+        try:
+            pkg_dir.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def render_provenance(console: Console, *, cwd: Path | None = None) -> bool:
+    """Печатает версию/путь пакета memnotsafe при старте go/pilot и предупреждает,
+    если пакет импортирован НЕ из текущего дерева (ловушка W10). Возвращает True,
+    если пакет из текущего дерева. Ничего не блокирует — только предупреждение."""
+    cwd = cwd or Path.cwd()
+    ver, pkg_dir = _package_provenance()
+    console.print(f"[dim]memnotsafe {ver} — пакет: {pkg_dir}[/dim]")
+    if not _package_is_in_tree(pkg_dir, cwd):
+        console.print(
+            f"[yellow]ВНИМАНИЕ: memnotsafe импортирован НЕ из текущего дерева "
+            f"({cwd}). Возможно, editable-venv (pip install -e) указывает на другой "
+            f"checkout — «голый» memnotsafe может исполнять СТАРУЮ версию. Проверьте "
+            f"`pip show memnotsafe` / PYTHONPATH перед прогоном (W10).[/yellow]"
+        )
+        return False
+    return True
+
+
 def _build_run_namespace(args: argparse.Namespace, scenario_path: str, out_dir: Path) -> argparse.Namespace:
     """Namespace для штатного `run`: копия флагов мастера + фиксация scenario/
     output. run идёт в тихом режиме (quiet) — результат показывает мастер; движок
@@ -367,6 +413,7 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
     контрактных отказах / Ctrl+C). Ничего в движке не меняет."""
     _reconfigure_stdout_utf8()
     console = console or Console(no_color=getattr(args, "no_color", False))
+    render_provenance(console)  # W10: версия/путь пакета + предупреждение о чужом дереве
     yes = bool(getattr(args, "yes", False))
     try:
         applied = load_dotenv(Path(".env"), os.environ)

@@ -56,6 +56,27 @@ ORIGIN_CORPUS = "corpus"
 ORIGIN_ONLINE = "online"
 
 
+def _registered_goal_digest(attack: AttackBase, ctx: AttackContext) -> str | None:
+    """goal_digest для записи REGISTERED (attempt 0, ДО обращения к target).
+
+    FIX-D: у маркерных семей (H19/H22 — deferred_payload,
+    delimiter_summary_injection) expected_effect требует case_marker, а его
+    producer — runner (заполняет ctx.case_marker внутри run_attack, инвариант
+    T002-10/FR-B «producer маркера — runner»). До запуска маркер ещё не выведен,
+    и expected_effect бросает ValueError — раньше он летел из campaign наружу
+    трейсбеком, делая эти семьи непрогоняемыми через run/go. Дайджест здесь
+    ОТКЛАДЫВАЕТСЯ на пост-ран запись (attempt 1), где он и так считается из
+    candidate.expected_effect с уже выведенным маркером; контракт истории не
+    меняется (goal_digest и так Optional, None у REGISTERED допустим).
+
+    Реальную ошибку expected_effect это не прячет: она всплывёт в run_attack
+    (generate() зовёт expected_effect с маркером) и уйдёт в exit-контракт."""
+    try:
+        return goal_digest_or_none(attack.expected_effect(ctx))
+    except ValueError:
+        return None
+
+
 class Campaign(CampaignConstructionMixin, CampaignEscalationMixin, CampaignPersistenceMixin):
     def __init__(
         self,
@@ -174,7 +195,10 @@ class Campaign(CampaignConstructionMixin, CampaignEscalationMixin, CampaignPersi
                 outcome=OUTCOME_REGISTERED,
                 attempt_no=0,
                 case_marker=ctx.case_marker,
-                goal_digest=goal_digest_or_none(attack.expected_effect(ctx)),
+                # FIX-D: у маркерных семей expected_effect(ctx) требует case_marker,
+                # который runner выводит только внутри run_attack — дайджест здесь
+                # откладывается на пост-ран запись, а не летит трейсбеком.
+                goal_digest=_registered_goal_digest(attack, ctx),
                 seed=ctx.run_seed,
             )
             try:
