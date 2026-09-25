@@ -6,6 +6,46 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-25 — claude-code — CARD-CONSOLE: Mission Control (console/)
+
+- задача: новый каталог `console/` в зеркале — статичный офлайн-вьюер артефактов
+  прогона (React+TS+Vite). Только чтение локальных JSON/HTML; ноль сети, ноль
+  секретов. Ядро (`core/`, `cli.py`, атаки, оракулы) не трогалось.
+- форматы выучены из кода-продюсера, не выдуманы: `campaign.json` ←
+  `core/campaign_serialize.py` (`aggregate_metrics.funnel` — pass/fail/unknown/total
+  на 6 стадий); `findings.json` ← `reporting/findings.py` (status
+  SUCCESS/NOT_EXPLOITABLE/INCONCLUSIVE, severity, ATT&CK/OWASP); `attempts.jsonl` ←
+  `core/attempt.py`; `budget-ledger.jsonl` ← `core/ledger.py` (usage=null = unknown,
+  не ноль); `report.html`/`threat-report.html` — self-contained, встраиваются в
+  sandbox-iframe и линкуются.
+- доктрина в коде (`src/lib/tristate.ts`): тристейт pass/fail/UNKNOWN не
+  схлопывается. UNKNOWN ≠ safe и UNKNOWN ≠ exploited: null-стадия — янтарная, не
+  зелёная и не красная, в ASR не входит. Ключевой фикс self-review: кейс, который
+  `findings.json` пометил NOT_EXPLOITABLE, но со стадией success=null, считается
+  INCONCLUSIVE, не controlled (единый `caseVerdict` для бейджа рана, статуса кейса
+  и метрик — рассинхрона нет). Сырой `findings.json`-статус тоже показан рядом.
+- знаменатель ASR — завершённые КЕЙСЫ из `campaign.json`, не строки
+  `attempts.jsonl` (истории попыток суммируются только описательно).
+- фикстуры `console/fixtures/` — 3 реальных прогона `campaign --target mock`
+  (синтетика, без живой памяти): vulnerable (EXPLOITED, ASR 100%), protected
+  (CONTROLLED, контроль держит, ASR 0%), tool_route_hijack_skipped (INCONCLUSIVE:
+  adoption/tool не наблюдались — ASR 0%, но НЕ safe). Секрет-скан фикстур чист.
+- вьюхи: галерея прогонов со штампами; страница прогона с воронкой (тристейт-бары),
+  таблицей кейсов (статус/severity/тристейт-точки/ATT&CK+OWASP), сводками попыток и
+  бюджета, превью отчётов; загрузка своего `runs/<name>/` через FileReader (ничего
+  не выгружается).
+- проверки прогнаны реально: `npm run build` (tsc app+node + vite) — OK;
+  `npm test` (tsc tsconfig.test + vitest) — 19 passed (parse на реальных фикстурах,
+  доктрина тристейта, render-smoke: баннер «UNKNOWN ≠ safe» на skipped-ране);
+  `npm run dev` и `npm run preview` подняты и отдают index+ассеты (200). lockfile
+  зафиксирован.
+- ограничения: `memnotsafe threat-report` на этой машине падает SyntaxError
+  (f-string с бэкслэшем, Python 3.11 < 3.12 PEP 701) — это в `reporting/threat_report.py`,
+  вне scope карты, не чинил; `threat-report.html`-фикстуры поэтому нет, вьюер
+  переносит её отсутствие штатно (artifact note). База ветки — 2d87850.
+- предупреждение сборки про размер чанка ожидаемо: фикстуры (полный evidence +
+  report.html) инлайнятся в бандл; это демо-данные, не ошибка.
+
 ### 2026-09-24 — claude-code — P17: пилот одной командой (feat/p17-pilot-pack)
 
 - задача: `memnotsafe pilot` — продуктовая упаковка поверх существующих механик

@@ -47,6 +47,11 @@ python3 -m pytest tests/ -q
 - `docs/integration-handoff/` — spec/plan/tasks интеграции
 - `.specify/memory/constitution.md` — конституция Spec Kit
 - `.claude/skills/speckit-*` — уже есть цикл спеки для Claude Code
+- `console/` — Mission Control: статичный офлайн-вьюер артефактов прогона
+  (React+TS+Vite). Только читает `campaign.json`/`findings.json`/`attempts.jsonl`/
+  `budget-ledger.jsonl`/`report.html`; ноль сети, ноль секретов. Форматы взяты из
+  `core/campaign_serialize.py`, `reporting/findings.py`, `core/attempt.py`,
+  `core/ledger.py`. Не входит в пакет `memnotsafe` (setuptools ищет только `src/`).
 
 ## Не трогать без задачи
 
