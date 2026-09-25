@@ -6,6 +6,43 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-25 — claude-code — FIX-PACK-2 / MULTI-1: харденинг планировщика пакетов (семантика, не структура)
+
+- база: main = `bf56518`; ветка сессии `claude/dazzling-goodall-l7hww1` (карта
+  просила `fix/multi1-scheduler-hardening` — расхождение отмечено в PR)
+- ALLOWLIST соблюдён: `core/plan.py`, `core/worker.py`, `tests/test_plan_orchestrator.py`,
+  новый `tests/test_scheduler_hardening.py`, `LOG.md` — ядра стадий/атак/оракулов/CLI не касался
+- D1 расход = ФАКТ вызовов цели из `<run_dir>/budget-ledger.jsonl` (operation=target_call,
+  phase=executed), не знаменатель ASR (число КЕЙСОВ): общий `plan.count_executed_target_calls`
+  / `resolve_target_calls_actual`; леджера нет/битый → грубая оценка m с пометкой `estimate:true`;
+  расход контроля считается так же
+- D2 `requires` разблокирует зависимое ТОЛЬКО исходом completed (`plan._deps_status`): иначе
+  зависимое → `blocked` с detail «зависимость <id> <outcome>»; цепочка «разведка→атака» больше
+  не стартует после провала разведки (гейт и слив `_drain_blocked` через один хелпер)
+- D3 `orchestrate_plan` обёрнут try/except/finally: run_plan наполняет переданный `results`,
+  при исключении воркера недовыполненные → `unknown` (detail = тип исключения), summary.json +
+  batch-state.json ВСЁ РАВНО пишутся, исключение пробрасывается
+- D4 `rebuild_summary` берёт факт из леджера (не m) и добавляет расход контроля симметрично
+  живому пути (прежде терялся); estimate-флаг и принципалы восстанавливаются из состояния
+- D5 (осознанная смена семантики): `isolation_group` — маркер ОБЩЕГО РЕСУРСА, не независимости.
+  Обе PlanError-проверки пересечения принципалов удалены; пересечение принципалов у РАЗНЫХ
+  групп → неблокирующее предупреждение сводки (`plan.plan_warnings`, ключ `warnings`). Гейт
+  параллелизма (общая группа ≤1 активного) не тронут. Затронутые тестовые планы: два
+  `test_stop_*` в `test_plan_orchestrator.py` переписаны (легальность + предупреждение)
+- D6 (record-only): стенд/принципалы пробрасываются дочернему процессу env-ом
+  `MEMNOTSAFE_BATCH_STAND_ID`/`MEMNOTSAFE_BATCH_PRINCIPALS` (`worker.batch_child_env`, дочерний
+  CLI их игнорирует), принципалы стенда прогона пишутся в JobRun/summary
+- проверки (RED→GREEN per-defect на чистой базе, стэш только src): RED 17 failed / 26 passed;
+  после фиксов затронутые файлы 53 passed; полный `pytest tests/` — 1458 passed на Python 3.12
+  (интерпретатор канона; на 3.11 `reporting/threat_report.py` не парсится по PEP 701 — вне
+  scope, не в allowlist). `git diff --check` чист, секретов ноль. Детерминированно, без реальных
+  подпроцессов; существующий integration-тест не сломан (расширен D1/D6-ассертами)
+- НЕ самопринимаю: приёмка A0 (семантический спот-тест с подставным runner, пишущим
+  budget-ledger.jsonl с известным числом target_call)
+- открытые/пред-существующие: `test_demo_launcher.py` падает на Linux (Windows-разделитель
+  `\` в demo.cmd) — платформенный артефакт канона (Windows), вне FIX-PACK-2
+
+
 ### 2026-09-25 — claude-code — FIX-A: мягкое доказательство ≠ доказанное без судьи (fix/qa-a-adoption-channel)
 
 - дефект (QA-аудит, перепроверен A0): живой стенд поднимает `capabilities.trace/
