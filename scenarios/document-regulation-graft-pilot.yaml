@@ -3,6 +3,7 @@
 # Секрет — только ИМЯ ENV-переменной, значение в YAML не хранится (FR-009).
 # Целевой стек: батч (API 9702, mongo 28182) — задан в agentic-red-teaming-main/.agent-work/docker-compose.batch.yml через !override; это отдельное развёртывание, не основной стек 9600/28017.
 id: document_regulation_graft_pilot
+reset_scope: namespace  # FIX-C: явно неразрушающий сброс (только свои сессии)
 target:
   adapter: investment_stand
   vulnerable: true

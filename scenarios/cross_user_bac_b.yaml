@@ -12,6 +12,7 @@
 # НИКАКОЙ delivery/атакующий payload не отправляется. Атака не запускается
 # и не мутируется.
 id: cross_user_bac_b
+reset_scope: namespace  # FIX-C: явно неразрушающий сброс (только свои сессии)
 
 target:
   adapter: investment_stand

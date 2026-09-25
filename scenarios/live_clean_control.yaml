@@ -10,6 +10,7 @@
 # НИКАКОЙ delivery/атакующий payload не отправляется. Атака не запускается
 # и не мутируется.
 id: live_clean_control
+reset_scope: namespace  # FIX-C: явно неразрушающий сброс (только свои сессии)
 
 target:
   adapter: investment_stand

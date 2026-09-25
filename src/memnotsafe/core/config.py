@@ -77,6 +77,13 @@ class Scenario:
     # сценариев остаётся None, поведение существующих прогонов не меняется.
     corpus_path: Path | None = None
     require_case_marker: bool = False
+    # FIX-C (G3.1/G3.2): режим сброса памяти стенда между попытками. Дефолт
+    # отныне "namespace" — чистятся ТОЛЬКО свои сессии; "global" (delete_many по
+    # всем 4 коллекциям, включая глобальный слой политик — предмет G3.2) требует
+    # явного слова reset_scope: global И непустого target.reset_ack. Прежний
+    # молчаливый глобальный wipe был эрратой G3.1 (живые прогоны стирали то, что
+    # измеряли). Значение прокидывает build_adapter; опечатку ловит адаптер.
+    reset_scope: str = "namespace"
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -130,6 +137,7 @@ def load_scenario(path: str | Path) -> Scenario:
         judge=_parse_judge(raw.get("judge")),
         corpus_path=(Path(attack["corpus"]) if attack.get("corpus") else None),
         require_case_marker=bool(raw.get("require_case_marker", False)),
+        reset_scope=str(raw.get("reset_scope", "namespace")),
         raw=raw,
     )
 
@@ -230,6 +238,24 @@ def build_adapter(scenario: Scenario, target_override: str | None = None):
 
         if not base_url:
             raise ValueError(f"Сценарию {scenario.id} нужен target.base_url или --target <url> для adapter=investment_stand")
-        return InvestmentStandAdapter(base_url=base_url, **scenario.target.extra)
+        # FIX-C: reset_scope прокидывается ЯВНО. global — деструктивный сброс всех
+        # коллекций: только по явному слову И с непустым target.reset_ack (защита
+        # от опечатки и от унаследованного молчаливого global). Опечатку в самом
+        # значении ловит конструктор адаптера (прецедент scope not in _RESET_SCOPES).
+        reset_scope = scenario.reset_scope
+        if reset_scope == "global":
+            ack = str(scenario.target.extra.get("reset_ack", "") or "").strip()
+            if not ack:
+                raise ValueError(
+                    f"Сценарий {scenario.id}: reset_scope=global — деструктивный сброс "
+                    "ВСЕХ коллекций стенда (включая глобальный слой политик, предмет "
+                    "G3.2). Требуется явное подтверждение target.reset_ack: <непустая "
+                    "строка>. Иначе используйте reset_scope: namespace (по умолчанию) "
+                    "— чистятся только свои сессии."
+                )
+        # scope — единственный источник reset_scope; исключаем scope/reset_ack из
+        # extra, чтобы не было дубля kwarg и чтобы reset_ack не утёк в адаптер.
+        extra = {k: v for k, v in scenario.target.extra.items() if k not in ("scope", "reset_ack")}
+        return InvestmentStandAdapter(base_url=base_url, scope=reset_scope, **extra)
 
     raise ValueError(f"Неизвестный adapter={adapter_name!r} в сценарии {scenario.id}")

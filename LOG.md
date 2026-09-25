@@ -6,6 +6,43 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-25 — claude-code — FIX-C: reset_scope по умолчанию безопасен и достижим из YAML (fix/qa-c-reset-scope)
+
+- дефект (перепроверен, блокер перепрогона G3.1/G3.2): дефолт `scope="global"` в
+  investment_stand → `reset_state()` делал `delete_many({})` по ВСЕМ 4 коллекциям,
+  включая `agent_policy_memories` (глобальный слой политик — предмет G3.2); ни один
+  сценарий не задавал режим, а `build_adapter` прокидывал только `target.extra` →
+  namespace-режим адаптера был НЕДОСТИЖИМ из YAML. Эрратум G3.1: живые прогоны шли
+  с глобальным wipe (стирали то, что измеряли)
+- (1) `core/config.py`: у `Scenario` новое поле `reset_scope` (default отныне
+  `"namespace"`), парсится из верхнеуровневого ключа YAML. `build_adapter` прокидывает
+  его в адаптер ЯВНО (`scope=reset_scope`); `"global"` — только по явному слову И с
+  непустым `target.reset_ack`, иначе `ValueError` (защита от опечатки/унаследованного
+  global). `scope`/`reset_ack` исключаются из extra (единый источник, без дубля kwarg)
+- (2) `adapters/investment_stand.py`: страж имени БД — при `scope="global"` имя БД
+  обязано matchить паттерн тестового стенда (`agent_memory` / `agent_memory_<suffix>`),
+  иначе `ValueError` в конструкторе ДО обращения к Mongo (защита от опечатки в
+  mongo_uri/mongo_db живого прогона). Опечатку в самом scope по-прежнему ловит
+  прежняя проверка `scope not in _RESET_SCOPES`
+- (3) миграция 16 живых investment_stand-сценариев: явная строка
+  `reset_scope: namespace` (фиксация намерения; дефолт и так namespace)
+- поведение адаптера при namespace/global не менял (только достижимость + стражи);
+  ASR/оракулы не тронуты. Прежний прямой конструктор адаптера (scope default global)
+  сохранён для тестов — безопасный дефолт живёт на уровне Scenario/build_adapter
+- замок `tests/test_reset_scope_default_safe.py` (24): сценарий без поля → namespace;
+  namespace достижим из YAML; global без ack / с пробельным ack → отказ; global+ack →
+  глобальный адаптер; опечатка scope → отказ; страж БД (global+чужая БД → отказ,
+  agent_memory[_suffix] → ок); все 16 живых сценариев резолвятся в namespace
+- проверки (по разу): RED на базе 9043476 → 22 failed / 2 passed; targeted →
+  173 passed; полный suite → 1509 passed / 0 (= 1485 базовых + 24 новых);
+  git diff --check чист; секретов 0 (в YAML — только ИМЕНА ENV, как и было)
+- ALLOWLIST: core/config.py, adapters/investment_stand.py (только страж),
+  scenarios/*.yaml (ровно +1 строка reset_scope на файл), тест, LOG — соблюдён
+- DEVIATION: база `9043476` (свежий main из постановки владельца), не `0685392`
+- **После влития — A0 перепрогоняет G3.1/G3.2** (namespace: изоляция держится на
+  свежих session_id, глобальный слой политик больше не стирается между попытками)
+
+
 ### 2026-09-25 — claude-code — FIX-E: f-string backslash ломает импорт threat_report на Python <3.12 (fix/qa-e-fstring-backslash)
 
 - дефект (просьба владельца, блокер демо Влада): `reporting/threat_report.py:1396`
