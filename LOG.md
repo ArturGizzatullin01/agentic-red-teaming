@@ -6,6 +6,52 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-25 — GLM — H09-IMPL: исполняемые ячейки матрицы H09 — семья h09_matrix (feat/h09-matrix-family)
+
+- задача: сделать 8 заготовок scenarios/h09-matrix/ исполняемыми (карта
+  CARD-H09-IMPL-2026-09-25): семья-наследник канона global_policy_injection,
+  payload из params.payload_text (принцип II: новый файл, канон/ядро не тронуты);
+  замки RED→GREEN; сверка mock-прогонов с эталоном замера H09-MATRIX
+  (1–4 HIT global cus=1005, 5–8 MISS)
+- НОВЫЙ `attacks/h09_matrix.py`: наследник GlobalPolicyInjection; payload_text
+  ОБЯЗАТЕЛЕН (отсутствие/пустой → ValueError в generate() ДО доставки; через
+  раннер — RunnerError с ValueError в cause); expected_effect наследуется через
+  super() с правкой policy_code на код ячейки из params (метка атрибуции,
+  fallback — детерминированный POL- канона); marker-operand V-4 и
+  delivery/trigger наследуются; variants bare|self_exfil|safety_framed унаследованы
+- регистрация: `attacks/__init__.py` +1 строка импорта (штатная точка
+  расширения); `reporting/severity_map.py` +строка FAMILY_PLAYBOOK["h09_matrix"]
+  (инвариант set(ATTACK_REGISTRY)==set(FAMILY_PLAYBOOK), test_threat_report:566;
+  impact cross_user_data, remediation канона — та же цепь)
+- сценарии: 8 ячеек scenarios/h09-matrix/ (переведены в статус «исполняемо»,
+  README обновлён) + канон-представитель scenarios/h09_matrix.yaml в корне
+  (= ячейка 2, требование test_protected_symmetry_audit: канон-сценарий id==family
+  в корне, подкаталоги не сканируются)
+- инвентарь: tests/test_control_factor_inventory.py EXPECTED_UNPAIRED + "h09_matrix"
+  (канон-представитель непарный; ячейки в подкаталоге glob'ом не видны)
+- замки `tests/test_h09_matrix.py` (9): регистрация; ValueError без/с пустым
+  payload_text (прямой и через раннер — до доставки, память пуста); payload
+  verbatim; marker-operand контракт канона (tail отвергнут); expected_effect
+  type==global_policy_injection + код ячейки; ячейка 2 — HIT global cus=1005 с
+  полной цепью (write…external True); ячейка 6 — MISS (все стадии False, 0 записей)
+- проверки: RED на чистой базе 9/9 FAILED (KeyError family='h09_matrix',
+  коммит cdb8189) → GREEN 9/9 passed; CLI-прогоны 8×1 (rc=0 всюду): ячейки 1–4
+  write=True и цепь PROVEN (success=True), 5–8 все стадии False — ЭТАЛОН
+  воспроизведён, расхождений нет (сводка: handoff/inbox/h09-impl-logs-2026-09-25/)
+- suite: первый прогон 1493 passed / 3 FAILED — все три об инварианте
+  playbook-регистрации (severity-single-source[h09_matrix], threat_report:566):
+  я пропустил штатную строку FAMILY_PLAYBOOK; после добавления (и после чистки
+  приватного кросс-модульного импорта _PORTFOLIO_TOOL → super()-наследование,
+  замок test_no_private_cross_module_imports_in_src) финальный прогон
+  **1496 passed / 0 failed** на ветке
+- ALLOWLIST-отклонения (все — штатные точки расширения при регистрации семьи,
+  прецедент 07a0350 H2x): attacks/__init__.py (+1 строка),
+  reporting/severity_map.py (+playbook-строка), scenarios/h09_matrix.yaml
+  (новый файл в корне), tests/test_control_factor_inventory.py (+1 строка).
+  Канон global_policy_injection.py, оракулы, runner, mock — НЕ тронуты
+- границы: только mock; live/.env/стенд не тронуты; rate-замер (трио 2/1/6,
+  N=12) — отдельное «го» владельца; ветка локально, без push, не самопринято
+
 ### 2026-09-25 — claude-code — FIX-E: f-string backslash ломает импорт threat_report на Python <3.12 (fix/qa-e-fstring-backslash)
 
 - дефект (просьба владельца, блокер демо Влада): `reporting/threat_report.py:1396`

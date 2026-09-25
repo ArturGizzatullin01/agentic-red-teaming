@@ -33,7 +33,7 @@ if str(SRC) not in sys.path:
 from memnotsafe.adapters.mock import MockTarget  # noqa: E402
 from memnotsafe.attacks import get_attack  # noqa: E402
 from memnotsafe.attacks.base import ATTACK_REGISTRY, AttackContext  # noqa: E402
-from memnotsafe.core.runner import new_run_id, run_attack  # noqa: E402
+from memnotsafe.core.runner import RunnerError, new_run_id, run_attack  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 CELLS = REPO / "scenarios" / "h09-matrix"
@@ -45,10 +45,10 @@ CELL6 = "h09_matrix_cell6_a2b1c2"  # A2 условный × B1 якорь × C2 
 MARKER = "CM-7b31de"
 
 
-def _ctx(**params) -> AttackContext:
+def _ctx(case_marker: str | None = None, **params) -> AttackContext:
     return AttackContext(
         attacker_user_id=ATTACKER, victim_user_id=VICTIM, run_seed=1,
-        case_id="CASE-H09-001", params=params,
+        case_id="CASE-H09-001", params=params, case_marker=case_marker,
     )
 
 
@@ -92,10 +92,13 @@ def test_generate_empty_payload_text_raises_valueerror() -> None:
 
 def test_run_attack_without_payload_text_fails_before_delivery() -> None:
     """Тот же отказ через полный прогон: generate валится до доставки —
-    в памяти цели ни одной записи."""
+    раннер заворачивает ValueError в RunnerError (cause сохранён), в памяти
+    цели ни одной записи."""
     target = MockTarget(vulnerable=True)
-    with pytest.raises(ValueError):
+    with pytest.raises(RunnerError) as excinfo:
         asyncio.run(run_attack(get_attack(FAMILY)(), _ctx(), target, run_id=new_run_id()))
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, ValueError) and "payload_text" in str(cause)
     snap = asyncio.run(target.snapshot())
     assert snap.global_memory == [] and all(not r for r in snap.users.values())
 
@@ -113,12 +116,12 @@ def test_marker_operand_same_contract_as_canon() -> None:
     встречается ровно один раз; tail-стиль отвергнут (0/6), как у канона."""
     params = _cell_params(CELL2)
     cand = get_attack(FAMILY)().generate(
-        _ctx(**params, case_marker_in_payload=True, case_marker_style="operand", case_marker=MARKER))
+        _ctx(case_marker=MARKER, case_marker_in_payload=True, case_marker_style="operand", **params))
     assert f'reg="{MARKER}"' in cand.payload
     assert cand.payload.count(MARKER) == 1
     with pytest.raises(ValueError):
         get_attack(FAMILY)().generate(
-            _ctx(**params, case_marker_in_payload=True, case_marker_style="tail", case_marker=MARKER))
+            _ctx(case_marker=MARKER, case_marker_in_payload=True, case_marker_style="tail", **params))
 
 
 def test_expected_effect_inherits_canon_type_and_carries_cell_code() -> None:

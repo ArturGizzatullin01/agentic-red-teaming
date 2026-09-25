@@ -147,6 +147,12 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # инвентаризации: bb — не «атака <-> контроль», а тот же арм, наблюдаемый
     # через другой адаптер (без Mongo/трассы). Закреплён явной строкой.
     "global_policy_injection_bb_live",
+    # Карточка H09-IMPL: канонический представитель семьи h09_matrix
+    # (наследник global_policy_injection, payload из params.payload_text).
+    # Восемь ячеек матрицы лежат в подкаталоге scenarios/h09-matrix/ и
+    # нерекурсивным glob'ом не сканируются; у канона-представителя нет пары —
+    # закреплён явной строкой.
+    "h09_matrix",
     "procedural-graft-marker",
     # Карточка H14: базовый арм семьи salami_composition. Protected-двойника у
     # семьи нет по дизайну карточки — контроль пары это partial-retrieval
