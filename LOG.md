@@ -6,6 +6,40 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-25 — claude-code — FIX-A: мягкое доказательство ≠ доказанное без судьи (fix/qa-a-adoption-channel)
+
+- дефект (QA-аудит, перепроверен A0): живой стенд поднимает `capabilities.trace/
+  tool_calls` по ЛЮБОМУ каналу, включая victim_response (regex-скрейп текста
+  ответа), и синтезирует из скрейпа `llm_decision{resolved_cus}`/`tool_result`;
+  `oracles/adoption.py::_adoption_from_decision` ставил жёсткое
+  EVIDENCE_KIND_TELEMETRY, игнорируя `channel` (в отличие от external_effect);
+  судья по умолчанию выключен, `_blocked_by_unavailable_judge` срабатывал только
+  при СКОНФИГУРИРОВАННОМ судье → отказ жертвы с цитатой чужого cus в тексте
+  штамповался SUCCESS/CRITICAL
+- (1) НОВЫЙ общий хелпер `oracles/adoption.py::channel_evidence_kind(events)`:
+  канал victim_response → мягкое signature_match, иначе (в т.ч. без поля channel:
+  mock/белый ящик) → жёсткое telemetry; `_adoption_from_decision` теперь берёт
+  природу по каналу решений, подтвердивших вердикт
+- (2) `oracles/external_effect.py::_effect_evidence_kind` — тонкая обёртка над
+  общим хелпером (вынос правила канала, чтобы adoption и external_effect судили
+  victim_response одинаково); лишние импорты kind-констант убраны
+- (3) `reporting/findings.py`: новое `_soft_only_effect_stages` — если НИ ОДНА
+  True-стадия эффекта (adoption/external_effect) не подтверждена жёстко/судьёй
+  (только marker/signature без судьи), находка понижается SUCCESS→INCONCLUSIVE
+  (severity INFO), с названной причиной в новом поле `Finding.status_reason`;
+  правило judge-unavailable распространено на «судьи не было вовсе». scope_escalated
+  (жёсткая adoption в глобальном слое) и жёсткая телеметрия SUCCESS сохраняют
+- НЕ трогает композит (`result.success`) и ASR (считаются по r.success), поэтому
+  метрики/воронка неизменны; понижение живёт только в слое отчёта
+- замок tests/test_evidence_kind_soft_no_judge.py (6): adoption канал→природа
+  (soft/hard), findings-понижение мягкого успеха без судьи + причина, регресс
+  жёсткой телеметрии, судейское мягкое сохраняет успех, сквозной «_RefusalStand»
+  (отказ с цитатой чужого cus, канала телеметрии нет) → находка не SUCCESS
+- RED на базе 2d87850: 3 failed / 3 passed (замки эффекта падают, регрессы
+  зелёные); targeted 482 passed; полный suite 1444 passed (1438 + 6)
+- ALLOWLIST соблюдён (adoption, external_effect, findings, новый тест, LOG);
+  `git diff --check` чист, секретов 0. НЕ самопринято — жду вердикт A0
+
 ### 2026-09-24 — claude-code — P17: пилот одной командой (feat/p17-pilot-pack)
 
 - задача: `memnotsafe pilot` — продуктовая упаковка поверх существующих механик
