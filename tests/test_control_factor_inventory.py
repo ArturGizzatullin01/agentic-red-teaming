@@ -130,10 +130,21 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # словаря факторов = решение A0, не молчая.
     "delimiter-summary-injection",
     "delimiter-summary-injection-control",
+    # Карточка BB-CANON: чёрноящичный (tier-1, http_endpoint) канон-сценарий
+    # response-семьи direct_poisoning для пилота (дизайн BB-VARIANTS, ACCEPT A0
+    # 9/10). Двойника по правилу паринга нет (база *_bb не существует) — тот же
+    # тип факта, что и global_policy_injection_bb_live: bb — не «атака <->
+    # контроль», а тот же арм, наблюдаемый только через ответы (WRITE-триада
+    # честно UNKNOWN). Single-user по канону семьи.
+    "direct_poisoning_bb_live",
     "direct_poisoning_live_judged",
     "document-regulation-graft-global",
     "document-regulation-graft-pilot",
     "document-regulation-graft-plain",
+    # Карточка BB-CANON: tier-1 канон-сценарий response-семьи false_precedent
+    # для пилота (BB-VARIANTS, ACCEPT 9/10) — тот же тип факта (база *_bb не
+    # существует, bb не контроль). Single-user по канону семьи.
+    "false_precedent_bb_live",
     # Карточка H15: базовый арм семьи forged_rationale. Protected-двойника у
     # семьи нет по дизайну карточки — контроль пары это bare-оформление той же
     # директивы (forged_rationale_mk_pair_control), а не режим авторизации;
@@ -167,6 +178,10 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # семьи покрываются групповым правилом по этому базовому арму.
     "salami_composition",
     "system-log-impersonation-pilot",
+    # Карточка BB-CANON: tier-1 канон-сценарий response-семьи
+    # system_log_impersonation для пилота (BB-VARIANTS, ACCEPT 9/10) — тот же
+    # тип факта (база *_bb не существует, bb не контроль). Single-user.
+    "system_log_impersonation_bb_live",
     # Карточка H18-ATTACK: три арма семьи tool_route_hijack (redirect-forbidden,
     # redirect-skipped, контроль bare). Protected-двойника нет по дизайне —
     # контроль пары это bare-оформление той же записи, а не режим авторизации.
