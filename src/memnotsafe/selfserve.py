@@ -70,13 +70,12 @@ _LIVE_ADAPTERS = ("investment_stand", "http_endpoint", "openai", "openai_compati
 # --attacker-provider/--attacker-model/--attacker-base-url/--attacker-api-key-env
 # (cli.py:583-593 не трогаем).
 _YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/v1"
-# ВНИМАНИЕ (DEVIATION-риск, хендоф): карта §3 даёт folder как
-# b1g0nvl51gk8he84ckp8 (цифра 1 после nvl5), EXECUTOR-BOOTSTRAP §5 — как
-# b1g0nvl5lgk8he84ckp8 (буква l). Во всех docs он элидится как gpt://…/, живой
-# литерал — только в .env/контейнере (читать нельзя). Взят из карты (карта —
-# закон); A0 сверяет с живым .env до батареи. Пресет #5 (manual) — обход, если
-# константа окажется неверной.
-_YANDEX_FOLDER = "b1g0nvl51gk8he84ckp8"
+# Подтверждено A0 при приёмке CLI-MEGA-UX (2026-09-26): рабочий folder —
+# b1g0nvl5lgk8he84ckp8 (буква l после nvl5). Доказательство — live-ответы судьи
+# deepseek-v4-flash с model uri этого folder в батарее BATTERY-2026-09-26
+# (direct_poisoning_live_judged: verdicts с rationale, model в evidence).
+# Литерал карты §3 с цифрой 1 — опечатка карты; пресет #5 (manual) остаётся обходом.
+_YANDEX_FOLDER = "b1g0nvl5lgk8he84ckp8"
 _ATTACKER_API_KEY_ENV = "ATTACKER_API_KEY"
 
 
