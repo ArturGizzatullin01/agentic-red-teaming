@@ -109,6 +109,14 @@ def _apply_judge_overrides(scenario, args: argparse.Namespace) -> None:
     spec = scenario.judge
     if getattr(args, "judge_model", None):
         spec.model = args.judge_model
+    # CARD-CLI-MEGA-UX D1: мастер `go`, включая судью на сценарии без блока judge:,
+    # проставляет рабочий пресет (Yandex) через эти args, иначе URI Yandex ушёл бы
+    # на дефолтный OpenRouter с чужим ключом. Прямые run/campaign этих флагов не
+    # имеют → getattr None → поведение существующих команд не меняется.
+    if getattr(args, "judge_base_url", None):
+        spec.base_url = args.judge_base_url
+    if getattr(args, "judge_api_key_env", None):
+        spec.api_key_env = args.judge_api_key_env
     if getattr(args, "judge_max_calls", None) is not None:
         spec.max_calls = args.judge_max_calls
     # Судью включают --judge и --judge-model: назвать модель — явное намерение
@@ -124,6 +132,12 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int, c
     reporter = _reporter(args)
     scenario = load_scenario(args.scenario)
     _apply_judge_overrides(scenario, args)
+    # CARD-CLI-MEGA-UX §4: «кнопка до проникновения» просит движок остановиться на
+    # первом доказанном (единственный цикл — Campaign.run + stop_on_success; свой
+    # не строим). Флаг только ВКЛЮЧАЕТ ранний выход; сценарии без него считают все
+    # N как прежде. Читается через getattr — самодельный Namespace без флага валиден.
+    if getattr(args, "stop_on_success", False):
+        scenario.stop_on_success = True
     try:
         # Ошибка конфигурации судьи -> exit 1 ДО первого обращения к таргету:
         # оператор узнаёт о ней раньше, чем прогон потратит вызовы к стенду.
@@ -730,6 +744,8 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--scenario", required=True)
     pc.add_argument("--output", required=True)
     pc.add_argument("--iterations", type=int, default=None)
+    pc.add_argument("--stop-on-success", action="store_true",
+                    help="остановиться на первом доказанном прогоне (ранний выход движка; CARD-CLI-MEGA-UX §4)")
     _add_online_flags(pc)
     _add_attacker_flags(pc)
     _add_judge_flags(pc)
@@ -806,13 +822,22 @@ def build_parser() -> argparse.ArgumentParser:
     def _cmd_go(args: argparse.Namespace) -> int:
         from memnotsafe.selfserve import run_go
 
-        return run_go(args, run_command=cmd_run, load_campaign=load_campaign)
+        # CARD-CLI-MEGA-UX §4: `campaign` инъектируется рядом с `run` — `--until-proven`
+        # идёт штатным campaign-путём со stop_on_success (свой цикл не строим).
+        return run_go(args, run_command=cmd_run, campaign_command=cmd_campaign, load_campaign=load_campaign)
 
-    pgo = sub.add_parser("go", help="интерактивный мастер: сценарий → preflight → прогон → threat-report (P18)")
+    pgo = sub.add_parser("go", help="интерактивный мастер: сценарий → preflight → прогон → threat-report (P18/CLI-MEGA-UX)")
     pgo.add_argument("--scenario", default=None, help="путь к сценарию; без него — выбор из каталога")
     pgo.add_argument("--target", default=None, help="URL таргета или 'mock' (по умолчанию из сценария)")
+    pgo.add_argument("--adapter", default=None, help="фильтр каталога по целевому адаптеру (mock/investment_stand/http_endpoint)")
     pgo.add_argument("--output", default=None, help="каталог прогона (по умолчанию ASCII runs/go-<id>-<UTC>)")
     pgo.add_argument("--yes", action="store_true", help="тихий режим: без вопросов и без автооткрытия отчёта")
+    pgo.add_argument("--live-ack", action="store_true",
+                     help="явное подтверждение живого стенда — требуется под --yes по live-таргету (CLI-MEGA-UX §2)")
+    pgo.add_argument("--until-proven", action="store_true",
+                     help="«кнопка до проникновения»: штатный campaign со stop_on_success (CLI-MEGA-UX §4)")
+    pgo.add_argument("--attacker-preset", default=None,
+                     help="пресет атакующего: qwen | yandexgpt | deepseek | stub | manual (CLI-MEGA-UX §3)")
     pgo.add_argument("--ping", action="store_true", help="отдельный ПЛАТНЫЙ шаг проверки связи судьи (по явному согласию)")
     pgo.add_argument("--no-color", action="store_true", help="выключить цвет (ANSI)")
     _add_online_flags(pgo)
@@ -849,6 +874,20 @@ def build_parser() -> argparse.ArgumentParser:
     ppilot.add_argument("--output", default=None, help="каталог прогона runs/pilot-<ts>")
     ppilot.add_argument("--baseline", default=None, help="каталог прошлого пилота для retest-секции (было → стало)")
     ppilot.set_defaults(func=_cmd_pilot)
+
+    # CARD-CLI-MEGA-UX §1: управление Docker-стендом из CLI. Аддитивная врезка
+    # (прецедент P16/P17/P18): вся логика в memnotsafe.standctl, импорт ленивый —
+    # другие команды его не тянут; движок/campaign/атаки/оракулы/mock не затронуты.
+    def _cmd_stand(args: argparse.Namespace) -> int:
+        from memnotsafe.standctl import run_stand
+
+        return run_stand(args)
+
+    pstand = sub.add_parser("stand", help="стенд из CLI: up|down|status|keys (docker compose stack2, перевыпуск ключей) (CLI-MEGA-UX §1)")
+    pstand.add_argument("stand_cmd", choices=("up", "down", "status", "keys"),
+                        help="up — поднять стенд и дождаться healthz 9600; down — остановить; status — healthz + контейнеры; keys — перевыпустить SK_GENAI_* в .env (с .env.bak)")
+    pstand.add_argument("--no-color", action="store_true", help="выключить цвет (ANSI)")
+    pstand.set_defaults(func=_cmd_stand)
 
     return p
 

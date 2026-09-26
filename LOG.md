@@ -48,6 +48,68 @@ project: memnotsafe
   `tests/test_threat_report*.py` — правок не потребовалось. Не самопринимаю — приёмка A0
   визуальная (штампы/цвета/скрины)
 
+### 2026-09-26 — claude-code — CLI-MEGA-UX · правка D1 (RETURN_FOR_FIX) — рабочий пресет судьи (feat/cli-mega-ux @ 1d14a6f)
+
+- по VERDICT-CLI-MEGA-UX-2026-09-26 (RETURN_FOR_FIX, 1 дефект). D1: `_choose_judge` ставил
+  только `args.judge=True`; на сценарии БЕЗ блока `judge:` судья включался с дефолтами JudgeSpec
+  (OpenRouter/OPENROUTER_API_KEY/пустая модель) → блокер требовал чужой ключ, с ключом падал на
+  `validate_judge_spec`, а карточка «до» обещала deepseek-v4-flash. Обещание словом, не делом
+- правка (только путь мастера): `selfserve._apply_default_judge_preset` — когда мастер включил судью,
+  у сценария нет своего `judge.model` и нет `--judge-model` → пресет карты §2: model
+  `gpt://b1g0nvl5lgk8he84ckp8/deepseek-v4-flash/latest` (folder буква `l`, через `_yandex_model`,
+  A0 1d6e9aa), base_url Yandex, api_key_env `PROVIDER_API_KEY`; кладём в сценарий (карточка/блокер/
+  ping) И в args; `cli._apply_judge_overrides` теперь применяет `judge_base_url`/`judge_api_key_env`
+- не-регресс: свой блок `judge:` и явный `--judge-model` не трогаем; прямые run/campaign этих флагов
+  не имеют (getattr→None) → без изменений. Замок: `go --yes` по живому (SK_GENAI_1003+PROVIDER_API_KEY,
+  без OPENROUTER_API_KEY) доходит до live-ack с судьёй Yandex
+- RED (источник родителя 1d6e9aa, 6 новых тестов) → 6 failed по сути (нет `_apply_default_judge_preset`;
+  блокер OPENROUTER; namespace без judge-полей; base_url остаётся OpenRouter). GREEN: targeted 45 (39+6),
+  полный suite 1578 / 0 (1572+6). Движок/campaign/атаки/оракулы/mock не тронуты; секретов 0; live не запускал
+- ALLOWLIST правки: `cli.py`, `selfserve.py`, `tests/test_selfserve_cli_mega_ux.py` (+секция D1). Сдача в
+  handoff/inbox (HANDOFF-CLI-MEGA-UX-D1-FIX + red/targeted/suite логи); не самопринимаю — жду A0
+
+
+### 2026-09-26 — claude-code — CLI-MEGA-UX: стенд из CLI, авто-ключи, выбор атаки/атакующего, «до проникновения» (feat/cli-mega-ux)
+
+- директива владельца «займись CLI»; карта поглощает UX-STAND-KEYS-MODELS + GO-UNTIL-PROVEN;
+  чинит три спотыкания первого пользователя (ушёл в mock думая что бьёт стенд; судья выключен
+  молча; после прогона нет пути в консоль). Только mock (smoke); live прогонит A0 по «го»
+- (1) новый `standctl.py` + `memnotsafe stand up|down|status|keys`: docker CLI ищется в PATH и в
+  `%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin`; каталог compose — из `MEMNOTSAFE_STACK2_DIR`/
+  pilot.yaml (не хардкод); `up` = compose up -d + ожидание healthz :9600→200; `keys` = перевыпуск
+  SK_GENAI_1001..1005 в .env с бэкапом .env.bak (UI_CLIENT_SECRET из env; значения не печатаются).
+  Все внешние точки (runner/healthz/issuer) инъектируемы — юниты без реального docker и сети;
+  мёртвый Docker/недостижимый healthz → человеческое сообщение, не traceback; compose без shell=True
+- (2) `selfserve.py`: карточка «до» первой строкой печатает ЦЕЛЬ (`MOCK (smoke)` / `ЖИВОЙ СТЕНД <url>`);
+  непропускаемое подтверждение живого (под `--yes` нужен `--live-ack`); блокер отсутствующих ИМЁН
+  ключей перед live (не traceback); явный выбор судьи с ценником (deepseek-v4-flash, ≈3 вызова/попытку)
+  и дефолтом по типу цели (live black-box → рекомендуем вкл)
+- (3) каталог `go` — группировка по family + однострочное описание из metadata + фильтр по адаптеру
+  (`--adapter`); пресеты атакующего (`--attacker-preset` qwen|yandexgpt|deepseek|stub|manual) →
+  существующие флаги `--attacker-*` (cli.py:583-593 не тронуты)
+- (4) `go --until-proven` зовёт ШТАТНЫЙ `campaign` со `stop_on_success` и iterations=5 (свой цикл не
+  строим — петля одна, в движке Campaign.run); cli.py: `campaign --stop-on-success` (врезка в
+  `_run_campaign`); честный итог NOT_PROVEN (все N мимо ≠ «готово»); бюджет наперечёт перед стартом
+- (5) `selfserve.console_open_hint` + карточки «после» (`go` и `pilot_pack`): точный путь открытия
+  прогона в консоли (`cd console && npm run dev` / PowerShell `;`) + каталог прогона. Консоль из CLI
+  не стартуем (решение владельца; NOTICED)
+- ALLOWLIST: cli.py (врезки), selfserve.py, новый standctl.py, pilot_pack.py (только печать пути),
+  tests (2 новых файла), README.md (быстрый старт по факту), LOG.md. Движок/campaign/атаки/оракулы/
+  mock НЕ тронуты. Секретов 0; compose без shell=True; значения ключей не печатаются
+- замки RED→GREEN: RED на чистом main 8c3b3ef (только новые тесты) — test_standctl ImportError
+  (модуль отсутствует) + 22 failed по сути (нет target_goal_line/before_card goal/live-ack/
+  missing_key_names/_choose_judge/apply_attacker_preset/group_by_family/until-proven/console_open_hint/
+  run_dir), 1 green — pre-existing регресс-гвард mock. targeted 39 passed; полный suite 1572 passed / 0
+  (= 1533 базовых + 39 новых)
+- DEVIATIONS: D1 подпись коммита Opus 4.8 (карта адресована Fable; STANDING-RULES §8 — по факт-модели);
+  D2 folder-id атакующего взят из карты (b1g0nvl51gk8he84ckp8) — расходится с EXECUTOR-BOOTSTRAP §5
+  (b1g0nvl5lgk8…, буква l vs цифра 1); docs везде элидят его как gpt://…/, живой литерал только в
+  .env/контейнере (читать нельзя) → A0 сверяет до батареи; пресет manual — обход. NOTICED: боевой
+  HTTP-поток `stand keys` (Keycloak→9600) реализован best-effort — bootstrap_api_keys.sh вне репо
+  (isolated-live-test/, открывать нельзя), сверяет A0 ручным приёмом up→keys→status→down
+- live НЕ запускал; ручной приём стенда (up→healthz→status→down) — за A0 по «го» владельца
+
+
 ### 2026-09-26 — claude-code — COND-CANON: условный вариант канона global_policy_injection (feat/cond-canon-global-policy)
 
 - контекст: H09 rate-замер (live, N=12): условная форма — hit-rate WRITE 11/12=0.917 против

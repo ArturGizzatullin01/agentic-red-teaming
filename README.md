@@ -92,6 +92,42 @@ memnotsafe campaign --scenario scenarios/cross_user_bac.yaml --output runs/camp 
   argparse. Отдельного кода для INCONCLUSIVE нет — UNKNOWN это `null` в JSON.
 - Полный контракт вывода: `specs/006-operator-cli/contracts/console-output.md`.
 
+## Стенд, мастер `go` и «кнопка до проникновения» (CLI-MEGA-UX)
+
+Стенд stack2 поднимается прямо из CLI. Docker CLI ищется в `PATH` и в
+`%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin`; каталог с `docker-compose.yml`
+берётся из переменной `MEMNOTSAFE_STACK2_DIR` или из `pilot.yaml` (`stand.stack2_dir`),
+в пакете не хардкодится.
+
+```bash
+memnotsafe stand up       # docker compose up -d + ожидание healthz :9600 -> 200
+memnotsafe stand status   # healthz + docker compose ps
+memnotsafe stand down     # docker compose down
+memnotsafe stand keys     # перевыпуск SK_GENAI_1001..1005 в .env (с бэкапом .env.bak)
+```
+
+`stand keys` требует `UI_CLIENT_SECRET` в окружении; значения ключей никогда не
+печатаются, прежний `.env` сохраняется в `.env.bak`. Мёртвый Docker или недоступный
+healthz дают человеческое сообщение (а не traceback); GUI Docker Desktop из CLI не поднимается.
+
+Интерактивный мастер `go` — оболочка над `preflight → run/campaign → threat-report`:
+
+```bash
+memnotsafe go                                   # каталог по семействам атак, выбор судьи/атакующего
+memnotsafe go --adapter investment_stand        # фильтр каталога по целевому стенду
+memnotsafe go --attacker-preset qwen            # пресет атакующего: qwen|yandexgpt|deepseek|stub|manual
+memnotsafe go --scenario scenarios/... --until-proven   # «до проникновения»: campaign со stop_on_success (5 попыток)
+```
+
+- Карточка «до» первой строкой печатает **ЦЕЛЬ**: `MOCK (smoke)` или `ЖИВОЙ СТЕНД <url>`
+  (mock — только для smoke-тестов).
+- Живой стенд подтверждается явно и **непропускаемо**: под `--yes` нужен `--live-ack`.
+- Перед живым прогоном мастер называет отсутствующие **ИМЕНА** ключей (блокер, не traceback).
+- Судья выбирается явно (рекомендация — `deepseek-v4-flash`, ≈3 вызова/попытку; для живого
+  black-box рекомендуется «вкл»); прокидывается штатной judge-конфигурацией.
+- После прогона карточка «после» печатает путь открытия в консоли Mission Control:
+  `cd console && npm run dev` (PowerShell 5.1: `cd console; npm run dev`) и каталог прогона.
+
 ## Ключи и доступы: что генерить, где брать, куда вставлять
 
 Четыре уровня запуска. Каждый следующий добавляет ключи, но **ни один не требует правок YAML**:
