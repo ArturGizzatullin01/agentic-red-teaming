@@ -39,7 +39,7 @@ from rich.console import Console
 
 from memnotsafe.core.campaign import Campaign
 from memnotsafe.core.campaign_serialize import campaign_to_dict
-from memnotsafe.core.config import build_adapter, load_scenario
+from memnotsafe.core.config import build_adapter, load_scenario, resolve_effective_target
 from memnotsafe.core.models import CampaignResult
 from memnotsafe.core.result_readouts import aggregate_metrics
 from memnotsafe.preflight import BLOCKER, run_preflight
@@ -255,10 +255,17 @@ def _resolve_pack_path(rel: str) -> str:
     return str(_REPO_ROOT / rel)
 
 
-async def _run_pack(cfg: PilotConfig, target, out_dir: Path, console: Console) -> list[_RunEntry]:
+async def _run_pack(cfg: PilotConfig, target, out_dir: Path, console: Console,
+                    effective_target=None) -> list[_RunEntry]:
     """Гонит стартовый пак существующими сценариями реестра против ручки пилота
     (один общий T1-адаптер, последовательно). Уважает budget_cap (потолок прогонов
-    против ручки): исчерпан → остальное честно пропускается."""
+    против ручки): исчерпан → остальное честно пропускается.
+
+    EXT-B (ДЕФЕКТ-3, замок задачи 1): пак гоняет РЕАЛЬНЫЕ сценарии реестра (их
+    adapter в YAML — mock), но реально бьёт ЭФФЕКТИВНУЮ цель пилота (http_endpoint,
+    ручка из конфига). effective_target прокидывается в каждую под-кампанию, чтобы
+    experiment.json/campaign.json называли эффективную цель, а не строку mock из
+    сценария реестра."""
     runs: list[_RunEntry] = []
     committed = 0
     for entry in STARTER_PACK:
@@ -275,7 +282,8 @@ async def _run_pack(cfg: PilotConfig, target, out_dir: Path, console: Console) -
                 continue
             committed += 1
             sc = load_scenario(path)
-            cr = await Campaign(sc, target, out_dir / run_id).run(repetitions=cfg.iterations)
+            cr = await Campaign(sc, target, out_dir / run_id,
+                                effective_target=effective_target).run(repetitions=cfg.iterations)
             re = _RunEntry(entry=entry, is_control=is_control)
             re.results = list(cr.results)
             re.case_ids = [r.case_id for r in cr.results]
@@ -396,8 +404,14 @@ async def _pilot_chain(cfg: PilotConfig, out_dir: Path, load_campaign: CampaignL
     out_dir.mkdir(parents=True, exist_ok=True)
     synth_path = _write_synth_scenario(cfg, out_dir)
     synth = load_scenario(synth_path)
+    # EXT-B (ДЕФЕКТ-3): эффективная цель пилота = ручка из конфига (http_endpoint).
+    # Её и адаптер строим из одной точки резолва; та же цель уедет в под-кампании,
+    # чтобы артефакты называли ручку, а не mock из сценариев реестра.
+    effective = resolve_effective_target(synth)
     try:
-        target = build_adapter(synth)          # HttpEndpointAdapter; нет ключа → ValueError
+        from memnotsafe.core.config import build_adapter_from_effective
+
+        target = build_adapter_from_effective(synth, effective)  # HttpEndpointAdapter; нет ключа → ValueError
     except ValueError as exc:
         _render_key_instruction(console, cfg, exc)
         return 2
@@ -421,7 +435,7 @@ async def _pilot_chain(cfg: PilotConfig, out_dir: Path, load_campaign: CampaignL
                 console.print(f"[red][БЛОКЕР] {c.check_id}: {c.text}[/red]")
             return 1
 
-        runs = await _run_pack(cfg, target, out_dir, console)
+        runs = await _run_pack(cfg, target, out_dir, console, effective_target=effective)
     finally:
         await target.aclose()
 

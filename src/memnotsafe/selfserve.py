@@ -793,7 +793,14 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
                                          live_ack=bool(getattr(args, "live_ack", False))):
             return 2 if yes else 0
 
-        result = run_preflight(scenario_path)
+        # EXT-B (задача 3): preflight бьёт по ЭФФЕКТИВНОЙ цели (--target уважается),
+        # чтобы проверялась та же цель, что и в прогоне. Отказ резолва (URL поверх
+        # mock — замок «никогда тихий mock») — человеческая ошибка, не трейсбек.
+        try:
+            result = run_preflight(scenario_path, target_override=target_override)
+        except ValueError as exc:
+            console.print(f"[red][БЛОКЕР] {exc}[/red]")
+            return 1
         _render_preflight(console, result)
         blockers = [c for c in result.checks if c.status == BLOCKER]
         if blockers:

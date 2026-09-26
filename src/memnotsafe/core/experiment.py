@@ -162,6 +162,7 @@ class ExperimentSpec:
 def build_experiment_spec(
     scenario,
     *,
+    effective_target=None,
     attacker_config=None,
     online: bool = False,
     online_attempts: int = 5,
@@ -171,7 +172,13 @@ def build_experiment_spec(
     Значения секретов недоступны по построению: config несёт только имена
     переменных окружения. stand_version (P09-full) — наблюдение среды:
     попадает в volatile и в digest НЕ входит, поэтому experiment_id для
-    той же конфигурации не меняется."""
+    той же конфигурации не меняется.
+
+    EXT-B (ДЕФЕКТ-3): тождество эксперимента определяет ЭФФЕКТИВНАЯ цель, а не
+    строка adapter из YAML. effective_target (config.EffectiveTarget) — опционален:
+    None → цель берётся из scenario.target (регресс: experiment_id прежних
+    сценариев без оверрайда побайтово не меняется). Задан → adapter/base_url/
+    profile берутся из него, и смена --target меняет experiment_id."""
     import memnotsafe.generation.prompts as prompts_module
     from memnotsafe.attacks.base import ATTACK_REGISTRY, get_attack
 
@@ -195,21 +202,30 @@ def build_experiment_spec(
             "sha256": file_sha256(scenario.corpus_path) or UNKNOWN,
         }
 
+    # EXT-B (ДЕФЕКТ-3, полностью): adapter/base_url/profile берутся из ЭФФЕКТИВНОЙ
+    # цели. effective_target=None → из scenario.target (регресс: прежний target и
+    # experiment_id побайтово те же; eff_adapter совпадает со scenario.target.adapter).
+    if effective_target is not None:
+        eff_adapter = effective_target.adapter
+        eff_base_url = effective_target.base_url
+        eff_profile = effective_target.profile
+    else:
+        eff_adapter = scenario.target.adapter
+        eff_base_url = scenario.target.base_url
+        eff_profile = getattr(scenario.target, "profile", None)
+
     target_section = {
-        "adapter": scenario.target.adapter,
-        "base_url": scenario.target.base_url,
+        "adapter": eff_adapter,
+        "base_url": eff_base_url,
         "model_name": model_name,
         "auth_mode": auth_mode,
     }
-    # G6 (EXT-A): эффективная цель определяет тождество эксперимента, а не только
-    # строка adapter из YAML (ДЕФЕКТ-3). Ключи добавляются ТОЛЬКО при наличии
-    # профиля — сценарии без профиля сохраняют прежний target и experiment_id
-    # побайтово (регресс). Digest — нормализованный профиль без значений секретов
-    # (в профиле только имена env).
-    profile = getattr(scenario.target, "profile", None)
-    if profile is not None:
-        target_section["profile_schema_version"] = profile.schema_version
-        target_section["profile_digest"] = profile.normalized_digest()
+    # G6 (EXT-A): профиль-ключи добавляются ТОЛЬКО при наличии профиля — сценарии
+    # без профиля сохраняют прежний target и experiment_id побайтово. Digest —
+    # нормализованный профиль без значений секретов (в профиле только имена env).
+    if eff_profile is not None:
+        target_section["profile_schema_version"] = eff_profile.schema_version
+        target_section["profile_digest"] = eff_profile.normalized_digest()
 
     spec = ExperimentSpec(
         schema_version=EXPERIMENT_SCHEMA_VERSION,
@@ -235,7 +251,9 @@ def build_experiment_spec(
         },
         corpus=corpus_section,
         delivery={
-            "channel": scenario.target.adapter,
+            # Канал доставки — эффективный адаптер (совпадает со scenario.target.adapter
+            # при effective_target=None: регресс experiment_id сохранён).
+            "channel": eff_adapter,
             "attacker_user_id": scenario.attacker.user_id,
             "victim_user_id": scenario.victim.user_id,
         },

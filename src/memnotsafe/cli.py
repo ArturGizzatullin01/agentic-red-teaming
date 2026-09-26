@@ -13,7 +13,13 @@ import sys
 from pathlib import Path
 
 from memnotsafe.core.campaign import Campaign
-from memnotsafe.core.config import build_adapter, load_scenario, validate_judge_spec
+from memnotsafe.core.config import (
+    apply_project_judge_defaults,
+    build_adapter,
+    load_scenario,
+    resolve_effective_target,
+    validate_judge_spec,
+)
 from memnotsafe.core.runner import RunnerError
 from memnotsafe.generation.errors import AttackerError
 from memnotsafe.reporting.console import (
@@ -132,6 +138,11 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int, c
     reporter = _reporter(args)
     scenario = load_scenario(args.scenario)
     _apply_judge_overrides(scenario, args)
+    # EXT-B (судья из конфигурации): после флагов и блока сценария — проектный
+    # ENV-дефолт (MEMNOTSAFE_JUDGE_*) для сценариев БЕЗ своего блока judge:.
+    # Порядок флаги → блок → ENV → человеческая ошибка (validate ниже); блоки и
+    # D1-пресет не трогаются (см. apply_project_judge_defaults).
+    apply_project_judge_defaults(scenario, args)
     # CARD-CLI-MEGA-UX §4: «кнопка до проникновения» просит движок остановиться на
     # первом доказанном (единственный цикл — Campaign.run + stop_on_success; свой
     # не строим). Флаг только ВКЛЮЧАЕТ ранний выход; сценарии без него считают все
@@ -145,7 +156,19 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int, c
     except RunnerError as exc:
         reporter.emit_error(command=command, message=str(exc))
         return 1
-    target = build_adapter(scenario, args.target)
+    # EXT-B (ДЕФЕКТ-3): резолвим ЕДИНУЮ эффективную цель через ту же точку
+    # (resolve_effective_target) — та же EffectiveTarget уедет в Campaign →
+    # ExperimentSpec/метаданные (совпадение цели, адаптера и артефактов; смена
+    # --target меняет experiment_id). Отказ резолва (URL поверх mock — замок
+    # «никогда тихий mock») — человеческая ошибка ДО прогона, exit 1, не трейсбек
+    # и не молчаливый mock. build_adapter строит адаптер из той же цели (внутри
+    # резолвит детерминированно; остаётся точкой подмены для регресс-тестов).
+    try:
+        effective = resolve_effective_target(scenario, getattr(args, "target", None))
+    except ValueError as exc:
+        reporter.emit_error(command=command, message=str(exc))
+        return 1
+    target = build_adapter(scenario, getattr(args, "target", None))
     repetitions = args.iterations if getattr(args, "iterations", None) else default_repetitions
     # W9: metrics.repetitions сценария CLI-командами переопределяется всегда
     # (run жёстко 1, campaign — --iterations или 5). Молчать нельзя — конфиг
@@ -177,6 +200,7 @@ async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int, c
         attacker_config=attacker_config,
         online=online,
         online_attempts=getattr(args, "online_attempts", 5),
+        effective_target=effective,
     )
     try:
         result = await campaign.run(repetitions=repetitions)

@@ -71,7 +71,7 @@ def test_go_reads_dotenv_names_only(tmp_path, monkeypatch):
     monkeypatch.delenv("MEMNOTSAFE_P18_GOENV", raising=False)
     fake = PreflightResult(scenario_id="x", scenario_path="x")
     fake.checks.append(Check("B2", "t", BLOCKER, "t"))  # остановит до прогона
-    monkeypatch.setattr(selfserve, "run_preflight", lambda p: fake)
+    monkeypatch.setattr(selfserve, "run_preflight", lambda p, **kw: fake)
     args = build_parser().parse_args(
         ["go", "--yes", "--scenario", str(SCENARIO), "--output", str(tmp_path / "o"), "--no-color"]
     )
@@ -196,7 +196,7 @@ def test_go_preflight_blocker_stops_before_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     fake = PreflightResult(scenario_id="x", scenario_path="x")
     fake.checks.append(Check("B2", "две личности — один ключ", BLOCKER, "attacker и victim делят ключ"))
-    monkeypatch.setattr(selfserve, "run_preflight", lambda p: fake)
+    monkeypatch.setattr(selfserve, "run_preflight", lambda p, **kw: fake)
     args = build_parser().parse_args(
         ["go", "--yes", "--scenario", str(SCENARIO), "--output", str(tmp_path / "out"), "--no-color"]
     )

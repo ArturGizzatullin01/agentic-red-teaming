@@ -40,7 +40,7 @@ def _go_args(*extra: str):
 
 def _clean_preflight(monkeypatch):
     monkeypatch.setattr(selfserve, "run_preflight",
-                        lambda p: PreflightResult(scenario_id="x", scenario_path=str(p)))
+                        lambda p, **kw: PreflightResult(scenario_id="x", scenario_path=str(p)))
 
 
 # ------------------------------------------------------------------ §2 цель крупно

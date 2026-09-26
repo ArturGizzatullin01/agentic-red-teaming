@@ -89,9 +89,17 @@ class Campaign(CampaignConstructionMixin, CampaignEscalationMixin, CampaignPersi
         online: bool = False,
         online_attempts: int = 5,
         clock: Callable[[], float] | None = None,
+        effective_target=None,
     ):
         self.scenario = scenario
         self.target = target
+        # EXT-B (ДЕФЕКТ-3): эффективная цель прогона (config.EffectiveTarget) —
+        # то, с чем РЕАЛЬНО говорит self.target. None → цель берётся из
+        # scenario.target (регресс: experiment_id и метаданные прежних прогонов
+        # не сдвигаются). Задана → её adapter/base_url называют эксперимент и
+        # метаданные, а не строка adapter из YAML (кейс pilot: mock-сценарии
+        # против http_endpoint-адаптера).
+        self._effective_target = effective_target
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         # Судья конструируется здесь и живёт на кампанию, а не на случай:
@@ -140,6 +148,7 @@ class Campaign(CampaignConstructionMixin, CampaignEscalationMixin, CampaignPersi
 
         spec = build_experiment_spec(
             self.scenario,
+            effective_target=self._effective_target,
             attacker_config=self.attacker_config,
             online=self.online,
             online_attempts=self.online_attempts,
@@ -413,10 +422,15 @@ class Campaign(CampaignConstructionMixin, CampaignEscalationMixin, CampaignPersi
         run_metadata() — опциональное расширение контракта адаптера (duck-typed,
         не target-specific ветвление в ядре): mock его не имеет → поля null."""
         run_meta = self.target.run_metadata() if hasattr(self.target, "run_metadata") else {}
+        # EXT-B (ДЕФЕКТ-3): метаданные называют ЭФФЕКТИВНЫЙ адаптер/цель. None →
+        # из scenario.target (регресс: прежние прогоны без оверрайда не сдвигаются).
+        eff = self._effective_target
+        eff_adapter = eff.adapter if eff is not None else self.scenario.target.adapter
+        eff_base_url = eff.base_url if eff is not None else self.scenario.target.base_url
         return {
             "run_id": run_id,
-            "adapter": self.scenario.target.adapter,
-            "target": run_meta.get("target") or self.scenario.target.base_url or self.scenario.target.adapter,
+            "adapter": eff_adapter,
+            "target": run_meta.get("target") or eff_base_url or eff_adapter,
             "reset_available": run_meta.get("reset_available"),
             "evidence_channel": run_meta.get("evidence_channel"),
             "attempts": attempts,
