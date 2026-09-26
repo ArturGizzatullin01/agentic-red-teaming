@@ -21,7 +21,9 @@ from rich.console import Console
 from memnotsafe.cli import build_parser, load_campaign
 from memnotsafe.pilot_pack import (
     DEFAULT_API_KEY_ENV,
+    STARTER_PACK,
     PilotConfigError,
+    _resolve_pack_path,
     _tristate_from_verdict,
     classify_retest,
     init_template,
@@ -225,6 +227,55 @@ def test_cli_pilot_arg_parsing():
     assert a.init is True and a.config is None
     b = parser.parse_args(["pilot", "--config", "pilot.yaml", "--output", "runs/p", "--baseline", "runs/prev"])
     assert b.config == "pilot.yaml" and b.output == "runs/p" and b.baseline == "runs/prev"
+
+
+# --------------------------------------------- P19 часть 2: wheel со сценариями
+import importlib.resources as _resources
+
+# Строкой (не импортом из pilot_pack): на чистой базе константы ещё нет — так
+# новые тесты дают ПО-ТЕСТОВЫЙ RED, а не collection-error всего файла.
+PILOT_SCENARIOS_PKG = "memnotsafe.pilot_scenarios"
+
+
+def _starter_basenames() -> set[str]:
+    names: set[str] = set()
+    for e in STARTER_PACK:
+        names.add(Path(e.scenario).name)
+        if e.control:
+            names.add(Path(e.control).name)
+    return names
+
+
+def test_pilot_scenarios_available_as_package_resource():
+    """ЗАМОК P19: каждый сценарий стартового пака виден через importlib.resources
+    пакета memnotsafe.pilot_scenarios (значит уедет в wheel и найдётся из голого
+    pip install). На чистой базе пакета нет → тест красный."""
+    root = _resources.files(PILOT_SCENARIOS_PKG)
+    for name in _starter_basenames():
+        assert root.joinpath(name).is_file(), f"сценарий пака не упакован: {name}"
+
+
+def test_pilot_resolves_scenario_without_repo_path(monkeypatch):
+    """ЗАМОК P19: pilot находит сценарий БЕЗ каталога репозитория. Подменяем
+    _REPO_ROOT на несуществующий путь (эмулируем голый install) — резолвер
+    обязан вернуть упакованный ресурс, а не мёртвый repo-путь."""
+    import memnotsafe.pilot_pack as pp
+    monkeypatch.setattr(pp, "_REPO_ROOT", Path("/nonexistent-repo-root-xyz"))
+    for name in _starter_basenames():
+        resolved = _resolve_pack_path(f"scenarios/{name}")
+        assert Path(resolved).is_file(), f"{name}: резолвер не нашёл упакованный сценарий без repo"
+        assert "nonexistent-repo-root-xyz" not in resolved, "резолвер ушёл в мёртвый repo-путь"
+
+
+def test_packaged_pilot_scenarios_match_repo_originals():
+    """Единый источник истины: упакованные копии БАЙТ-В-БАЙТ равны каноническим
+    scenarios/<name>.yaml — дрейфа между двумя местами быть не должно."""
+    repo_scenarios = Path(__file__).resolve().parents[1] / "scenarios"
+    root = _resources.files(PILOT_SCENARIOS_PKG)
+    for name in _starter_basenames():
+        packaged = root.joinpath(name).read_bytes()
+        original = (repo_scenarios / name).read_bytes()
+        assert packaged == original, f"{name}: упакованная копия разошлась с scenarios/{name}"
 
 
 def test_cli_pilot_needs_config_or_init(capsys):

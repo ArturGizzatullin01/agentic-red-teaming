@@ -25,6 +25,7 @@ env (api_key_env), наружу — лишь ИМЯ переменной.
 from __future__ import annotations
 
 import asyncio
+import importlib.resources as resources
 import json
 import os
 import sys
@@ -48,7 +49,12 @@ from memnotsafe.selfserve import attempt_lines, console_open_hint, load_dotenv, 
 DEFAULT_API_KEY_ENV = "MEMNOTSAFE_TARGET_API_KEY"
 CampaignLoader = Callable[[Path], Any]
 
-# Корень репозитория (сценарии реестра лежат рядом с пакетом, не в wheel).
+# P19 (часть 2): стартовый набор сценариев пилота упакован в wheel как package
+# data пакета memnotsafe.pilot_scenarios. Резолвинг (_resolve_pack_path):
+# сначала package resource (importlib.resources — работает из голого pip install),
+# затем fallback на репозиторный scenarios/ (поведение разработчика в дереве).
+_PILOT_SCENARIOS_PKG = "memnotsafe.pilot_scenarios"
+# Корень репозитория — только dev-fallback для резолвинга сценариев пака.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -218,9 +224,35 @@ def _write_synth_scenario(cfg: PilotConfig, out_dir: Path) -> Path:
     return path
 
 
+def _packaged_scenario_path(name: str) -> str | None:
+    """Путь к упакованному сценарию стартового пака через importlib.resources
+    (P19: виден из установленного wheel без каталога репозитория). None —
+    ресурса нет (пакет/файл отсутствует), тогда вызывающий уходит в repo-fallback."""
+    try:
+        res = resources.files(_PILOT_SCENARIOS_PKG).joinpath(name)
+    except (ModuleNotFoundError, ImportError):
+        return None
+    try:
+        if res.is_file():
+            return str(res)
+    except (OSError, AttributeError):
+        return None
+    return None
+
+
 def _resolve_pack_path(rel: str) -> str:
+    """Разрешает путь сценария стартового пака (P19 часть 2):
+    1) package resource (importlib.resources) — единственная упакованная копия,
+       видна из установленного wheel БЕЗ каталога репозитория;
+    2) fallback на репозиторный _REPO_ROOT/rel — поведение разработчика в дереве.
+    Абсолютный путь возвращается как есть."""
     p = Path(rel)
-    return str(p if p.is_absolute() else (_REPO_ROOT / rel))
+    if p.is_absolute():
+        return str(p)
+    packaged = _packaged_scenario_path(p.name)
+    if packaged is not None:
+        return packaged
+    return str(_REPO_ROOT / rel)
 
 
 async def _run_pack(cfg: PilotConfig, target, out_dir: Path, console: Console) -> list[_RunEntry]:
