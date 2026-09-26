@@ -43,7 +43,7 @@ from memnotsafe.core.models import CampaignResult
 from memnotsafe.core.result_readouts import aggregate_metrics
 from memnotsafe.preflight import BLOCKER, run_preflight
 from memnotsafe.reporting.threat_report import write_threat_report
-from memnotsafe.selfserve import attempt_lines, load_dotenv, render_provenance
+from memnotsafe.selfserve import attempt_lines, console_open_hint, load_dotenv, render_provenance
 
 DEFAULT_API_KEY_ENV = "MEMNOTSAFE_TARGET_API_KEY"
 CampaignLoader = Callable[[Path], Any]
@@ -415,6 +415,9 @@ async def _pilot_chain(cfg: PilotConfig, out_dir: Path, load_campaign: CampaignL
         json.dumps([c.to_dict() for c in cases], ensure_ascii=False, indent=2), encoding="utf-8")
 
     _render_summary(console, report, combined, path)
+    # CARD-CLI-MEGA-UX §5 (спотыкание №3): точный путь открытия прогона в консоли.
+    for line in console_open_hint(out_dir):
+        console.print(line)
     # строки попыток P12 (переиспользуем selfserve.attempt_lines) — из подкаталогов
     # прогонов (в корне attempts.jsonl намеренно нет, см. выше)
     for sub in sorted(out_dir.glob("*/attempts.jsonl")):

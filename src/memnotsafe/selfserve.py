@@ -51,6 +51,137 @@ _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Фазовые таймеры P12 (core/runner.py): секунды, None = фаза не выполнялась.
 _TIMING_PHASES = ("t_reset", "t_delivery", "t_settle", "t_trigger", "t_finalize", "t_scoring")
 
+# --- CARD-CLI-MEGA-UX -------------------------------------------------------
+# §4: «кнопка до проникновения» — repetitions по UX-умолчанию (сам цикл в
+# движке: Campaign.run + stop_on_success; свой цикл не строим).
+UNTIL_PROVEN_REPETITIONS = 5
+
+# §2: рекомендуемый судья и его цена (текст пункта мастера). ≈3 судимые стадии
+# на попытку — это же число даёт JudgeSpec.resolve_max_calls (3×rep×(1+retries)).
+RECOMMENDED_JUDGE_MODEL = "deepseek-v4-flash"
+JUDGE_CALLS_PER_ATTEMPT = 3
+
+# §2: адаптеры-НЕ-mock — «живой стенд». Держим согласовано с core.config.build_adapter
+# (mock iff adapter=="mock" или --target mock); всё остальное — живая цель.
+_LIVE_ADAPTERS = ("investment_stand", "http_endpoint", "openai", "openai_compatible")
+
+# §3: пресеты атакующего (скрин владельца, Yandex folder). Константы модуля:
+# model_uri + base_url + api_key_env — прокидываются в СУЩЕСТВУЮЩИЕ флаги
+# --attacker-provider/--attacker-model/--attacker-base-url/--attacker-api-key-env
+# (cli.py:583-593 не трогаем).
+_YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/v1"
+# ВНИМАНИЕ (DEVIATION-риск, хендоф): карта §3 даёт folder как
+# b1g0nvl51gk8he84ckp8 (цифра 1 после nvl5), EXECUTOR-BOOTSTRAP §5 — как
+# b1g0nvl5lgk8he84ckp8 (буква l). Во всех docs он элидится как gpt://…/, живой
+# литерал — только в .env/контейнере (читать нельзя). Взят из карты (карта —
+# закон); A0 сверяет с живым .env до батареи. Пресет #5 (manual) — обход, если
+# константа окажется неверной.
+_YANDEX_FOLDER = "b1g0nvl51gk8he84ckp8"
+_ATTACKER_API_KEY_ENV = "ATTACKER_API_KEY"
+
+
+def _yandex_model(model: str) -> str:
+    return f"gpt://{_YANDEX_FOLDER}/{model}"
+
+
+@dataclass(frozen=True)
+class AttackerPreset:
+    key: str
+    label: str
+    provider: str
+    model: str | None
+    base_url: str | None
+    api_key_env: str | None
+    manual: bool = False
+
+
+# Порядок = порядок скрина владельца (карта §3).
+ATTACKER_PRESETS: dict[str, AttackerPreset] = {
+    "qwen": AttackerPreset("qwen", "qwen3.6-35b-a3b/latest (текущий канон)", "openai",
+                           _yandex_model("qwen3.6-35b-a3b/latest"), _YANDEX_BASE_URL, _ATTACKER_API_KEY_ENV),
+    "yandexgpt": AttackerPreset("yandexgpt", "yandexgpt-5.1/latest", "openai",
+                                _yandex_model("yandexgpt-5.1/latest"), _YANDEX_BASE_URL, _ATTACKER_API_KEY_ENV),
+    "deepseek": AttackerPreset("deepseek", "deepseek-v4-flash/latest", "openai",
+                               _yandex_model("deepseek-v4-flash/latest"), _YANDEX_BASE_URL, _ATTACKER_API_KEY_ENV),
+    "stub": AttackerPreset("stub", "stub (офлайн/CI)", "stub", None, None, _ATTACKER_API_KEY_ENV),
+    "manual": AttackerPreset("manual", "вручную (модель + base_url + имя env-ключа)", "openai",
+                             None, None, None, manual=True),
+}
+
+
+def apply_attacker_preset(args: argparse.Namespace, preset_key: str) -> AttackerPreset:
+    """Проставляет пресет атакующего в СУЩЕСТВУЮЩИЕ флаги --attacker-* (cli.py не
+    трогаем). manual — оставляет флаги оператора как есть. Неизвестный ключ →
+    KeyError (вызывающий печатает человеческую причину)."""
+    preset = ATTACKER_PRESETS.get(preset_key)
+    if preset is None:
+        raise KeyError(preset_key)
+    if preset.manual:
+        return preset
+    args.attacker_provider = preset.provider
+    if preset.model is not None:
+        args.attacker_model = preset.model
+    if preset.base_url is not None:
+        args.attacker_base_url = preset.base_url
+    if preset.api_key_env is not None:
+        args.attacker_api_key_env = preset.api_key_env
+    return preset
+
+
+# --- §2: цель прогона (mock=smoke / живой стенд), судья, имена ключей ---------
+def is_live_target(scenario: Scenario, target_override: str | None = None) -> bool:
+    """Живая цель iff адаптер не mock и --target не 'mock' — ровно критерий
+    core.config.build_adapter (mock iff adapter=='mock' или override=='mock')."""
+    return not (scenario.target.adapter == "mock" or target_override == "mock")
+
+
+def _live_url(scenario: Scenario, target_override: str | None = None) -> str:
+    if target_override and target_override != "mock":
+        return target_override
+    return scenario.target.base_url or scenario.target.adapter
+
+
+def target_goal_line(scenario: Scenario, target_override: str | None = None) -> str:
+    """Первая строка карточки «до» (спотыкание №1): чётко ЧТО бьём. Mock —
+    помечен словом smoke (решение владельца: mock только для smoke-тестов)."""
+    if not is_live_target(scenario, target_override):
+        return "MOCK (smoke)"
+    return f"ЖИВОЙ СТЕНД {_live_url(scenario, target_override)}"
+
+
+def effective_judge_enabled(scenario: Scenario, args: argparse.Namespace) -> bool:
+    """Итоговое состояние судьи после флагов мастера (тот же приоритет, что у
+    cli._apply_judge_overrides): --no-judge гасит; --judge/--judge-model или блок
+    сценария включают."""
+    if getattr(args, "no_judge", False):
+        return False
+    return bool(scenario.judge.enabled or getattr(args, "judge", False) or getattr(args, "judge_model", None))
+
+
+def required_key_names(scenario: Scenario, args: argparse.Namespace) -> list[str]:
+    """Имена ENV, нужные для ЖИВОГО прогона (значения не трогаем и не печатаем):
+    ключи принципалов стенда (identities → SK_GENAI_*), ключ атакующей LLM при
+    --online (ATTACKER_API_KEY), ключ судьи при включённом судье (PROVIDER_API_KEY
+    на live)."""
+    names: list[str] = [str(v) for v in (scenario.target.extra.get("identities") or {}).values()]
+    if getattr(args, "online", False):
+        names.append(getattr(args, "attacker_api_key_env", None) or _ATTACKER_API_KEY_ENV)
+    if effective_judge_enabled(scenario, args):
+        names.append(scenario.judge.api_key_env)
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in names:
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def missing_key_names(scenario: Scenario, args: argparse.Namespace, environ: dict[str, str]) -> list[str]:
+    """Из required_key_names — те ИМЕНА, которых нет в окружении (пусты). Порядок
+    сохранён; значения не читаются наружу."""
+    return [n for n in required_key_names(scenario, args) if not (environ.get(n) or "").strip()]
+
 
 # --------------------------------------------------------------------- .env
 def load_dotenv(path: str | Path, environ: dict[str, str]) -> list[str]:
@@ -98,6 +229,7 @@ class CatalogEntry:
     name: str            # человекочитаемое имя (title | имя семейства | family)
     goal: str | None     # бизнес-цель из FAMILY_PLAYBOOK (пересказ, не payload)
     is_control: bool
+    description: str | None = None  # однострочное описание из metadata атаки (§3)
 
 
 def _ensure_registry() -> dict[str, Any]:
@@ -111,6 +243,13 @@ def _ensure_registry() -> dict[str, Any]:
 def _registry_name(registry: dict[str, Any], family: str) -> str | None:
     cls = registry.get(family)
     return cls.metadata.name if cls is not None else None
+
+
+def _registry_description(registry: dict[str, Any], family: str) -> str | None:
+    """Однострочное описание атаки из metadata (§3): не payload, а human-строка
+    контракта AttackMetadata.description."""
+    cls = registry.get(family)
+    return cls.metadata.description if cls is not None else None
 
 
 def _is_control(scenario_id: str) -> bool:
@@ -146,8 +285,28 @@ def build_catalog(scenarios_dir: str | Path) -> list[CatalogEntry]:
             name=human_name(sc, registry),
             goal=(FAMILY_PLAYBOOK.get(sc.attack_family) or {}).get("goal"),
             is_control=_is_control(sc.id),
+            description=_registry_description(registry, sc.attack_family),
         ))
     return entries
+
+
+def filter_by_adapter(catalog: list[CatalogEntry], adapter: str | None) -> list[CatalogEntry]:
+    """§3: фильтр каталога по целевому адаптеру (mock / investment_stand /
+    http_endpoint / …). None — без фильтра."""
+    if not adapter:
+        return list(catalog)
+    return [e for e in catalog if e.adapter == adapter]
+
+
+def group_by_family(catalog: list[CatalogEntry]) -> dict[str, list[CatalogEntry]]:
+    """§3: группировка каталога по family (внутри — контроль парой к своей атаке).
+    Ключи отсортированы; порядок внутри — is_control, затем scenario_id."""
+    groups: dict[str, list[CatalogEntry]] = {}
+    for e in catalog:
+        groups.setdefault(e.family, []).append(e)
+    for family in groups:
+        groups[family].sort(key=lambda e: (e.is_control, e.scenario_id))
+    return dict(sorted(groups.items()))
 
 
 def group_by_adapter(catalog: list[CatalogEntry]) -> dict[str, list[CatalogEntry]]:
@@ -162,13 +321,18 @@ def group_by_adapter(catalog: list[CatalogEntry]) -> dict[str, list[CatalogEntry
 
 
 # ------------------------------------------------------------- карточка «до»
-def before_card(scenario: Scenario, *, repetitions: int = 1, online: bool = False) -> dict[str, Any]:
-    """Данные карточки «до». Потолок судьи — из resolve_max_calls; фактический
+def before_card(scenario: Scenario, *, repetitions: int = 1, online: bool = False,
+                target_override: str | None = None, judge_enabled: bool | None = None) -> dict[str, Any]:
+    """Данные карточки «до». goal — первая строка (спотыкание №1): mock=smoke или
+    живой стенд <url>. judge_enabled=None → берётся из блока сценария; иначе —
+    итоговое решение мастера. Потолок судьи — из resolve_max_calls; фактический
     расход честно UNKNOWN, если есть платный канал (судья/онлайн)."""
-    judge_on = scenario.judge.enabled
+    judge_on = scenario.judge.enabled if judge_enabled is None else judge_enabled
     ceiling = scenario.judge.resolve_max_calls(repetitions) if judge_on else 0
     paid = judge_on or online
     return {
+        "goal": target_goal_line(scenario, target_override),
+        "is_live": is_live_target(scenario, target_override),
         "stand": scenario.target.adapter,
         "attempts": repetitions,
         "judge_enabled": judge_on,
@@ -295,6 +459,95 @@ def _build_run_namespace(args: argparse.Namespace, scenario_path: str, out_dir: 
     return argparse.Namespace(**d)
 
 
+def _build_campaign_namespace(args: argparse.Namespace, scenario_path: str, out_dir: Path,
+                              repetitions: int) -> argparse.Namespace:
+    """§4: Namespace для штатного `campaign` под «до проникновения». Инъектирует
+    iterations=repetitions и stop_on_success=True — единственный цикл живёт в
+    движке (Campaign.run + stop_on_success), свой цикл не строим. Контракт
+    campaign не затрагивается: флаги — через getattr."""
+    d = dict(vars(args))
+    d.update(scenario=str(scenario_path), output=str(out_dir),
+             iterations=repetitions, quiet=True, json=False, stop_on_success=True)
+    d.setdefault("target", None)
+    return argparse.Namespace(**d)
+
+
+def _choose_judge(console: Console, args: argparse.Namespace, *, is_live: bool, yes: bool) -> None:
+    """Спотыкание №2: судья не должен быть выключен молча. Явный пункт выбора с
+    ценником; дефолт-подсказка по типу цели (живой black-box → рекомендуем вкл).
+    Явные флаги --judge/--no-judge уважаем и не переспрашиваем. Итог кладём в
+    args.judge — дальше его подхватит штатная judge-конфигурация (_apply_judge_overrides)."""
+    if getattr(args, "no_judge", False) or getattr(args, "judge", False):
+        return  # решено явным флагом
+    default_on = is_live  # живой black-box → рекомендуем вкл
+    if yes:
+        args.judge = default_on
+        return
+    prompt = (f"Судья: включить? ({RECOMMENDED_JUDGE_MODEL}, ≈{JUDGE_CALLS_PER_ATTEMPT} вызова/попытку; "
+              "живой black-box → рекомендуется вкл)")
+    args.judge = _confirm(console, prompt, default=default_on)
+
+
+def _choose_attacker_preset(console: Console, args: argparse.Namespace, *, online: bool, yes: bool) -> None:
+    """§3: атакующий по запросу. --attacker-preset уважаем всегда; интерактивный
+    выбор — только при онлайне (атакующая LLM инстанцируется лишь под --online) и
+    не в тихом режиме. Неизвестный пресет флага → блокирующая причина."""
+    preset_key = getattr(args, "attacker_preset", None)
+    if preset_key:
+        try:
+            preset = apply_attacker_preset(args, preset_key)
+        except KeyError:
+            console.print(f"[red]неизвестный пресет атакующего: {preset_key!r}. "
+                          f"Доступны: {', '.join(ATTACKER_PRESETS)}.[/red]")
+            raise
+        console.print(f"[dim]атакующий: пресет {preset.key} — {preset.label}[/dim]")
+        return
+    if not (online and not yes):
+        return
+    ordered = list(ATTACKER_PRESETS.values())
+    console.print("[bold]Атакующий (пресеты)[/bold]:")
+    for i, p in enumerate(ordered, 1):
+        console.print(f"  {i}. {p.label}")
+    try:
+        choice = IntPrompt.ask("Номер пресета (0 — оставить как есть)", default=0, console=console)
+    except EOFError:
+        return
+    if 1 <= choice <= len(ordered):
+        apply_attacker_preset(args, ordered[choice - 1].key)
+
+
+def _render_until_proven_budget(console: Console, scenario: Scenario, repetitions: int,
+                                *, judge_enabled: bool) -> None:
+    """§4: бюджет наперечёт перед стартом (вызовы цели + судьи), затем подтверждение."""
+    console.rule("[bold]БЮДЖЕТ «ДО ПРОНИКНОВЕНИЯ»[/bold]")
+    console.print(f"  попыток (потолок):       {repetitions} (stop_on_success — стоп на первом доказанном)")
+    console.print(f"  вызовов цели (потолок):  ~{repetitions} (одна атака на попытку; стадии внутри неё)")
+    if judge_enabled:
+        console.print(f"  вызовов судьи (потолок): ≤ {scenario.judge.resolve_max_calls(repetitions)}")
+    else:
+        console.print("  судья:                   выключен (0 платных вызовов судьи)")
+
+
+def _render_until_proven_summary(console: Console, out_dir: Path, load_campaign: CampaignLoader,
+                                 repetitions: int) -> None:
+    """§4: честный итог по попыткам — «stop: SUCCESS на K из N» или все мимо →
+    NOT_PROVEN. UNKNOWN ≠ провал ≠ успех."""
+    if not (out_dir / "campaign.json").exists():
+        return
+    try:
+        camp = load_campaign(out_dir)
+    except (OSError, ValueError, KeyError):
+        return
+    attempts = getattr(camp, "attempts", 0)
+    proven = sum(1 for r in getattr(camp, "results", []) if getattr(r, "success", False))
+    if proven:
+        console.print(f"[green]stop: SUCCESS на {attempts} из {repetitions} — доказано "
+                      "(ранний выход по stop_on_success).[/green]")
+    else:
+        console.print(f"[yellow]все {attempts} попыток мимо → NOT_PROVEN (не «готово»). "
+                      "UNKNOWN ≠ провал ≠ успех.[/yellow]")
+
+
 def _confirm(console: Console, prompt: str, *, default: bool) -> bool:
     try:
         return bool(Confirm.ask(prompt, default=default, console=console))
@@ -302,20 +555,31 @@ def _confirm(console: Console, prompt: str, *, default: bool) -> bool:
         return default
 
 
-def _interactive_pick(catalog: list[CatalogEntry], console: Console) -> str | None:
-    """Нумерованный каталог по адаптерам; выбор — по номеру. None = отмена."""
+def _interactive_pick(catalog: list[CatalogEntry], console: Console,
+                      *, adapter_filter: str | None = None) -> str | None:
+    """§3: нумерованный каталог по family с однострочным описанием из metadata;
+    опциональный фильтр по целевому адаптеру. Выбор по номеру; None = отмена."""
+    catalog = filter_by_adapter(catalog, adapter_filter)
     if not catalog:
-        console.print("[red]Не найдено ни одного сценария в scenarios/.[/red]")
+        where = f" (адаптер {adapter_filter})" if adapter_filter else ""
+        console.print(f"[red]Не найдено ни одного сценария в scenarios/{where}.[/red]")
         return None
-    groups = group_by_adapter(catalog)
+    groups = group_by_family(catalog)
     ordered: list[CatalogEntry] = []
-    console.print("[bold]Каталог сценариев[/bold] (по стенду):")
-    for adapter, entries in groups.items():
-        console.print(f"\n[bold]стенд: {adapter}[/bold]")
+    title = "[bold]Каталог сценариев[/bold] (по семейству атак)"
+    if adapter_filter:
+        title += f" [dim]— адаптер {adapter_filter}[/dim]"
+    console.print(title + ":")
+    for family, entries in groups.items():
+        head = f"\n[bold]{family}[/bold]"
+        if entries[0].description:
+            head += f" [dim]— {entries[0].description}[/dim]"
+        console.print(head)
         for e in entries:
             ordered.append(e)
             tag = " [dim](контроль)[/dim]" if e.is_control else ""
-            console.print(f"  {len(ordered):>2}. {e.name}{tag}")
+            stand = "" if e.adapter == "mock" else f" [dim]({e.adapter})[/dim]"
+            console.print(f"  {len(ordered):>2}. {e.name}{tag}{stand}")
     try:
         choice = IntPrompt.ask("Номер сценария (0 — отмена)", default=0, console=console)
     except EOFError:
@@ -326,15 +590,23 @@ def _interactive_pick(catalog: list[CatalogEntry], console: Console) -> str | No
 
 
 def _render_before_card(console: Console, scenario: Scenario, scenario_path: str,
-                        *, repetitions: int, online: bool) -> None:
+                        *, repetitions: int, online: bool,
+                        target_override: str | None = None, judge_enabled: bool | None = None) -> None:
     registry = _ensure_registry()
-    card = before_card(scenario, repetitions=repetitions, online=online)
+    card = before_card(scenario, repetitions=repetitions, online=online,
+                       target_override=target_override, judge_enabled=judge_enabled)
     console.rule("[bold]ДО ПРОГОНА[/bold]")
-    console.print(f"  стенд:      {card['stand']}")
+    # Спотыкание №1: ЦЕЛЬ — первой строкой, крупно. Живой стенд — красным.
+    if card["is_live"]:
+        console.print(f"  [bold red]ЦЕЛЬ: {card['goal']}[/bold red]")
+        console.print("  [dim](живой стенд — не smoke; подтверждение живого запрашивается ниже)[/dim]")
+    else:
+        console.print(f"  [bold]ЦЕЛЬ: {card['goal']}[/bold]")
     console.print(f"  сценарий:   {human_name(scenario, registry)}")
     console.print(f"  попыток:    {card['attempts']}")
     if card["judge_enabled"]:
-        console.print(f"  судья:      включён, потолок вызовов ≤ {card['judge_ceiling']}")
+        model = scenario.judge.model or RECOMMENDED_JUDGE_MODEL
+        console.print(f"  судья:      включён ({model}), потолок вызовов ≤ {card['judge_ceiling']}")
     else:
         console.print("  судья:      выключен")
     console.print(f"  платно:     {card['spend']}")
@@ -379,8 +651,19 @@ async def _judge_ping(spec: Any) -> Any:
         await client.aclose()
 
 
+def console_open_hint(run_dir: Path | str) -> list[str]:
+    """§5 (спотыкание №3): точный путь открытия прогона в консоли Mission Control.
+    Консоль из CLI НЕ стартуем (отдельный процесс, решение владельца; NOTICED)."""
+    return [
+        "  открыть в консоли:  cd console && npm run dev",
+        "                      (PowerShell 5.1: cd console; npm run dev — && не работает)",
+        f"  затем загрузите прогон:  {run_dir}",
+    ]
+
+
 def _render_after_card(console: Console, rc: int, stamp: str | None,
-                       report_html: Path, threat_path: Path | None) -> None:
+                       report_html: Path, threat_path: Path | None,
+                       *, run_dir: Path | None = None) -> None:
     console.rule("[bold]ПОСЛЕ ПРОГОНА[/bold]")
     if stamp:
         console.print(f"  вердикт:         {stamp}")
@@ -389,6 +672,9 @@ def _render_after_card(console: Console, rc: int, stamp: str | None,
         console.print(f"  report.html:     {report_html}")
     if threat_path is not None:
         console.print(f"  threat-report:   {threat_path}")
+    if run_dir is not None:
+        for line in console_open_hint(run_dir):
+            console.print(line)
 
 
 def _open_path(path: Path) -> None:
@@ -408,13 +694,18 @@ def _open_path(path: Path) -> None:
 
 # --------------------------------------------------------------- оркестрация
 def run_go(args: argparse.Namespace, *, run_command: RunCommand,
-           load_campaign: CampaignLoader, console: Console | None = None) -> int:
-    """Точка входа мастера. Возвращает код штатного `run` (или 1/2/130 на
-    контрактных отказах / Ctrl+C). Ничего в движке не меняет."""
+           load_campaign: CampaignLoader, campaign_command: RunCommand | None = None,
+           console: Console | None = None) -> int:
+    """Точка входа мастера. Возвращает код штатного `run`/`campaign` (или 1/2/130
+    на контрактных отказах / Ctrl+C). Ничего в движке не меняет: `--until-proven`
+    зовёт штатный `campaign` со stop_on_success (единственный цикл — в движке)."""
     _reconfigure_stdout_utf8()
     console = console or Console(no_color=getattr(args, "no_color", False))
     render_provenance(console)  # W10: версия/путь пакета + предупреждение о чужом дереве
     yes = bool(getattr(args, "yes", False))
+    online = bool(getattr(args, "online", False))
+    until_proven = bool(getattr(args, "until_proven", False))
+    target_override = getattr(args, "target", None)
     try:
         applied = load_dotenv(Path(".env"), os.environ)
         if applied:
@@ -425,7 +716,8 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
             if yes:
                 console.print("[red]--yes требует --scenario: в тихом режиме каталог не выбирают.[/red]")
                 return 2
-            scenario_path = _interactive_pick(build_catalog("scenarios"), console)
+            scenario_path = _interactive_pick(
+                build_catalog("scenarios"), console, adapter_filter=getattr(args, "adapter", None))
             if scenario_path is None:
                 console.print("Отменено.")
                 return 0
@@ -436,8 +728,38 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
             console.print(f"[red]Сценарий не загружается: {exc}[/red]")
             return 1
 
-        online = bool(getattr(args, "online", False))
-        _render_before_card(console, scenario, str(scenario_path), repetitions=1, online=online)
+        is_live = is_live_target(scenario, target_override)
+
+        # §3: атакующий по запросу (пресеты → существующие флаги). Неизвестный
+        # пресет флага — управляемый отказ, а не трейсбек.
+        try:
+            _choose_attacker_preset(console, args, online=online, yes=yes)
+        except KeyError:
+            return 2
+
+        # §2: явный выбор судьи (спотыкание №2) — до карточки «до», чтобы её строка
+        # судьи показывала фактическое решение, а не молчаливый дефолт сценария.
+        _choose_judge(console, args, is_live=is_live, yes=yes)
+        judge_enabled = effective_judge_enabled(scenario, args)
+
+        repetitions = UNTIL_PROVEN_REPETITIONS if until_proven else 1
+        _render_before_card(console, scenario, str(scenario_path), repetitions=repetitions,
+                            online=online, target_override=target_override, judge_enabled=judge_enabled)
+
+        # §2: перед ЖИВЫМ таргетом — блокер отсутствующих ИМЁН ключей (не трейсбек).
+        if is_live:
+            missing = missing_key_names(scenario, args, os.environ)
+            if missing:
+                console.print("[red][БЛОКЕР] не заданы переменные окружения (только ИМЕНА): "
+                              + ", ".join(missing)
+                              + " — задайте их (.env или окружение) перед живым прогоном.[/red]")
+                return 1
+
+        # §2: подтверждение живого стенда — НЕПРОПУСКАЕМОЕ. --yes его не гасит:
+        # тихий прогон по живому требует явного --live-ack. Mock (smoke) не требует.
+        if is_live and not _confirm_live(console, scenario, target_override, yes=yes,
+                                         live_ack=bool(getattr(args, "live_ack", False))):
+            return 2 if yes else 0
 
         result = run_preflight(scenario_path)
         _render_preflight(console, result)
@@ -452,12 +774,19 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
         if getattr(args, "ping", False):
             _ping_step(console, scenario, yes=yes)
 
+        if until_proven:
+            _render_until_proven_budget(console, scenario, repetitions, judge_enabled=judge_enabled)
+
         if not yes and not _confirm(console, "Запустить прогон?", default=True):
             console.print("Отменено.")
             return 0
 
         out_dir = _resolve_run_output(getattr(args, "output", None), scenario.id)
-        rc = run_command(_build_run_namespace(args, str(scenario_path), out_dir))
+        # §4: «до проникновения» — штатный campaign со stop_on_success; иначе один run.
+        if until_proven and campaign_command is not None:
+            rc = campaign_command(_build_campaign_namespace(args, str(scenario_path), out_dir, repetitions))
+        else:
+            rc = run_command(_build_run_namespace(args, str(scenario_path), out_dir))
 
         console.rule("[bold]ПОПЫТКИ[/bold] (таймеры P12 из attempts.jsonl)")
         lines = attempt_lines(out_dir)
@@ -466,6 +795,8 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
                 console.print(line)
         else:
             console.print("  (записей попыток нет)")
+        if until_proven:
+            _render_until_proven_summary(console, out_dir, load_campaign, repetitions)
 
         stamp: str | None = None
         threat_path: Path | None = None
@@ -476,7 +807,7 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
             except (OSError, ValueError) as exc:
                 console.print(f"[yellow]threat-report не собран: {exc}[/yellow]")
 
-        _render_after_card(console, rc, stamp, out_dir / "report" / "report.html", threat_path)
+        _render_after_card(console, rc, stamp, out_dir / "report" / "report.html", threat_path, run_dir=out_dir)
 
         if threat_path is not None and not yes and _confirm(console, "Открыть threat-report.html?", default=False):
             _open_path(threat_path)
@@ -484,3 +815,23 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
     except KeyboardInterrupt:
         console.print("\n[yellow]Прервано пользователем (Ctrl+C).[/yellow]")
         return 130
+
+
+def _confirm_live(console: Console, scenario: Scenario, target_override: str | None,
+                  *, yes: bool, live_ack: bool) -> bool:
+    """Непропускаемое подтверждение живого стенда (спотыкание №1, обратная
+    сторона). В тихом режиме (--yes) требуется явный --live-ack; иначе —
+    интерактивный вопрос с дефолтом «нет». Возврат True = бить живой можно."""
+    goal = target_goal_line(scenario, target_override)
+    if yes:
+        if live_ack:
+            return True
+        console.print("[red][БЛОКЕР] тихий режим (--yes) по ЖИВОМУ стенду требует явного --live-ack "
+                      f"(подтверждение «да, это живой»: {goal}). Mock (smoke) такого не требует.[/red]")
+        return False
+    if live_ack:
+        return True
+    if _confirm(console, f"Это ЖИВОЙ стенд ({goal}) — бьём по-настоящему. Подтвердите: да?", default=False):
+        return True
+    console.print("Отменено (живой стенд не подтверждён).")
+    return False
