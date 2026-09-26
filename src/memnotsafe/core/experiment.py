@@ -195,16 +195,27 @@ def build_experiment_spec(
             "sha256": file_sha256(scenario.corpus_path) or UNKNOWN,
         }
 
+    target_section = {
+        "adapter": scenario.target.adapter,
+        "base_url": scenario.target.base_url,
+        "model_name": model_name,
+        "auth_mode": auth_mode,
+    }
+    # G6 (EXT-A): эффективная цель определяет тождество эксперимента, а не только
+    # строка adapter из YAML (ДЕФЕКТ-3). Ключи добавляются ТОЛЬКО при наличии
+    # профиля — сценарии без профиля сохраняют прежний target и experiment_id
+    # побайтово (регресс). Digest — нормализованный профиль без значений секретов
+    # (в профиле только имена env).
+    profile = getattr(scenario.target, "profile", None)
+    if profile is not None:
+        target_section["profile_schema_version"] = profile.schema_version
+        target_section["profile_digest"] = profile.normalized_digest()
+
     spec = ExperimentSpec(
         schema_version=EXPERIMENT_SCHEMA_VERSION,
         experiment_id="",
         scenario_id=scenario.id,
-        target={
-            "adapter": scenario.target.adapter,
-            "base_url": scenario.target.base_url,
-            "model_name": model_name,
-            "auth_mode": auth_mode,
-        },
+        target=target_section,
         attacker={
             "provider": getattr(attacker_config, "provider", None) or ("stub" if online else None),
             "model": getattr(attacker_config, "model", None) or UNKNOWN,

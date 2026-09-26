@@ -198,11 +198,11 @@ def test_core_reads_both_forms_and_core_names_are_duck_typed():
 # Прецедент — карточка L: не запрет, а ЗАЯВЛЕННЫЙ список, который краснеет при
 # изменении. Из двенадцати публичных методов базы абстрактны только пять;
 # остальные семь имеют умолчания, и адаптер, забывший любой из них,
-# инстанцируется молча на унаследованном поведении. Шесть умолчаний честны
-# (None/no-op = UNKNOWN); седьмое — wait_until_persistent — утверждает
-# outcome="observed" без единого наблюдения, и раннер гейтит на нём
-# persistence (core/runner.py:306). Инвентаризация делает наследование
-# видимым; чинить адаптеры — решение владельца, не этой карточки.
+# инстанцируется молча на унаследованном поведении. ВСЕ семь умолчаний теперь
+# честны (None/no-op = UNKNOWN): седьмое, wait_until_persistent, EXT-A §7
+# перевёл с прежнего опасного outcome="observed"-без-наблюдения на
+# outcome="unavailable" (честный UNKNOWN), и раннер гейтит на нём persistence
+# (core/runner.py:306). Инвентаризация делает наследование видимым.
 
 # adapter -> {метод: причина, по которой наследование заявлено}
 _DECLARED_INHERITED: dict[str, dict[str, str]] = {
@@ -216,10 +216,10 @@ _DECLARED_INHERITED: dict[str, dict[str, str]] = {
         "snapshot_user": "ненаблюдаемая память, None = честный UNKNOWN",
         "set_context": "телеметрия для LLM-таргета непринципиальна",
         "wait_until_persistent": (
-            "ОПАСНОЕ умолчание: база возвращает SettleResult(outcome='observed') "
-            "БЕЗ наблюдения, раннер гейтит на нём persistence. Спит: adapter=openai "
-            "не использует ни один из 47 сценариев. НЕ чинить здесь — решение "
-            "владельца (карточка U, STOP)"
+            "база возвращает SettleResult(outcome='unavailable') — честный UNKNOWN "
+            "(EXT-A §7 починил прежнее опасное observed-без-наблюдения). Адаптер, "
+            "унаследовавший метод, честно не наблюдает персистентность; openai "
+            "по-прежнему спит (ни один сценарий его не использует)"
         ),
         "reset": "алиас reset_state на базе, семантика та же",
     },
@@ -233,9 +233,9 @@ _DECLARED_INHERITED: dict[str, dict[str, str]] = {
 }
 
 _WAIT_MSG = (
-    "наследование wait_until_persistent = адаптер утверждает "
-    "SettleResult(outcome='observed') без единого наблюдения, а раннер "
-    "гейтит на этом исходе стадию persistence (core/runner.py:306)"
+    "наследование wait_until_persistent = адаптер берёт базовое умолчание "
+    "SettleResult(outcome='unavailable') — честный UNKNOWN (EXT-A §7); раннер "
+    "гейтит стадию persistence на этом исходе (core/runner.py:306)"
 )
 
 

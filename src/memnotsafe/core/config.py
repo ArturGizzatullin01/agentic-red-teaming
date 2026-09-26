@@ -7,9 +7,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+if TYPE_CHECKING:  # только для аннотаций (config импортируется рано)
+    from memnotsafe.adapters.profile import TargetProfile
 
 
 @dataclass
@@ -22,6 +25,9 @@ class TargetSpec:
     adapter: str = "mock"
     base_url: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    # EXT-A: версионированный target-профиль (adapters/profile.py). None —
+    # сценарий без профиля: legacy-путь, поведение прежнее (регресс).
+    profile: "TargetProfile | None" = None
 
 
 @dataclass
@@ -100,6 +106,15 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ValueError(f"В сценарии {path} отсутствует обязательное поле {exc}") from exc
 
     target_raw = raw.get("target", {}) or {}
+    # EXT-A: точка чтения профиля. Присутствует блок target.profile → строгий
+    # разбор (опечатка ключа падает здесь, ДО построения адаптера и запроса).
+    profile_raw = target_raw.get("profile")
+    if profile_raw is not None:
+        from memnotsafe.adapters.profile import load_profile
+
+        target_profile = load_profile(profile_raw)
+    else:
+        target_profile = None
     # Три валидные формы actor-блоков (карточка D4): оба; только attacker
     # (single-user атака); только victim (контроль единственного принципала).
     # Отсутствующий блок достраивается вторым — после загрузки отличить
@@ -124,7 +139,8 @@ def load_scenario(path: str | Path) -> Scenario:
         target=TargetSpec(
             adapter=target_raw.get("adapter", "mock"),
             base_url=target_raw.get("base_url"),
-            extra={k: v for k, v in target_raw.items() if k not in ("adapter", "base_url")},
+            extra={k: v for k, v in target_raw.items() if k not in ("adapter", "base_url", "profile")},
+            profile=target_profile,
         ),
         attacker=ActorConfig(user_id=str(attacker_raw["user_id"])),
         victim=ActorConfig(user_id=str(victim_raw["user_id"])),
@@ -215,6 +231,14 @@ def build_adapter(scenario: Scenario, target_override: str | None = None):
     if target_override and target_override != "mock":
         base_url = target_override
 
+    if scenario.target.profile is not None and adapter_name != "http_endpoint" and target_override != "mock":
+        # Профиль не имеет права молча простаивать на чужом адаптере (EXT-A):
+        # его исполняет только http_endpoint tier-1.
+        raise ValueError(
+            f"Сценарий {scenario.id}: target.profile поддерживается только adapter=http_endpoint "
+            f"(EXT-A), получен adapter={adapter_name!r}"
+        )
+
     if adapter_name == "mock" or target_override == "mock":
         vulnerable = bool(scenario.target.extra.get("vulnerable", True))
         return MockTarget(vulnerable=vulnerable)
@@ -231,6 +255,18 @@ def build_adapter(scenario: Scenario, target_override: str | None = None):
 
         if not base_url:
             raise ValueError(f"Сценарию {scenario.id} нужен target.base_url или --target <url> для adapter=http_endpoint")
+        if scenario.target.profile is not None:
+            # EXT-A: отказ ДО прогона (G3) — cross-user без доказанной независимости
+            # принципалов не строит адаптер и не читает ключ. Человекочитаемая
+            # причина поднимается из profile.validate_for_actors.
+            scenario.target.profile.validate_for_actors(
+                scenario.attacker.user_id, scenario.victim.user_id
+            )
+            return HttpEndpointAdapter(
+                base_url=base_url,
+                profile=scenario.target.profile,
+                model_name=scenario.target.extra.get("model_name", "target-agent"),
+            )
         return HttpEndpointAdapter(base_url=base_url, **scenario.target.extra)
 
     if adapter_name == "investment_stand":

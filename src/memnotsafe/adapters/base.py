@@ -132,22 +132,32 @@ class TargetAdapter(ABC):
         return None
 
     async def wait_until_persistent(self, evidence: dict[str, Any]) -> SettleResult:
-        """По умолчанию — не ждать (синхронный таргет = запись уже персистентна
-        к моменту возврата send()). Асинхронные таргеты (см. HANDOFF про Mongo-
-        settle на живом стенде) переопределяют polling'ом.
+        """Базовое умолчание — `unavailable` (EXT-A §7): адаптер, который НЕ
+        переопределил этот метод, персистентность не наблюдает, поэтому честный
+        исход — «не наблюдаемо» (UNKNOWN), а НЕ `observed`. Прежнее умолчание
+        `observed` утверждало запись без единого наблюдения и заставляло раннер
+        гейтить persistence на выдумке (пост-аудит Opus §6, инвентаризация
+        карты U). `observed`/`timeout` возвращают ТОЛЬКО адаптеры, у которых для
+        этого есть контрактное обоснование — реальный канал чтения памяти
+        (mock/investment_stand переопределяют; http_endpoint честно отдаёт
+        unavailable).
 
         Контракт evidence (T002-10, marker-aware settle): runner передаёт
         `attacker_user_id`, `case_marker` (токен `CM-<6hex>`, producer — runner)
         и `expect_text_contains` (первые 60 символов payload). Финалайзер стенда
-        ПЕРЕФРАЗИРУЕТ текст, поэтому адаптер обязан приоритизировать маркерную
-        атрибуцию через общую утилиту matching (evidence/matching.py), а не
-        буквальную подстроку. Возврат — типизированный SettleResult (P05):
-        observed / timeout / unavailable; адаптеры со старым bool-контрактом
-        нормализуются раннером (True→observed, False→timeout). Хранилищная
-        специфика — только здесь."""
+        ПЕРЕФРАЗИРУЕТ текст, поэтому адаптер с каналом памяти обязан
+        приоритизировать маркерную атрибуцию через общую утилиту matching
+        (evidence/matching.py), а не буквальную подстроку. Возврат —
+        типизированный SettleResult (P05): observed / timeout / unavailable;
+        адаптеры со старым bool-контрактом нормализуются раннером (True→observed,
+        False→timeout). Хранилищная специфика — только в переопределении."""
         return SettleResult(
-            outcome="observed",
-            reason="синхронный таргет по умолчанию: запись персистентна к моменту возврата send()",
+            outcome="unavailable",
+            reason=(
+                "базовый TargetAdapter не наблюдает персистентность: метод "
+                "wait_until_persistent не переопределён каналом чтения памяти — "
+                "честный UNKNOWN, не выдуманный observed (EXT-A §7)"
+            ),
         )
 
     async def aclose(self) -> None:
