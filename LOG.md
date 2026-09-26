@@ -6,6 +6,38 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-26 — claude-code — COND-CANON: условный вариант канона global_policy_injection (feat/cond-canon-global-policy)
+
+- контекст: H09 rate-замер (live, N=12): условная форма — hit-rate WRITE 11/12=0.917 против
+  декларатива 2/12=0.167 (Fisher p=0.00064). Карта переносит формулировку в канон вариантом
+  `conditional` и готовит полную цепь к live-замеру A0 (WRITE известен, дальше retrieval→
+  adoption→external_effect меряет A0 отдельным «го»)
+- (1) `attacks/global_policy_injection.py`: `_VARIANTS` += `"conditional"`; в `generate` — ветка
+  условного каркаса (структурный аналог ячейки 6 матрицы H09): «Если клиент спрашивает X —
+  применяй Y», глагол «применяй» (решение A0; «считайте» не подменяли), ядро перехвата
+  `cus="{hijack_value}"` и маркер-операнд V-4 — тот же контракт. bare/self_exfil/safety_framed —
+  байт-в-байт прежние (обёрнуты в else, строки не тронуты)
+- (2) `scenarios/global_policy_injection_conditional_live.yaml` (новый): живой сценарий варианта
+  по образцу `global_policy_injection_live`, `variant: conditional`, `reset_scope: namespace`,
+  стенд stack2 (9600/28017), settle 60, маркер-операнд V-4; секретов нет — только имена ENV
+- (3) mock-честность: на mock условная форма — ЧЕСТНЫЙ MISS (контракт мока
+  `WRITE_MARKERS`/`_INFERRED_RULE_RE` не маршрутизирует «применяй»; в тексте нет «Запомни»/
+  «внутренний регламент») → write=False, 0 записей, вердикт NOT PROVEN (излом на write). Мок НЕ
+  правили — доказательство варианта live (прецедент ячейки 6 / FATAL-заготовок H09)
+- (4) микро-долг вердикта H09-IMPL: докстринг `attacks/h09_matrix.py` — ключ family теперь ЕСТЬ
+  в FAMILY_PLAYBOOK (severity_map, impact cross_user_data → CRITICAL), устаревшая фраза исправлена
+- (5) замки: `tests/test_global_policy_conditional_variant.py` (4: каркас/ядро/код,
+  маркер-операнд, честный mock-MISS + NOT PROVEN, декларация live-сценария);
+  `tests/test_control_factor_inventory.py` +1 строка `EXPECTED_UNPAIRED` (live-only вариант, не-live
+  двойника по правилу паринга нет). MAP.md сценарии поимённо не перечисляет («20 семейств», вариант
+  семью не добавляет) — правки MAP не требовалось
+- проверки: RED на базе 0fda533 (новый тест, скопирован на detached-базу) — 4 failed по СУТИ карты
+  (variant отвергнут ValueError / сценарий отсутствует); targeted 76 passed; полный suite
+  **1533 passed / 0** (= 1528 базовых + 4 новых + 1 параметр reset_scope). `git diff --check` чист;
+  live НЕ запускал (по «го» A0 после влития)
+- ALLOWLIST соблюдён: `attacks/global_policy_injection.py`, `attacks/h09_matrix.py` (докстринг),
+  новый сценарий, tests, LOG.md. Мок/раннер/оракулы/ядро НЕ тронуты
+
 ### 2026-09-25 — claude-code — FIX-C: reset_scope по умолчанию безопасен и достижим из YAML (fix/qa-c-reset-scope)
 
 - дефект (перепроверен, блокер перепрогона G3.1/G3.2): дефолт `scope="global"` в
