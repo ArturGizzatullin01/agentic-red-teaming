@@ -109,6 +109,14 @@ def _apply_judge_overrides(scenario, args: argparse.Namespace) -> None:
     spec = scenario.judge
     if getattr(args, "judge_model", None):
         spec.model = args.judge_model
+    # CARD-CLI-MEGA-UX D1: мастер `go`, включая судью на сценарии без блока judge:,
+    # проставляет рабочий пресет (Yandex) через эти args, иначе URI Yandex ушёл бы
+    # на дефолтный OpenRouter с чужим ключом. Прямые run/campaign этих флагов не
+    # имеют → getattr None → поведение существующих команд не меняется.
+    if getattr(args, "judge_base_url", None):
+        spec.base_url = args.judge_base_url
+    if getattr(args, "judge_api_key_env", None):
+        spec.api_key_env = args.judge_api_key_env
     if getattr(args, "judge_max_calls", None) is not None:
         spec.max_calls = args.judge_max_calls
     # Судью включают --judge и --judge-model: назвать модель — явное намерение

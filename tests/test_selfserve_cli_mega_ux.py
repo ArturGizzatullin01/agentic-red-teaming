@@ -277,3 +277,113 @@ def test_after_card_prints_console_path(tmp_path):
                                  None, run_dir=tmp_path / "run")
     text = buf.getvalue()
     assert "cd console" in text and str(tmp_path / "run") in text
+
+
+# ------------------------------------------------------------ D1: пресет судьи мастера
+# Дефект D1 (VERDICT-CLI-MEGA-UX): мастер, включая судью на сценарии БЕЗ блока
+# judge:, оставлял дефолты JudgeSpec (OpenRouter/пустая модель) — блокер требовал
+# OPENROUTER_API_KEY, а с ключом прогон падал на validate_judge_spec. Мастер должен
+# заполнять рабочий пресет проекта (Yandex/PROVIDER_API_KEY); свой блок judge: — не трогать.
+OWN_JUDGE_SCENARIO = REPO / "scenarios" / "direct_poisoning_live_judged.yaml"  # свой блок judge:
+YANDEX_JUDGE_URI = "gpt://b1g0nvl5lgk8he84ckp8/deepseek-v4-flash/latest"        # буква l (A0 1d6e9aa)
+YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/v1"
+
+
+def test_judge_preset_fills_yandex_when_no_block():
+    """Мастер включил судью, у сценария нет блока judge: → рабочий пресет (Yandex/
+    PROVIDER_API_KEY) и в загруженный сценарий, и в args (команда перезагружает сценарий)."""
+    sc = load_scenario(LIVE_SCENARIO)
+    assert not sc.judge.model  # блока judge: нет — дефолт JudgeSpec (пустая модель)
+    args = _go_args("--yes")
+    args.judge = True
+    selfserve._apply_default_judge_preset(sc, args)
+    assert sc.judge.model == YANDEX_JUDGE_URI
+    assert sc.judge.base_url == YANDEX_BASE_URL
+    assert sc.judge.api_key_env == "PROVIDER_API_KEY"
+    assert args.judge_model == YANDEX_JUDGE_URI
+    assert args.judge_base_url == YANDEX_BASE_URL
+    assert args.judge_api_key_env == "PROVIDER_API_KEY"
+
+
+def test_judge_preset_leaves_own_judge_block():
+    """Сценарий со своим блоком judge: не трогаем — ни модель, ни ключ, ни args."""
+    sc = load_scenario(OWN_JUDGE_SCENARIO)
+    assert sc.judge.model == "openai/gpt-4o-mini"  # собственный выбор сценария
+    args = _go_args("--yes")
+    args.judge = True
+    selfserve._apply_default_judge_preset(sc, args)
+    assert sc.judge.model == "openai/gpt-4o-mini"
+    assert sc.judge.api_key_env == "OPENROUTER_API_KEY"
+    assert getattr(args, "judge_model", None) is None
+
+
+def test_judge_preset_respects_explicit_judge_model():
+    """Оператор назвал --judge-model → пресет не перебивает его явный выбор."""
+    sc = load_scenario(LIVE_SCENARIO)
+    args = _go_args("--yes", "--judge-model", "gpt://custom/model/latest")
+    args.judge = True
+    selfserve._apply_default_judge_preset(sc, args)
+    assert args.judge_model == "gpt://custom/model/latest"
+    assert not sc.judge.model  # пресет не тронул сценарий
+
+
+def test_go_live_default_judge_demands_provider_not_openrouter(monkeypatch, tmp_path):
+    """ЗАМОК D1: go --yes по ЖИВОМУ (без --no-judge) с ключами стенда и PROVIDER_API_KEY,
+    но БЕЗ OPENROUTER_API_KEY, проходит блокер ключей и доходит до live-ack — судья Yandex."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SK_GENAI_1003", "present")
+    monkeypatch.setenv("PROVIDER_API_KEY", "present")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    _clean_preflight(monkeypatch)
+    args = _go_args("--yes", "--scenario", str(LIVE_SCENARIO),
+                    "--output", str(tmp_path / "o"), "--no-color")
+    console, buf = _console()
+    calls: list = []
+    rc = selfserve.run_go(args, run_command=lambda ns: calls.append(ns) or 0,
+                          campaign_command=lambda ns: calls.append(ns) or 0,
+                          load_campaign=load_campaign, console=console)
+    text = buf.getvalue()
+    assert rc == 2 and calls == []           # дошли до ack-гейта (--yes без --live-ack)
+    assert "--live-ack" in text              # это ack-гейт, а не блокер ключей
+    assert "OPENROUTER_API_KEY" not in text  # судья не OpenRouter
+    assert "deepseek-v4-flash" in text       # карточка «до» обещает рабочего судью
+    assert "Traceback" not in text
+
+
+def test_go_live_judge_namespace_carries_yandex(monkeypatch, tmp_path):
+    """Штатная команда получает пресет судьи через args (перезагружает сценарий):
+    _apply_judge_overrides подхватит model/base_url/api_key_env Yandex."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SK_GENAI_1003", "present")
+    monkeypatch.setenv("PROVIDER_API_KEY", "present")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    _clean_preflight(monkeypatch)
+    args = _go_args("--yes", "--live-ack", "--scenario", str(LIVE_SCENARIO),
+                    "--output", str(tmp_path / "o"), "--no-color")
+    console, _ = _console()
+    calls: list = []
+    rc = selfserve.run_go(args, run_command=lambda ns: calls.append(ns) or 0,
+                          load_campaign=load_campaign, console=console)
+    assert rc == 0 and len(calls) == 1
+    ns = calls[0]
+    assert ns.judge is True
+    assert ns.judge_model == YANDEX_JUDGE_URI
+    assert ns.judge_base_url == YANDEX_BASE_URL
+    assert ns.judge_api_key_env == "PROVIDER_API_KEY"
+
+
+def test_apply_judge_overrides_applies_base_url_and_key_env():
+    """cli._apply_judge_overrides применяет judge_base_url/judge_api_key_env из args
+    (мастер их проставляет) — иначе URI Yandex ушёл бы на OpenRouter с чужим ключом."""
+    from memnotsafe.cli import _apply_judge_overrides
+    sc = load_scenario(LIVE_SCENARIO)
+    args = _go_args("--yes")
+    args.judge = True
+    args.judge_model = YANDEX_JUDGE_URI
+    args.judge_base_url = YANDEX_BASE_URL
+    args.judge_api_key_env = "PROVIDER_API_KEY"
+    _apply_judge_overrides(sc, args)
+    assert sc.judge.enabled is True
+    assert sc.judge.model == YANDEX_JUDGE_URI
+    assert sc.judge.base_url == YANDEX_BASE_URL
+    assert sc.judge.api_key_env == "PROVIDER_API_KEY"

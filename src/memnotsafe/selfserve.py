@@ -77,6 +77,9 @@ _YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/v1"
 # Литерал карты §3 с цифрой 1 — опечатка карты; пресет #5 (manual) остаётся обходом.
 _YANDEX_FOLDER = "b1g0nvl5lgk8he84ckp8"
 _ATTACKER_API_KEY_ENV = "ATTACKER_API_KEY"
+# §2/D1: ключ судьи — та же рабочая инфра проекта (доказана live в H09-RATE и
+# батарее); имя переменной, не значение. Разъезд с ключом стенда (SK_GENAI_*).
+_JUDGE_API_KEY_ENV = "PROVIDER_API_KEY"
 
 
 def _yandex_model(model: str) -> str:
@@ -487,6 +490,30 @@ def _choose_judge(console: Console, args: argparse.Namespace, *, is_live: bool, 
     args.judge = _confirm(console, prompt, default=default_on)
 
 
+def _apply_default_judge_preset(scenario: Scenario, args: argparse.Namespace) -> None:
+    """D1 (VERDICT-CLI-MEGA-UX): мастер, включив судью, обязан дать РАБОЧИЙ пресет,
+    а не дефолты JudgeSpec (base_url OpenRouter, api_key_env OPENROUTER_API_KEY,
+    пустая модель) — иначе блокер требует чужой ключ, а с ключом прогон падает на
+    validate_judge_spec «нужен judge.model», тогда как карточка «до» обещает
+    deepseek-v4-flash. Заполняем рекомендуемую инфру проекта (Yandex, PROVIDER_API_KEY)
+    ТОЛЬКО когда у сценария нет своего judge.model и оператор не назвал --judge-model.
+    Сценарии со своим блоком judge: не трогаем.
+
+    Пресет кладём в ОБА места: в загруженный сценарий — для карточки «до», блокера
+    ИМЁН ключей и ping мастера; и в args — штатная команда перезагружает сценарий
+    (load_scenario), пресет доедет через cli._apply_judge_overrides."""
+    if getattr(args, "judge_model", None) or scenario.judge.model:
+        return  # явный --judge-model или собственный блок judge: — не перебиваем
+    model = _yandex_model(f"{RECOMMENDED_JUDGE_MODEL}/latest")
+    args.judge_model = model
+    args.judge_base_url = _YANDEX_BASE_URL
+    args.judge_api_key_env = _JUDGE_API_KEY_ENV
+    scenario.judge.enabled = True
+    scenario.judge.model = model
+    scenario.judge.base_url = _YANDEX_BASE_URL
+    scenario.judge.api_key_env = _JUDGE_API_KEY_ENV
+
+
 def _choose_attacker_preset(console: Console, args: argparse.Namespace, *, online: bool, yes: bool) -> None:
     """§3: атакующий по запросу. --attacker-preset уважаем всегда; интерактивный
     выбор — только при онлайне (атакующая LLM инстанцируется лишь под --online) и
@@ -740,6 +767,12 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
         # судьи показывала фактическое решение, а не молчаливый дефолт сценария.
         _choose_judge(console, args, is_live=is_live, yes=yes)
         judge_enabled = effective_judge_enabled(scenario, args)
+        # D1: если мастер включил судью, а у сценария нет своего блока judge: —
+        # ставим рабочий пресет (Yandex/PROVIDER_API_KEY) ДО карточки «до» и блокера
+        # ИМЁН ключей, чтобы обещанное показалось и потребовался нужный ключ, а не
+        # чужой OPENROUTER_API_KEY. Сценарии со своим judge: — не трогаем.
+        if judge_enabled:
+            _apply_default_judge_preset(scenario, args)
 
         repetitions = UNTIL_PROVEN_REPETITIONS if until_proven else 1
         _render_before_card(console, scenario, str(scenario_path), repetitions=repetitions,
