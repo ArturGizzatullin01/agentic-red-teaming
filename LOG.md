@@ -6,6 +6,76 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-26 — claude-code — EXT-A: версионированная target-profile схема для tier-1 (feat/ext-a-target-profile)
+
+- контекст: поток EXT-OPERATOR, карта 1/4. Оператор ИБ подключает ЧУЖУЮ цель по URL —
+  нужна декларативная версионированная схема профиля (schema_version обязателен),
+  которую строго читает config и честно исполняет http_endpoint. База main=db9e48d;
+  НЕ live, НЕ Docker; секреты — только ИМЕНА env. Карта v2 (v1 отменена)
+- новый модуль `adapters/profile.py`: `TargetProfile` (transport/auth/identity/session/
+  observation/health) + `load_profile()` строгий разбор — неизвестный ключ на любом
+  уровне → `ProfileError` ДО запроса (карта §6, никакого `**_ignored`)
+- (1) транспорт: chat_path (относительный), method=POST, декларативный mapping полей
+  запроса (model_field/messages_field/role_key/content_key) и ответа (content_path),
+  extra_fields с валидацией
+- (2) identity: схемы bearer_env (ENV-имя per принципал) / request_header / request_field /
+  native_session; single-user допустим; cross-user — только при доказанной независимости
+- (3) сессия: `adapter_history` (локальная история) или `native` (session id уходит в
+  запрос заданным полем); жизненный цикл native — финализация закрытием (`writes_on_close`+
+  `finalize_path`), т.к. раннер закрывает сессии доставки ДО settle (runner.py:278);
+  внешнего reset у tier-1 нет — изоляция свежими session_id + маркерами
+- (4) health probe: `get` (path+expect_status) или `post_only`
+- (5) наблюдаемость: capability-флаги memory_snapshot/retrieval_trace/tool_telemetry/reset;
+  у tier-1 канала нет — заявка флага → отказ (честная трансляция, оракулы → UNKNOWN)
+- (7) `adapters/base.py`: `TargetAdapter.wait_until_persistent` базовое умолчание
+  observed→**unavailable** (честный UNKNOWN; прежнее observed утверждало запись без
+  наблюдения). Переопределяют только адаптеры с реальным каналом (mock/investment_stand);
+  openai (спит) наследует и теперь честно отдаёт unavailable
+- замки аудита (подтверждены A0):
+  • G1 граница хоста — все пути только относительные к base_url; абсолютный/protocol-relative
+    chat_path → отказ при разборе; base_url с userinfo и удалённый плейнтекст-HTTP без
+    `transport.allow_remote` → отказ в `check_host_boundary` ДО чтения ключа
+  • G2 зарезервированные поля — messages/model/identity/session/auth + имена mapped-полей
+    закрыты для extra_fields; конфликт → ошибка конфигурации до вызова цели (закрывает
+    ДЕФЕКТ-2: extra перекрывал model/messages)
+  • G3 identity-handshake — два ENV-имени ≠ два субъекта: cross-user требует разных
+    субъектов, разных токенов И явной аттестации `cross_user_independent`; иначе честный
+    отказ. Негативы покрыты: один субъект/два ключа, одно имя env, нет аттестации
+  • G4 evidence-происхождение — http_endpoint НЕ синтезирует call/result из текста
+    (events=[]); текстовое событие с `detail.channel=victim_response` — мягкое
+    signature_match, связанная пара call/result — жёсткая telemetry (проверено через
+    существующий `channel_evidence_kind`, оракулы не тронуты)
+  • G5 session-finalize — замок-модель стенда, пишущего память только при закрытии:
+    native+writes_on_close → close_session POST-ит finalize_path ДО settle
+  • G6 провенанс — `core/experiment.py` (флаг **D**, ALLOWLIST расширен): при наличии
+    профиля в `target` эксперимента добавляются `profile_schema_version` + `profile_digest`
+    (нормализованный sha256 без значений секретов) → эффективная цель определяет
+    experiment_id, а не только строка adapter из YAML (ДЕФЕКТ-3 частично). Регресс:
+    сценарий без профиля — target и experiment_id побайтово прежние
+- (6)/L6 регресс: bb-сценарий `global_policy_injection_bb_live` (adapter=http_endpoint без
+  профиля) строится по-прежнему — профиль опционален, дефолт = текущее поведение
+- RED→GREEN (venv312, py3.12): чистая база — collection error (модуль profile отсутствует,
+  весь замок-сет не выполнен); с profile.py, но без обвязки — 10 failed / 26 passed
+  (интеграционные локи красные); после обвязки — **36 passed**
+  (`tests/test_target_profile.py`)
+- проверки: targeted-регресс 137 passed (http_endpoint/conformance/settle/lifecycle/
+  budget/experiment/bb_live/preflight/oracle_adapter); полный suite ОДИН прогон — **1568
+  passed / 1 failed (61s ≤300)**; итог 1569 = 1533 базы + 36 новых. Единственный fail —
+  `test_demo_launcher` (демо-обёртка `demo.cmd` строка 5 `%~dp0scripts\demo-run.ps1` —
+  бэкслэш-путь Windows на Linux; файл/тест картой не тронуты, на канон-Windows-venv
+  зелёный, отсюда база 1533/0). py3.11 py_compile всех изменённых исходников — OK
+  (<3.12-совместимость); `git diff --check` чист; секретов 0 (только ИМЕНА env и
+  плейсхолдеры в тестах)
+- ALLOWLIST соблюдён: `adapters/profile.py` (new), `adapters/http_endpoint.py`,
+  `adapters/base.py`, `core/config.py` (точка чтения профиля), `core/experiment.py`
+  (G6, флаг D), `tests/test_target_profile.py` (new), `tests/test_adapter_contract_conformance.py`
+  (только строки-описания устаревшего observed-умолчания, логика замка не тронута), `LOG.md`.
+  НЕ тронуты: runner, атаки, оракулы, mock, investment_stand, openai, JudgeSpec (EXT-B), scenarios, specs
+- зафиксировано для EXT-B (вне EXT-A): единая эффективная цель как источник для
+  запроса/preflight/campaign.json/experiment.json; разделение читающего preflight (GET) и
+  платной POST-пробы; preflight go по эффективной цели (selfserve.py:442)
+- Не самопринимаю — приёмка A0
+
 ### 2026-09-26 — claude-code — REPORT-CONSOLE-DESIGN: threat-report в дизайне Mission Control (feat/report-console-design)
 
 - контекст: директива владельца «дизайн отчёта = дизайн Mission Control». Натянуть
