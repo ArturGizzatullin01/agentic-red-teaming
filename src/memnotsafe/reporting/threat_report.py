@@ -1051,70 +1051,86 @@ def build_threat_report(run_dir: str | Path, *, load_campaign: CampaignLoader,
 
 # ------------------------------------------------------------------- HTML
 _CSS = """
-:root{--bg:#0d1117;--panel:#161b22;--panel2:#0a0d12;--line:#2d333b;--txt:#e6edf3;--mut:#8b949e;
-      --red:#f85149;--green:#3fb950;--amber:#d29922;--blue:#58a6ff;
-      --mono:ui-monospace,SFMono-Regular,Consolas,monospace;}
+/* Design language borrowed verbatim from the Mission Control console
+   (console/src/styles.css): the operator reads the console and the threat
+   report as one product. The tri-state colors are doctrine, not taste —
+   pass = green (ok), fail = red, UNKNOWN = amber (unk), and amber is kept
+   distinct from both so an unobserved stage never reads as a solid pass or
+   fail. The stage ladder therefore colors a confirmed (True) stage GREEN and
+   a refuted (False) stage RED, matching what the console funnel draws for the
+   same recorded verdicts. */
+:root{--bg:#0b0d12;--panel:#141821;--panel2:#1a2030;--line:#232838;--txt:#e8ecf3;--mut:#8b93a7;
+      --accent:#5b9dff;--ok:#3ddc84;--fail:#ff5d6c;--unk:#f5c344;
+      --crit:#ff3b5c;--high:#ff8a3d;--med:#f5c344;--low:#5b9dff;--info:#8b93a7;
+      --mono:ui-monospace,SFMono-Regular,Menlo,monospace;}
 @media (prefers-color-scheme: light){
-  :root{--bg:#f7f8fb;--panel:#ffffff;--panel2:#f0f2f6;--line:#d9dee7;--txt:#161a22;--mut:#5b6472;}
+  :root{--bg:#f7f8fb;--panel:#ffffff;--panel2:#f0f2f8;--line:#e3e6ee;--txt:#161a22;--mut:#5b6472;}
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--txt);font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:32px 16px}
-.page{max-width:920px;margin:0 auto}
+body{background:var(--bg);color:var(--txt);font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;padding:32px 16px}
+.page{max-width:960px;margin:0 auto}
 header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:14px;flex-wrap:wrap;gap:8px}
-.logo{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:.5px}
-.logo span{color:var(--red)}
+.logo{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:.01em}
+.logo span{color:var(--accent)}
 .tag{color:var(--mut);font-size:13px}
 .stamp{margin:26px 0 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.verdict{font-family:var(--mono);font-weight:700;font-size:26px;color:#fff;padding:10px 22px;border-radius:6px;letter-spacing:1px;transform:rotate(-1.2deg)}
-.verdict.proven{background:var(--red);box-shadow:0 0 0 3px rgba(248,81,73,.25)}
-.verdict.not-proven{background:var(--green);color:#04210f;box-shadow:0 0 0 3px rgba(63,185,80,.25)}
-.verdict.inconclusive{background:var(--amber);color:#1a1200;box-shadow:0 0 0 3px rgba(210,153,34,.25)}
+.verdict{font-family:var(--mono);font-weight:700;font-size:24px;letter-spacing:.04em;padding:10px 20px;border-radius:12px;border:1px solid transparent}
+.verdict.proven{color:var(--fail);border-color:var(--fail);background:color-mix(in srgb,var(--fail) 14%,transparent)}
+.verdict.not-proven{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.verdict.inconclusive{color:var(--unk);border-color:var(--unk);background:color-mix(in srgb,var(--unk) 16%,transparent)}
 .sub{color:var(--mut);font-size:13px;max-width:560px}
-h1{font-size:24px;margin:18px 0 6px}
+h1{font-size:24px;margin:18px 0 6px;letter-spacing:-.01em}
 .lede{font-size:17px;margin-bottom:22px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
-.card h2{font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut);margin-bottom:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+.card h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:14px}
 .goal{font-size:17px}
-.callout{border-left:3px solid var(--amber);background:rgba(210,153,34,.08);padding:10px 14px;border-radius:6px;margin:10px 0;font-size:14px}
-.callout.red{border-left-color:var(--red);background:rgba(248,81,73,.08)}
-.callout.green{border-left-color:var(--green);background:rgba(63,185,80,.08)}
-.callout b{display:block;margin-bottom:4px}
+.callout{border:1px solid var(--unk);background:color-mix(in srgb,var(--unk) 10%,transparent);color:var(--txt);border-radius:10px;padding:10px 14px;margin:10px 0;font-size:13.5px}
+.callout.red{border-color:var(--fail);background:color-mix(in srgb,var(--fail) 10%,transparent)}
+.callout.green{border-color:var(--ok);background:color-mix(in srgb,var(--ok) 10%,transparent)}
+.callout b{display:block;margin-bottom:4px;font-weight:700}
 ol.steps{list-style:none;counter-reset:s}
 ol.steps li{counter-increment:s;position:relative;padding:10px 0 10px 58px;border-left:2px solid var(--line);margin-left:18px}
 ol.steps li::before{content:counter(s);position:absolute;left:-16px;top:10px;width:30px;height:30px;border-radius:50%;
   background:var(--panel);border:2px solid var(--line);color:var(--mut);font-family:var(--mono);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:14px}
-ol.steps li.ok::before{border-color:var(--red);color:var(--red)}
-ol.steps li.fail::before{border-color:var(--green);color:var(--green)}
-ol.steps li.unk::before{border-color:var(--amber);color:var(--amber)}
+ol.steps li.ok::before{border-color:var(--ok);color:var(--ok)}
+ol.steps li.fail::before{border-color:var(--fail);color:var(--fail)}
+ol.steps li.unk::before{border-color:var(--unk);color:var(--unk)}
 ol.steps li.na::before{border-color:var(--line);color:var(--mut)}
 ol.steps li:last-child{border-left-color:transparent}
-.who{font-family:var(--mono);font-size:12px;color:var(--blue);display:block;margin-bottom:2px}
+.who{font-family:var(--mono);font-size:12px;color:var(--accent);display:block;margin-bottom:2px}
 .step-title{font-weight:600}
 q{font-style:italic}
 .note{color:var(--mut);font-size:12.5px;margin-top:3px}
-.src{display:inline-block;font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border-radius:3px;padding:0 5px;margin-left:6px;color:var(--mut);vertical-align:middle}
-.src.j{background:var(--amber);color:#1a1200;border-color:var(--amber)}
+.src{display:inline-block;font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--mut);vertical-align:middle}
+.src.j{background:var(--unk);color:#0b0d12;border-color:var(--unk)}
 pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 .stat{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
-.stat .v{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--green)}
-.stat .v.red{color:var(--red)} .stat .v.amber{color:var(--amber)} .stat .v.mut{color:var(--mut)}
+.stat .v{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--ok)}
+.stat .v.red{color:var(--fail)} .stat .v.amber{color:var(--unk)} .stat .v.mut{color:var(--mut)}
 .stat .k{color:var(--mut);font-size:12px}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
-td,th{border-top:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
-th{color:var(--mut);font-weight:600;border-top:none;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
-table.map td:first-child{font-family:var(--mono);color:var(--amber);white-space:nowrap}
-.badge{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 8px;border-radius:999px;margin-left:4px;vertical-align:middle}
-.b-proven{background:var(--red);color:#fff} .b-not-proven{background:var(--green);color:#04210f} .b-inconclusive{background:var(--amber);color:#1a1200}
-.sev-critical{background:var(--red);color:#fff} .sev-high{background:#ff8a3d;color:#1a1200} .sev-medium{background:var(--amber);color:#1a1200} .sev-none{border:1px solid var(--line);color:var(--mut)}
+td,th{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+table.map td:first-child{font-family:var(--mono);color:var(--unk);white-space:nowrap}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.02em;padding:2px 9px;border-radius:999px;margin-left:4px;vertical-align:middle;border:1px solid transparent}
+.b-proven{color:var(--fail);border-color:var(--fail);background:color-mix(in srgb,var(--fail) 14%,transparent)}
+.b-not-proven{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.b-inconclusive{color:var(--unk);border-color:var(--unk);background:color-mix(in srgb,var(--unk) 16%,transparent)}
+.sev-critical{background:var(--crit);color:#0b0d12;border-color:var(--crit)}
+.sev-high{background:var(--high);color:#0b0d12;border-color:var(--high)}
+.sev-medium{background:var(--med);color:#0b0d12;border-color:var(--med)}
+.sev-low{background:var(--low);color:#0b0d12;border-color:var(--low)}
+.sev-info{background:var(--info);color:#0b0d12;border-color:var(--info)}
+.sev-none{border:1px solid var(--line);color:var(--mut)}
 .ladder{font-family:var(--mono);font-size:12px;letter-spacing:.5px;white-space:nowrap}
-.dot{font-size:13px} .dot.ok{color:var(--red)} .dot.fail{color:var(--green)} .dot.unk{color:var(--amber)} .dot.na{color:var(--mut)}
+.dot{font-size:13px} .dot.ok{color:var(--ok)} .dot.fail{color:var(--fail)} .dot.unk{color:var(--unk)} .dot.na{color:var(--mut)}
 details{margin-top:8px} summary{cursor:pointer;color:var(--mut);font-size:13px}
 ul.fix li{margin:6px 0 6px 18px}
 .muted{color:var(--mut);font-size:13px}
-.artifacts a{color:var(--blue);word-break:break-all}
+a,.artifacts a{color:var(--accent);word-break:break-all}
 footer{margin-top:26px;border-top:1px solid var(--line);padding-top:14px;color:var(--mut);font-size:12.5px;line-height:1.7}
-.pill{display:inline-block;font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:20px;padding:2px 10px;margin:2px 4px 2px 0;color:var(--mut)}
+.pill{display:inline-block;font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;margin:2px 4px 2px 0;color:var(--mut);background:var(--panel2)}
 @media print{body{background:#fff;color:#000}.card{break-inside:avoid;border-color:#ccc}}
 """
 
@@ -1338,7 +1354,8 @@ def render_html(report: ThreatReport) -> str:
     )
     cases_table = ('<div class="card"><h2>All cases (' + str(len(r.cases)) + ')</h2><div style="overflow-x:auto"><table>'
                    '<tr><th>case</th><th>family</th><th>verdict</th><th>severity</th><th>what happened</th><th>chain</th></tr>'
-                   + rows + '</table></div><p class="muted">Chain legend: ● red = confirmed, ● green = refuted, '
+                   + rows + '</table></div><p class="muted">Chain legend (same tri-state as Mission Control): '
+                   '● green = pass (stage confirmed), ● red = fail (stage refuted), '
                    '○ amber = UNKNOWN (not observed), – = not applicable; J = verdict set by the LLM judge.</p></div>')
 
     fam_rows = "".join(

@@ -6,6 +6,48 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-26 — claude-code — REPORT-CONSOLE-DESIGN: threat-report в дизайне Mission Control (feat/report-console-design)
+
+- контекст: директива владельца «дизайн отчёта = дизайн Mission Control». Натянуть
+  визуальный язык консоли (`console/src/styles.css`) на `threat-report.html` (P16).
+  База main=8c3b3ef; НЕ атаки, НЕ live. P19/PR#9 не тронуты — карта на отдельной ветке
+- (1) `reporting/threat_report.py` → блок `_CSS` переписан на дизайн-токены консоли:
+  палитра (`--bg #0b0d12`, `--panel/--panel2/--line/--txt/--mut`, `--accent #5b9dff`),
+  тристейт `--ok #3ddc84`/`--fail #ff5d6c`/`--unk #f5c344`, severity
+  `--crit/--high/--med/--low/--info`; типографика (system sans + `ui-monospace,Menlo`);
+  карточки radius 12 и заголовки секций uppercase+border-bottom; штамп-вердикт —
+  tinted-outline бейдж консоли (proven=red / not-proven=green / inconclusive=amber);
+  severity — solid-бейджи; doctrine/callout — баннер консоли (амбер, color-mix).
+  ТОЛЬКО CSS/разметка — логика вердиктов и данные не тронуты; все имена классов и
+  data-атрибуты сохранены
+- (2) тристейт дословно из консоли (директива «pass=зелёный, fail=красный,
+  UNKNOWN=янтарный»): стадия `success` True→зелёный(pass), False→красный(fail),
+  None→янтарный. Перевёрнуты цвета `.dot`/`ol.steps li.ok|fail|unk` (было по-защитному
+  confirmed=red) и текст легенды цепочки. Штамп и раскраска стадий читаются из тех же
+  записанных вердиктов, что рисует funnel консоли → расхождений нет (сверено на трёх
+  состояниях: PROVEN=all-pass зелёный, NOT PROVEN=external_effect refuted красный,
+  INCONCLUSIVE=adoption/tool UNKNOWN янтарные — байт-в-байт как console-фикстуры)
+  • ВНИМАНИЕ A0 (визуальная приёмка): следствие дословности — PROVEN-прогон рисует
+    цепочку зелёной (как funnel консоли), а алярм несёт красный штамп + красные плитки
+    ASR (метрика защитника, `_tile_class` не тронут). Это поведение консоли; если нужна
+    защитная семантика (confirmed=red) — скажи, разведу цвета цепочки и штампа
+- (3) контракт P16 цел: single-file, офлайн, без сети, английский хром + дословный язык
+  прогона (причины оракулов/цитаты). Python <3.12: бэкслэшей в выражениях f-строк не
+  добавлено — замок `test_threat_report_fstring_py311` зелёный, `ast.parse` feature 3.11 OK
+- (4) скрин-фикстуры (3 состояния): отрендерены из реальных mock-прогонов сценариев
+  `cross_user_bac` / `cross_user_bac_protected` / `tool_route_hijack_skipped` (как делались
+  фикстуры консоли — `campaign --target mock`; их campaign-данные совпадают со stage-формой
+  console-фикстур), сняты Chromium/Playwright в тёмной (дефолт) и светлой темах, переданы
+  владельцу для визуальной A0 (бинарь в репо не кладём — вне ALLOWLIST)
+- проверки: targeted `tests/test_threat_report*.py` — 25 passed (адаптация НЕ потребовалась:
+  тесты держатся за data-атрибуты/текст/классы-слова, не за цвета/CSS); полный suite
+  **1532 passed / 1 pre-existing fail** (`test_demo_launcher` — Windows-путь
+  `scripts\demo-run.ps1` на Linux; `demo.cmd` картой не тронут, дефект платформенный).
+  `git diff --check` чист; секретов 0; диффом задет ровно один модуль
+- ALLOWLIST соблюдён: `reporting/threat_report.py` (только шаблон/CSS/разметка), LOG.md.
+  `tests/test_threat_report*.py` — правок не потребовалось. Не самопринимаю — приёмка A0
+  визуальная (штампы/цвета/скрины)
+
 ### 2026-09-26 — claude-code — COND-CANON: условный вариант канона global_policy_injection (feat/cond-canon-global-policy)
 
 - контекст: H09 rate-замер (live, N=12): условная форма — hit-rate WRITE 11/12=0.917 против
