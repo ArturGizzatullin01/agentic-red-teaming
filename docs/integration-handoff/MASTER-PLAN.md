@@ -1579,3 +1579,12 @@ self-канал; D2: слепое пятно контролей; теперь W1
 | **Census M0→M1 чист**: has_memnotsafe = 0 документов во всех коллекциях; agent_policy_memories 0→5 — проверено напрямую, все 5 `source: "orchestrator"` (штатная дистилляция политик самим стендом, benign), глобальный слой политик атакой не тронут | §7 измерение |
 | **Заблокировано**: 3 пилота (cross-topic-smuggle, document-regulation-graft, system-log-impersonation) целятся в батч-стек 9702/28182 — он не поднят, стенды поднимает владелец. **Отклонение**: direct_poisoning_live_judged прогнан рантайм-клоном с судьёй Yandex deepseek-v4-flash (канон требует OPENROUTER_API_KEY — ключа нет); global_policy_injection_bb_live исключён из батареи как mock-sink (мок = только смок) | §gates; бэклог гигиены |
 | Очередь: 3 пилота — после подъёма батч-стека владельцем; далее директива «3 атакующие модели × 3 стенда» (телеметрия) — ждёт решения по бюджету. В работе у исполнителей: CLI-MEGA-UX (локальный), REPORT-CONSOLE-DESIGN (облако), BB-VARIANTS (GLM) | §9 |
+
+### Синхронизация v3.70 (2026-09-26) — REPORT-CONSOLE-DESIGN ВЛИТА; поток EXT-OPERATOR открыт; BB-CANON выдана
+
+| Факт | Отражение в плане |
+|---|---|
+| **REPORT-CONSOLE-DESIGN влита** (мерж `8c2115b`, конфликтов нет; suite на main **1533/0** — ровно канон): threat-report в дизайне Mission Control, токены байт-в-байт из консоли, доктрина тристейта консоли закреплена (confirmed=green/refuted=red/UNKNOWN=amber; разделение цветов цепочки и штампа отклонено решением A0). Зеркало запушено | Продуктовая линия |
+| **Аудит «чужой стенд» принят как основание** (все P0 проверены A0 по коду дословно): healthz-блокер для любого сценария, URL поверх mock молча остаётся mock, identity не доезжает до HTTP, probe 401/404=«доступно», pilot привязан к checkout, судья захардкожен на OpenRouter. **Открыт поток EXT-OPERATOR** (мастер-карта `handoff/outbox/CARD-EXT-OPERATOR-2026-09-26.md`): EXT-A target profile (облако, выдана) → EXT-B сборка/preflight/судья (облако) → EXT-C каталог/пилот (Fable) → EXT-D поставка после P19. Приёмочные фикстуры: 5, включая негативы | Продуктовая линия; §9 |
+| **BB-CANON выдана GLM** (`handoff/outbox/CARD-BB-CANON-2026-09-26.md`): перенос 3 bb-заготовок в канон + замки инвентаря + 2 строки в PILOT-RUNBOOK (single-user путь pilot/run; baseline-сверка 0.1% для direct_poisoning — обязательная) | атак-линия |
+| CLI-MEGA-UX: RETURN_FOR_FIX (D1 — судья мастера этикетка, не конфиг); folder-id исправлен A0 на ветке (`1d6e9aa`). Ждём фикс от Fable | §9 |
