@@ -147,6 +147,13 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # инвентаризации: bb — не «атака <-> контроль», а тот же арм, наблюдаемый
     # через другой адаптер (без Mongo/трассы). Закреплён явной строкой.
     "global_policy_injection_bb_live",
+    # Карточка COND-CANON: живой сценарий условного варианта семьи
+    # global_policy_injection (params.variant=conditional). Двойника по правилу
+    # паринга нет: не-live близнеца (global_policy_injection_conditional) не
+    # существует — вариант меряется ТОЛЬКО live (на mock он честный MISS, замок
+    # tests/test_global_policy_conditional_variant.py). Это факт инвентаризации
+    # (нет контрольного двойника), закреплён явной строкой.
+    "global_policy_injection_conditional_live",
     # Карточка H09-IMPL: канонический представитель семьи h09_matrix
     # (наследник global_policy_injection, payload из params.payload_text).
     # Восемь ячеек матрицы лежат в подкаталоге scenarios/h09-matrix/ и
