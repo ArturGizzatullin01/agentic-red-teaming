@@ -162,7 +162,7 @@ def test_missing_key_gives_instruction_no_traceback(tmp_path, monkeypatch):
     monkeypatch.delenv(KEY_ENV, raising=False)
     cfg_path = _write_config(tmp_path, "http://127.0.0.1:1/v1")
     console, buf = _console()
-    rc = run_pilot(cfg_path, tmp_path / "out", load_campaign=load_campaign, console=console)
+    rc = run_pilot(cfg_path, tmp_path / "out", load_campaign=load_campaign, console=console, allow_static=True)
     text = buf.getvalue()
     assert rc == 2
     assert KEY_ENV in text                 # инструкция называет переменную
@@ -177,7 +177,7 @@ def test_pilot_e2e_against_localhost_fake(tmp_path, monkeypatch):
         cfg_path = _write_config(tmp_path, srv.base_url)
         out = tmp_path / "runs" / "pilot-run"
         console, buf = _console()
-        rc = run_pilot(cfg_path, out, load_campaign=load_campaign, console=console)
+        rc = run_pilot(cfg_path, out, load_campaign=load_campaign, console=console, allow_static=True)
     text = buf.getvalue()
     assert rc == 0, text
     for marker in ("PROBE", "PREFLIGHT", "ИТОГ ПИЛОТА", "threat-report"):
@@ -204,9 +204,9 @@ def test_pilot_retest_unknown_not_fixed_e2e(tmp_path, monkeypatch):
         base = tmp_path / "runs" / "pilot-base"
         new = tmp_path / "runs" / "pilot-new"
         console, _ = _console()
-        assert run_pilot(cfg_path, base, load_campaign=load_campaign, console=console) == 0
+        assert run_pilot(cfg_path, base, load_campaign=load_campaign, console=console, allow_static=True) == 0
         console2, buf2 = _console()
-        assert run_pilot(cfg_path, new, load_campaign=load_campaign, console=console2, baseline=base) == 0
+        assert run_pilot(cfg_path, new, load_campaign=load_campaign, console=console2, baseline=base, allow_static=True) == 0
     text = buf2.getvalue()
     assert "RETEST" in text
     retest = json.loads((new / "retest.json").read_text(encoding="utf-8"))

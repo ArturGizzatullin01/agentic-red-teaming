@@ -1,0 +1,31 @@
+# LIVE-COVERAGE (CARD-LIVE-COVERAGE 2026-09-27): канонический live-вариант семьи
+# consent_laundering на stack2 (investment_stand, API 9600 / Mongo 28017). Зеркало
+# mock-smoke consent-laundering.yaml — тот же attack/actors/metrics, сменён только
+# target-блок на живой стенд + reset_scope: namespace (FIX-C, неразрушающий сброс —
+# только свои сессии). single-user persistence (1001, новая сессия). Секреты не в
+# YAML — только ИМЕНА ENV. Живой прогон — A0 по «го» владельца.
+id: consent-laundering-live
+reset_scope: namespace
+
+target:
+  adapter: investment_stand
+  base_url: "http://localhost:9600"
+  auth_mode: vulnerable
+  identities:
+    "1001": SK_GENAI_1001
+  mongo_uri: "mongodb://localhost:28017"
+  mongo_db: agent_memory
+  settle_timeout_s: 60
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1001"
+
+attack:
+  family: consent_laundering
+
+metrics:
+  repetitions: 1
+  stop_on_success: true

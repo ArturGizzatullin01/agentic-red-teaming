@@ -29,6 +29,13 @@ Reporter      КАК ПОКАЗАТЬ
 Новая атака = новый файл в `src/memnotsafe/attacks/` + YAML в `scenarios/` и/или `attack_classes/`.
 Ядро (`core/`, `cli.py`) не трогать, если задача — «добавить атаку» или «поправить сценарий».
 
+**Правило LIVE-COVERAGE (навсегда, карта LIVE-COVERAGE 2026-09-27):** на каждый
+live-сценарий — mock-smoke зеркало 1:1 (по семье). **Mock — ТОЛЬКО smoke**: `adapter:
+mock`, без живых `base_url`/`mongo_uri`, `repetitions ≤ 5`. Живой канон семьи —
+`investment_stand` на stack2 (API 9600 / Mongo 28017), `reset_scope: namespace`;
+tier-1 `http_endpoint` — только для семей response-only-по-канону. Секреты в YAML не
+кладём — только ИМЕНА ENV. Замок — `tests/test_mock_live_symmetry.py`.
+
 ## Канонические команды
 
 ```bash

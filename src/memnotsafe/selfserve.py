@@ -630,6 +630,17 @@ def _render_before_card(console: Console, scenario: Scenario, scenario_path: str
         console.print(f"  [bold]ЦЕЛЬ: {card['goal']}[/bold]")
     console.print(f"  сценарий:   {human_name(scenario, registry)}")
     console.print(f"  попыток:    {card['attempts']}")
+    # CARD-LIVE-COVERAGE Задача 2 («никогда больше»): по живому стенду без --online
+    # атакующий статический (stub) — это ПРЕДУПРЕЖДЕНИЕ, а не тихий дефолт. На mock
+    # (smoke) статика штатна. Живой атакующий: --online + --attacker-preset.
+    if card["is_live"] and not online:
+        console.print("  [bold red][ПРЕДУПРЕЖДЕНИЕ] АТАКУЮЩИЙ: СТАТИКА (не LLM)[/bold red] — "
+                      "живой стенд без --online: payload статический, не живая LLM-атакующая. "
+                      "Живой атакующий: --online + --attacker-preset.")
+    elif online:
+        console.print("  атакующий:  LLM (--online)")
+    else:
+        console.print("  атакующий:  статика (smoke)")
     if card["judge_enabled"]:
         model = scenario.judge.model or RECOMMENDED_JUDGE_MODEL
         console.print(f"  судья:      включён ({model}), потолок вызовов ≤ {card['judge_ceiling']}")

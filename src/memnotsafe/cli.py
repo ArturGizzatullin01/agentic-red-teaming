@@ -136,6 +136,9 @@ def _apply_judge_overrides(scenario, args: argparse.Namespace) -> None:
 
 async def _run_campaign(args: argparse.Namespace, *, default_repetitions: int, command: str) -> int:
     reporter = _reporter(args)
+    # Задача 5: пресет атакующего → --attacker-* до конфигурации атакующей LLM.
+    if not _apply_attacker_preset_or_report(args, reporter, command):
+        return 1
     scenario = load_scenario(args.scenario)
     _apply_judge_overrides(scenario, args)
     # EXT-B (судья из конфигурации): после флагов и блока сценария — проектный
@@ -628,6 +631,35 @@ def _add_attacker_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--attacker-base-url", default=None, help="base URL для openai-совместимого провайдера")
     parser.add_argument("--attacker-api-key-env", default="ATTACKER_API_KEY", help="имя переменной окружения с ключом атакующей LLM")
     parser.add_argument("--attacker-budget", type=int, default=50, help="лимит вызовов атакующей LLM на операцию")
+    # CARD-LIVE-COVERAGE Задача 5: пресет атакующего переключает модель во ВСЕХ
+    # путях (run/campaign/generate/go) через один apply_attacker_preset — не только в
+    # мастере go. Неизвестный пресет — управляемый отказ (не traceback). Секрет —
+    # только именем ENV (пресет подставляет ATTACKER_API_KEY).
+    parser.add_argument("--attacker-preset", default=None,
+                        help="пресет атакующего: qwen | yandexgpt | deepseek | stub | manual — подставляет --attacker-* флаги")
+
+
+def _apply_attacker_preset_or_report(args: argparse.Namespace, reporter, command: str) -> bool:
+    """CARD-LIVE-COVERAGE Задача 5: пресет атакующего (--attacker-preset) подставляет
+    штатные --attacker-* флаги ОДИНАКОВО во всех путях (run/campaign/generate) — тем же
+    apply_attacker_preset, что и мастер go. Неизвестный пресет — управляемый отказ через
+    reporter (не traceback): возвращает False, вызывающий отдаёт exit 1. None-пресет —
+    no-op → True. Печать выбранного атакующего — в stderr (human), потоки json/quiet чисты."""
+    preset = getattr(args, "attacker_preset", None)
+    if not preset:
+        return True
+    from memnotsafe.selfserve import ATTACKER_PRESETS, apply_attacker_preset
+    try:
+        applied = apply_attacker_preset(args, preset)
+    except KeyError:
+        reporter.emit_error(
+            command=command,
+            message=f"неизвестный пресет атакующего: {preset!r}. Доступны: {', '.join(ATTACKER_PRESETS)}.",
+        )
+        return False
+    if not getattr(args, "json", False) and not getattr(args, "quiet", False):
+        print(f"атакующий: пресет {applied.key} — {applied.label}", file=sys.stderr)
+    return True
 
 
 def _attacker_config_from_args(args: argparse.Namespace):
@@ -647,6 +679,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
     0 — корпус собран и сохранён (даже если часть записей отбракована, FR-012);
     1 — config-ошибка профиля/классов или сбой атакующей LLM (AttackerError)."""
     reporter = _reporter(args)
+    # Задача 5: пресет атакующего → --attacker-* и в генераторе корпуса.
+    if not _apply_attacker_preset_or_report(args, reporter, "generate"):
+        return 1
     from memnotsafe.generation.attack_classes import load_attack_classes
     from memnotsafe.generation.attacker_client import build_attacker_client
     from memnotsafe.generation.budget import CallBudget
@@ -860,12 +895,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="явное подтверждение живого стенда — требуется под --yes по live-таргету (CLI-MEGA-UX §2)")
     pgo.add_argument("--until-proven", action="store_true",
                      help="«кнопка до проникновения»: штатный campaign со stop_on_success (CLI-MEGA-UX §4)")
-    pgo.add_argument("--attacker-preset", default=None,
-                     help="пресет атакующего: qwen | yandexgpt | deepseek | stub | manual (CLI-MEGA-UX §3)")
     pgo.add_argument("--ping", action="store_true", help="отдельный ПЛАТНЫЙ шаг проверки связи судьи (по явному согласию)")
     pgo.add_argument("--no-color", action="store_true", help="выключить цвет (ANSI)")
     _add_online_flags(pgo)
-    _add_attacker_flags(pgo)
+    _add_attacker_flags(pgo)  # включает --attacker-preset (общий для run/campaign/generate/go)
     _add_judge_flags(pgo)
     pgo.set_defaults(func=_cmd_go)
 
@@ -890,13 +923,30 @@ def build_parser() -> argparse.ArgumentParser:
         if not args.output:
             print("--config требует --output runs/<dir>", file=sys.stderr)
             return 2
-        return run_pilot(args.config, args.output, load_campaign=load_campaign, baseline=args.baseline)
+        # Задача 5: пресет атакующего и для пака. Задача 2: online/allow_static —
+        # гейт живого атакера решает сам драйвер (run_pilot), человеческим текстом.
+        reporter = _reporter(args)
+        if not _apply_attacker_preset_or_report(args, reporter, "pilot"):
+            return 1
+        online = getattr(args, "online", False)
+        attacker_config = _attacker_config_from_args(args) if online else None
+        return run_pilot(
+            args.config, args.output, load_campaign=load_campaign, baseline=args.baseline,
+            online=online, allow_static=getattr(args, "allow_static", False),
+            attacker_config=attacker_config, online_attempts=getattr(args, "online_attempts", 5),
+        )
 
     ppilot = sub.add_parser("pilot", help="пилот одной командой: --init шаблон | --config прогон стартового пака → threat-report (P17)")
     ppilot.add_argument("--init", action="store_true", help="записать шаблон pilot.yaml (в --config или ./pilot.yaml) и подсказку шага")
     ppilot.add_argument("--config", default=None, help="pilot.yaml (для прогона; или путь назначения для --init)")
     ppilot.add_argument("--output", default=None, help="каталог прогона runs/pilot-<ts>")
     ppilot.add_argument("--baseline", default=None, help="каталог прошлого пилота для retest-секции (было → стало)")
+    # CARD-LIVE-COVERAGE Задача 2: паковый прогон без живого атакера — только под явным
+    # --allow-static; иначе нужен --online (живая атакующая LLM). Замок «никогда больше».
+    ppilot.add_argument("--allow-static", action="store_true",
+                        help="разрешить паковый прогон со СТАТИЧЕСКИМ атакующим (stub) — иначе нужен --online")
+    _add_online_flags(ppilot)
+    _add_attacker_flags(ppilot)
     ppilot.set_defaults(func=_cmd_pilot)
 
     # CARD-CLI-MEGA-UX §1: управление Docker-стендом из CLI. Аддитивная врезка

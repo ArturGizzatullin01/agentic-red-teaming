@@ -103,6 +103,28 @@ EXPECTED_PAIR_DIFFS: dict[tuple[str, str], tuple[str, ...]] = {
     # стенд/семейство/бюджет/адреса — побайтово те же.
     ("cross_user_bac_b", "cross_user_bac_b_live"): ("principals",),
     ("cross_user_bac_c", "cross_user_bac_c_live"): ("principals",),
+    # CARD-LIVE-COVERAGE (2026-09-27): 16 канонических live-вариантов семей на
+    # stack2 (investment_stand). Различие пары base(mock)↔live — РОВНО стек:
+    # adapter/auth_mode/base_url/vulnerable (mock vulnerable:true → live
+    # auth_mode:vulnerable без поля vulnerable; base_url появляется). actors/
+    # family/repetitions/stop_on_success зеркалятся из mock → в diff не входят.
+    # Это mock↔live дизайн (другой адаптер/стек), не W4-конфаунд.
+    ("consent-laundering", "consent-laundering-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("contact-supersede", "contact-supersede-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("cross-lingual-insertion", "cross-lingual-insertion-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("cross-topic-smuggle", "cross-topic-smuggle-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("deferred-payload", "deferred-payload-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("delimiter-summary-injection", "delimiter-summary-injection-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("document-regulation-graft", "document-regulation-graft-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("fake-shared-past", "fake-shared-past-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("forged_rationale", "forged_rationale_live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("generated_support", "generated_support_live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("h09_matrix", "h09_matrix_live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("procedural-graft", "procedural-graft-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("recommendation-hijack", "recommendation-hijack-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("salami_composition", "salami_composition_live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("tool-error-echo", "tool-error-echo-live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
+    ("tool_route_hijack", "tool_route_hijack_live"): ("adapter", "auth_mode", "base_url", "vulnerable"),
 }
 
 # Сценарии без контрольного двойника по правилу паринга. mk-матрицы сюда НЕ
@@ -118,7 +140,8 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # (ожидаемо, карточка §2.2). Суффикс -control правилом паринга не роднится
     # — оба имени закреплены здесь явно, прецеденты H18-ATTACK и H19.
     # FACTOR_KEYS НЕ расширяется молча — расширение словаря = решение A0.
-    "deferred-payload",
+    # CARD-LIVE-COVERAGE: deferred-payload теперь парен с deferred-payload-live —
+    # из непарных вышел; ниже остаётся только контроль (позиция пейлоада, вне 8 факторов).
     "deferred-payload-control",
     # Карточка H19: два арма делимитер-инъекции (inject — с поддельными
     # делимитерами, plain — контроль без них). Различие пары — форма payload'а,
@@ -128,7 +151,8 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # закреплены здесь явно, прецедент H18-ATTACK (tool_route_hijack +
     # _control). Фактор «делимитеры» в FACTOR_KEYS НЕ вносится — расширение
     # словаря факторов = решение A0, не молчая.
-    "delimiter-summary-injection",
+    # CARD-LIVE-COVERAGE: delimiter-summary-injection теперь парен с live (H19 —
+    # семья live-only по построению); ниже остаётся только контроль (форма payload'а).
     "delimiter-summary-injection-control",
     # Карточка BB-CANON: чёрноящичный (tier-1, http_endpoint) канон-сценарий
     # response-семьи direct_poisoning для пилота (дизайн BB-VARIANTS, ACCEPT A0
@@ -145,13 +169,12 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # для пилота (BB-VARIANTS, ACCEPT 9/10) — тот же тип факта (база *_bb не
     # существует, bb не контроль). Single-user по канону семьи.
     "false_precedent_bb_live",
-    # Карточка H15: базовый арм семьи forged_rationale. Protected-двойника у
-    # семьи нет по дизайну карточки — контроль пары это bare-оформление той же
-    # директивы (forged_rationale_mk_pair_control), а не режим авторизации;
-    # mk-матрицы семьи покрываются групповым правилом по этому базовому арму.
-    "forged_rationale",
+    # CARD-LIVE-COVERAGE: forged_rationale (базовый арм H15) теперь парен с
+    # forged_rationale_live — из непарных вышел; mk-матрицы семьи по-прежнему
+    # покрываются групповым правилом по этому базовому арму.
     "generated_escalation",
-    "generated_support",
+    # generated_support теперь парен с generated_support_live (CARD-LIVE-COVERAGE);
+    # прочие generated-армы (escalation/agent2) двойника не имеют.
     "generated_support_agent2",
     # Карточка H2x: чёрный ящик tier-1 (http_endpoint). Двойника по правилу
     # паринга нет (имя *_bb_live не родственно базе *_live), и это факт
@@ -165,27 +188,22 @@ EXPECTED_UNPAIRED: tuple[str, ...] = (
     # tests/test_global_policy_conditional_variant.py). Это факт инвентаризации
     # (нет контрольного двойника), закреплён явной строкой.
     "global_policy_injection_conditional_live",
-    # Карточка H09-IMPL: канонический представитель семьи h09_matrix
-    # (наследник global_policy_injection, payload из params.payload_text).
-    # Восемь ячеек матрицы лежат в подкаталоге scenarios/h09-matrix/ и
-    # нерекурсивным glob'ом не сканируются; у канона-представителя нет пары —
-    # закреплён явной строкой.
-    "h09_matrix",
+    # CARD-LIVE-COVERAGE: h09_matrix (представитель семьи, наследник
+    # global_policy_injection) теперь парен с h09_matrix_live — из непарных вышел.
+    # Восемь ячеек матрицы лежат в scenarios/h09-matrix/ и нерекурсивным glob'ом
+    # не сканируются.
     "procedural-graft-marker",
-    # Карточка H14: базовый арм семьи salami_composition. Protected-двойника у
-    # семьи нет по дизайну карточки — контроль пары это partial-retrieval
-    # (salami_composition_mk_pair_control), а не режим авторизации; mk-матрицы
-    # семьи покрываются групповым правилом по этому базовому арму.
-    "salami_composition",
+    # CARD-LIVE-COVERAGE: salami_composition (базовый арм H14) теперь парен с
+    # salami_composition_live — из непарных вышел; mk-матрицы семьи по-прежнему
+    # покрываются групповым правилом по этому базовому арму.
     "system-log-impersonation-pilot",
     # Карточка BB-CANON: tier-1 канон-сценарий response-семьи
     # system_log_impersonation для пилота (BB-VARIANTS, ACCEPT 9/10) — тот же
     # тип факта (база *_bb не существует, bb не контроль). Single-user.
     "system_log_impersonation_bb_live",
-    # Карточка H18-ATTACK: три арма семьи tool_route_hijack (redirect-forbidden,
-    # redirect-skipped, контроль bare). Protected-двойника нет по дизайне —
-    # контроль пары это bare-оформление той же записи, а не режим авторизации.
-    "tool_route_hijack",
+    # Карточка H18-ATTACK: tool_route_hijack (базовый арм) теперь парен с
+    # tool_route_hijack_live (CARD-LIVE-COVERAGE) — из непарных вышел; контроли
+    # остаются непарными (bare-оформление той же записи, не режим авторизации).
     "tool_route_hijack_control",
     "tool_route_hijack_skipped",
 )
