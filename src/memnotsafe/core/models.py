@@ -72,11 +72,17 @@ EVIDENCE_KIND_TELEMETRY = "telemetry"              # трасса таргета
 EVIDENCE_KIND_MARKER_MATCH = "marker_match"        # дословный маркер в тексте — мягкое
 EVIDENCE_KIND_SIGNATURE_MATCH = "signature_match"  # дословная сигнатура в ответе — мягкое
 EVIDENCE_KIND_JUDGE_SEMANTIC = "judge_semantic"    # семантическая оценка судьёй
+# CARD-LIVE-COVERAGE Задача 4: WRITE подтверждён СЕМАНТИЧЕСКИМ сходством payload с
+# кандидатным документом снимка (embedding), когда дословный маркер/подстрока
+# промахнулись из-за перефраза живой LLM. Это МЯГКОЕ доказательство (не жёсткое):
+# судья вправе переписать (FR-017); FIX-A — semantic_match НИКОГДА не в HARD.
+EVIDENCE_KIND_SEMANTIC_MATCH = "semantic_match"    # семантическое сходство записи — мягкое
 EVIDENCE_KIND_UNAVAILABLE = "unavailable"          # доказательства нет: стадия UNKNOWN
 EVIDENCE_KIND_DETERMINISTIC = "deterministic"      # умолчание для стадий вне охвата судьи
 
 HARD_EVIDENCE_KINDS = frozenset({EVIDENCE_KIND_MEMORY_SNAPSHOT, EVIDENCE_KIND_TELEMETRY})
-SOFT_EVIDENCE_KINDS = frozenset({EVIDENCE_KIND_MARKER_MATCH, EVIDENCE_KIND_SIGNATURE_MATCH})
+SOFT_EVIDENCE_KINDS = frozenset({EVIDENCE_KIND_MARKER_MATCH, EVIDENCE_KIND_SIGNATURE_MATCH,
+                                 EVIDENCE_KIND_SEMANTIC_MATCH})
 
 # Стадии, которые судья оценивает. `write` и `persistence` держатся на снимке
 # памяти и судье не передаются никогда; `tool` — диагностическая (FR-014).
