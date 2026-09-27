@@ -899,13 +899,30 @@ def build_parser() -> argparse.ArgumentParser:
         if not args.output:
             print("--config требует --output runs/<dir>", file=sys.stderr)
             return 2
-        return run_pilot(args.config, args.output, load_campaign=load_campaign, baseline=args.baseline)
+        # Задача 5: пресет атакующего и для пака. Задача 2: online/allow_static —
+        # гейт живого атакера решает сам драйвер (run_pilot), человеческим текстом.
+        reporter = _reporter(args)
+        if not _apply_attacker_preset_or_report(args, reporter, "pilot"):
+            return 1
+        online = getattr(args, "online", False)
+        attacker_config = _attacker_config_from_args(args) if online else None
+        return run_pilot(
+            args.config, args.output, load_campaign=load_campaign, baseline=args.baseline,
+            online=online, allow_static=getattr(args, "allow_static", False),
+            attacker_config=attacker_config, online_attempts=getattr(args, "online_attempts", 5),
+        )
 
     ppilot = sub.add_parser("pilot", help="пилот одной командой: --init шаблон | --config прогон стартового пака → threat-report (P17)")
     ppilot.add_argument("--init", action="store_true", help="записать шаблон pilot.yaml (в --config или ./pilot.yaml) и подсказку шага")
     ppilot.add_argument("--config", default=None, help="pilot.yaml (для прогона; или путь назначения для --init)")
     ppilot.add_argument("--output", default=None, help="каталог прогона runs/pilot-<ts>")
     ppilot.add_argument("--baseline", default=None, help="каталог прошлого пилота для retest-секции (было → стало)")
+    # CARD-LIVE-COVERAGE Задача 2: паковый прогон без живого атакера — только под явным
+    # --allow-static; иначе нужен --online (живая атакующая LLM). Замок «никогда больше».
+    ppilot.add_argument("--allow-static", action="store_true",
+                        help="разрешить паковый прогон со СТАТИЧЕСКИМ атакующим (stub) — иначе нужен --online")
+    _add_online_flags(ppilot)
+    _add_attacker_flags(ppilot)
     ppilot.set_defaults(func=_cmd_pilot)
 
     # CARD-CLI-MEGA-UX §1: управление Docker-стендом из CLI. Аддитивная врезка

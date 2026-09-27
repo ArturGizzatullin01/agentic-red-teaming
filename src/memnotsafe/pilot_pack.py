@@ -255,10 +255,15 @@ def _resolve_pack_path(rel: str) -> str:
     return str(_REPO_ROOT / rel)
 
 
-async def _run_pack(cfg: PilotConfig, target, out_dir: Path, console: Console) -> list[_RunEntry]:
+async def _run_pack(cfg: PilotConfig, target, out_dir: Path, console: Console,
+                    *, online: bool = False, attacker_config=None,
+                    online_attempts: int = 5) -> list[_RunEntry]:
     """Гонит стартовый пак существующими сценариями реестра против ручки пилота
     (один общий T1-адаптер, последовательно). Уважает budget_cap (потолок прогонов
-    против ручки): исчерпан → остальное честно пропускается."""
+    против ручки): исчерпан → остальное честно пропускается.
+
+    CARD-LIVE-COVERAGE Задача 2: online/attacker_config прокидываются в Campaign —
+    под --online атакующая LLM живая (не stub); гейт статики — в run_pilot выше."""
     runs: list[_RunEntry] = []
     committed = 0
     for entry in STARTER_PACK:
@@ -275,7 +280,9 @@ async def _run_pack(cfg: PilotConfig, target, out_dir: Path, console: Console) -
                 continue
             committed += 1
             sc = load_scenario(path)
-            cr = await Campaign(sc, target, out_dir / run_id).run(repetitions=cfg.iterations)
+            cr = await Campaign(sc, target, out_dir / run_id,
+                                attacker_config=attacker_config, online=online,
+                                online_attempts=online_attempts).run(repetitions=cfg.iterations)
             re = _RunEntry(entry=entry, is_control=is_control)
             re.results = list(cr.results)
             re.case_ids = [r.case_id for r in cr.results]
@@ -349,6 +356,10 @@ def _render_summary(console: Console, report: Any, combined: CampaignResult, pat
     console.rule("[bold]ИТОГ ПИЛОТА[/bold]")
     console.print(f"  вердикт:       {stamp}")
     console.print(f"  доказано:      {m.get('successful')} of {m.get('attempts')} (N of M)")
+    # CARD-LIVE-COVERAGE Задача 2.4: сводка пака обязана показывать атакующего —
+    # статический прогон не должен читаться как живой (источник — experiment.json прогона).
+    from memnotsafe.reporting.threat_report import _attacker_status
+    console.print(f"  атакующий:     {_attacker_status(path.parent)}")
     console.print(f"  threat-report: {path}")
     console.print("  [dim]UNKNOWN ≠ safe: INCONCLUSIVE означает «не доказано», а не «цель защищена»[/dim]")
 
@@ -374,13 +385,27 @@ def _render_retest(console: Console, out_dir: Path, baseline_dir: Path, new_case
 
 # ---------------------------------------------------------------- оркестрация
 def run_pilot(config_path: str | Path, output: str | Path, *, load_campaign: CampaignLoader,
-             console: Console | None = None, baseline: str | Path | None = None) -> int:
+             console: Console | None = None, baseline: str | Path | None = None,
+             online: bool = False, allow_static: bool = False,
+             attacker_config=None, online_attempts: int = 5) -> int:
     """Точка входа пилота (--config). Возвращает код: 0 успех; 1 контрактная
-    ошибка/блокер preflight; 2 конфиг/ключ/недоступная ручка. Ошибки —
-    человекочитаемые, без traceback."""
+    ошибка/блокер preflight; 2 конфиг/ключ/недоступная ручка/гейт атакующего.
+    Ошибки — человекочитаемые, без traceback.
+
+    CARD-LIVE-COVERAGE Задача 2 («никогда больше»): паковый прогон со статическим
+    атакующим (не --online) разрешён ТОЛЬКО под явным --allow-static. Иначе —
+    блокер: оператор обязан осознанно выбрать живого атакера (--online) или
+    подтвердить статику."""
     _reconfigure_stdout()
     console = console or Console()
     render_provenance(console)  # W10: версия/путь пакета + предупреждение о чужом дереве
+    if not online and not allow_static:
+        console.print("[red][БЛОКЕР] паковый прогон со СТАТИЧЕСКИМ атакующим (stub) — "
+                      "payload не от живой LLM.[/red] Запустите с [bold]--online[/bold] "
+                      "(живая атакующая LLM, напр. --attacker-preset qwen) ИЛИ явно "
+                      "подтвердите статику флагом [bold]--allow-static[/bold] "
+                      "(CARD-LIVE-COVERAGE Задача 2: «живого атакера не было — чтобы такого больше не было»).")
+        return 2
     load_dotenv(Path(".env"), os.environ)  # переиспользуем механику P18: подхват .env (только имена)
     try:
         cfg = load_pilot_config(config_path)
@@ -388,11 +413,15 @@ def run_pilot(config_path: str | Path, output: str | Path, *, load_campaign: Cam
         console.print(f"[red]{exc}[/red]")
         return 2
     return asyncio.run(_pilot_chain(cfg, Path(output), load_campaign, console,
-                                    Path(baseline) if baseline else None))
+                                    Path(baseline) if baseline else None,
+                                    online=online, attacker_config=attacker_config,
+                                    online_attempts=online_attempts))
 
 
 async def _pilot_chain(cfg: PilotConfig, out_dir: Path, load_campaign: CampaignLoader,
-                       console: Console, baseline: Path | None) -> int:
+                       console: Console, baseline: Path | None,
+                       *, online: bool = False, attacker_config=None,
+                       online_attempts: int = 5) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     synth_path = _write_synth_scenario(cfg, out_dir)
     synth = load_scenario(synth_path)
@@ -421,7 +450,9 @@ async def _pilot_chain(cfg: PilotConfig, out_dir: Path, load_campaign: CampaignL
                 console.print(f"[red][БЛОКЕР] {c.check_id}: {c.text}[/red]")
             return 1
 
-        runs = await _run_pack(cfg, target, out_dir, console)
+        runs = await _run_pack(cfg, target, out_dir, console,
+                               online=online, attacker_config=attacker_config,
+                               online_attempts=online_attempts)
     finally:
         await target.aclose()
 

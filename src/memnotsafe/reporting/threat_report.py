@@ -310,6 +310,25 @@ class ThreatReport:
         return asdict(self)
 
 
+def _attacker_status(run_dir: Path) -> str:
+    """CARD-LIVE-COVERAGE Задача 2 («никогда больше»): статус атакующего из
+    experiment.json — чтобы статический payload (attacker=stub, online=false) не
+    выдавался за живого атакера. Строка АНГЛИЙСКАЯ: threat-report — англоязычный
+    отчёт для заказчика (замок test_chrome_has_no_cyrillic). online → «LLM (<model>)»;
+    иначе → «STATIC (not an LLM)»; нет/битый experiment.json → «UNKNOWN …» (тоже не
+    «живой»). Значений секретов не читает — только provider/model/online из провенанса."""
+    exp = Path(run_dir) / "experiment.json"
+    if not exp.exists():
+        return "UNKNOWN (no experiment.json)"
+    try:
+        att = (json.loads(exp.read_text(encoding="utf-8")).get("attacker") or {})
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+        return "UNKNOWN (experiment.json unreadable)"
+    if att.get("online"):
+        return f"LLM ({att.get('model') or '?'})"
+    return "STATIC (not an LLM)"
+
+
 # ------------------------------------------------------------------- helpers
 def _esc(x: object) -> str:
     """&, <, > и " экранируются (все атрибуты шаблона — в двойных кавычках);
@@ -1401,6 +1420,18 @@ def render_html(report: ThreatReport) -> str:
 
     tech_link = f' · <a href="{_esc(r.technical_report)}">technical report (report.html)</a>' if r.technical_report else ""
     started = f" · started {_esc(r.started_at)}" if r.started_at else ""
+    # Задача 2 (LIVE-COVERAGE): статус атакующего в шапке — статический payload
+    # красным, чтобы прогон со stub не читался как живой LLM-атакующий.
+    attacker_status = _attacker_status(Path(r.run_dir))
+    attacker_static = not attacker_status.startswith("LLM")
+    attacker_html = (
+        f'<div class="sub" data-attacker="{"static" if attacker_static else "llm"}" '
+        f'style="margin-top:6px;font-weight:600;color:{"var(--fail)" if attacker_static else "var(--ok)"}">'
+        f'ATTACKER: {_esc(attacker_status)}'
+        + ('  — this run used a static payload, not a live attacker LLM (for a live attacker: --online + --attacker-preset)'
+           if attacker_static else '')
+        + '</div>'
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="memnotsafe {SCHEMA_VERSION}">
@@ -1414,6 +1445,7 @@ def render_html(report: ThreatReport) -> str:
 <div class="stamp">
   <div class="verdict {_STAMP_CLASS[r.stamp]}" data-stamp="{_esc(r.stamp)}" data-severity="{_esc(r.severity or '')}">{_esc(stamp_txt)}</div>
   <div class="sub">Generated from the recorded artifacts of this run only — no verdict was re-evaluated. {_esc(stamp_rule)}</div>
+  {attacker_html}
 </div>
 <h1>{_esc(r.headline)}</h1>
 <p class="lede">{_esc(r.lede)}</p>
