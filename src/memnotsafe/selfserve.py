@@ -292,6 +292,19 @@ def build_catalog(scenarios_dir: str | Path) -> list[CatalogEntry]:
     return entries
 
 
+def _go_catalog_dir() -> str:
+    """EXT-D (добивка P19): каталог сценариев для интерактивного выбора `go`.
+    В дереве разработчика — репозиторный ./scenarios (поведение прежнее); из голого
+    `pip install` без ./scenarios — упакованный стартовый набор (package resources),
+    чтобы `go` находил и ПЕРЕЧИСЛЯЛ сценарии пакета, а не пустой каталог из cwd."""
+    if Path("scenarios").is_dir():
+        return "scenarios"
+    from memnotsafe.pilot_scenarios import packaged_scenarios_dir
+
+    packaged = packaged_scenarios_dir()
+    return packaged if packaged is not None else "scenarios"
+
+
 def filter_by_adapter(catalog: list[CatalogEntry], adapter: str | None) -> list[CatalogEntry]:
     """§3: фильтр каталога по целевому адаптеру (mock / investment_stand /
     http_endpoint / …). None — без фильтра."""
@@ -754,7 +767,7 @@ def run_go(args: argparse.Namespace, *, run_command: RunCommand,
                 console.print("[red]--yes требует --scenario: в тихом режиме каталог не выбирают.[/red]")
                 return 2
             scenario_path = _interactive_pick(
-                build_catalog("scenarios"), console, adapter_filter=getattr(args, "adapter", None))
+                build_catalog(_go_catalog_dir()), console, adapter_filter=getattr(args, "adapter", None))
             if scenario_path is None:
                 console.print("Отменено.")
                 return 0
