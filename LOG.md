@@ -6,6 +6,65 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-27 — claude-code — EXT-D: поставка (аудит+добивка P19, оператор-скилл, README) (feat/ext-d-delivery)
+
+- контекст: поток EXT-OPERATOR, карта поставки. База — свежий main 0d65acd (suite 1639/0
+  на Windows; EXT-A/EXT-B/P19 влиты). НЕ live, НЕ Docker; секреты — только ИМЕНА env.
+  Ветка feat/ext-d-delivery. Приёмка A0, не самопринимать
+- задача 1 — аудит P19 делом + добивка по факту разрыва. Собрал wheel, поставил в ЧИСТЫЙ
+  venv, гонял из произвольного cwd без клона. Итог аудита: `pilot --init`/`pilot --config`
+  из голого install РАБОТАЮТ (пак резолвится package-resource-first, не разрыв). Два РАЗРЫВА:
+  (a) `run --scenario <имя>` — `load_scenario` резолвил только путь ФС, упакованный сценарий по
+  имени не находился (FileNotFoundError, непойманное → сырой traceback); (b) `go` без `--scenario`
+  — каталог из `build_catalog("scenarios")` (cwd `./scenarios`), из голого install пуст.
+  Закрыто как «добивка P19 по факту разрыва» (ALLOWLIST): `pilot_scenarios/__init__.py` —
+  новые `packaged_scenario_path(name)` / `packaged_scenarios_dir()` (пакет владеет знанием о
+  своих ресурсах); `core/config.py` — `load_scenario` резолвит ГОЛОЕ имя из package resources
+  (явный путь с каталогом не подменяется; содержимое байт-в-байт = scenarios/<имя> → experiment_id
+  не дрейфует); `selfserve.py` — `_go_catalog_dir()` берёт репозиторный `./scenarios` в дереве,
+  иначе упакованный набор (поведение в дереве не меняется, `build_catalog` не тронут). Проверено
+  в чистом venv: `run --scenario cross_user_bac.yaml --target mock` → rc 0 + артефакты;
+  `threat-report --input runs/smoke` → COMPROMISE PROVEN (CRITICAL) + «UNKNOWN is not safe»;
+  `go` каталог из пустого cwd перечисляет 4 упакованных сценария. Офлайн-замок: новый файл
+  `tests/test_ext_d_packaging.py` — RED→GREEN на оба разрыва + всегда-замок упаковки (pyproject
+  package-data + importlib.resources) + архивный замок (сборка wheel + zipfile namelist,
+  skip-guarded: без toolchain/сети → SKIP, не FAIL)
+- задача 2 — оператор-скилл доработан (не переписан): `artifacts/memnotsafe-claude-skill/
+  memnotsafe-operator/SKILL.md`. Добавлены разделы: EXT-A target-профиль (scenario `target.profile`:
+  transport/auth/identity/session/observation/health; ТОЛЬКО http_endpoint; `pilot` профиль НЕ
+  принимает — уточнено против премиссы карты по факту кода); судья из конфигурации EXT-B (флаги
+  `--judge`/`--no-judge`/`--judge-model`/`--judge-max-calls`, блок `judge:`, `MEMNOTSAFE_JUDGE_*`,
+  человеческая ошибка при отсутствии judge.model — базы `--judge-base-url`/`--judge-api-key-env`
+  как ФЛАГОВ нет); замок «никогда тихий mock» (URL поверх mock-сценария — отказ, как читать);
+  раздел чтения threat-report (PROVEN/NOT PROVEN/INCONCLUSIVE, UNKNOWN≠safe). Каждая команда
+  сверена с `memnotsafe --help` свежего main (stand up|down|status|keys, go --live-ack и т.д.)
+- задача 3 — README + примеры: `README.md` — новый раздел «Установка из wheel и первый прогон
+  (Windows/Linux)» (bash+PowerShell, машинных путей нет): install из wheel, mock-smoke за 2 мин,
+  пилот к чужой ручке (ИМЯ env-ключа), чтение threat-report. `docs/examples/` (новый):
+  `pilot.yaml` (сверен с шаблоном `pilot --init`), `scenario_target_profile.yaml` (EXT-A профиль —
+  провалидирован load_scenario→resolve_effective_target→build_adapter; адаптер корректно требует
+  ключ ТОЛЬКО из env), `README.md` (кросс-ОС команды). AGENTS.md/CLAUDE.md в поставку НЕ включены
+- отклонения (D): нет. Ядро тронуто ТОЛЬКО добивкой P19 (load_scenario резолв имени) — в рамках
+  явного исключения ALLOWLIST «CLI-семантика — кроме добивки P19 по факту разрыва»; runner/атаки/
+  оракулы/mock/investment_stand/profile.py/сценарии не тронуты
+- NOTICED (вне scope, не чинил): (1) для ИСТИННО отсутствующего сценария (не пакет, не диск)
+  `run` по-прежнему отдаёт сырой FileNotFoundError-traceback (не пойман в cli) — это
+  предсуществующее форматирование ошибки, а не упаковка P19; (2) `build/` не в .gitignore (build
+  frontend оставляет `build/lib/` в дереве) — удалил свою резидью, не коммичу, но .gitignore не
+  правил (вне ALLOWLIST)
+- проверка (реально прогнано в venv 3.12): targeted RED→GREEN `tests/test_ext_d_packaging.py`
+  RED 4 failed/4 passed/1 skipped → GREEN 8 passed/1 skipped; targeted регресс тронутых модулей
+  (pilot_pack/selfserve/selfserve_cli_mega_ux/target_profile/ext_b/reset_scope/threat_report+ext_d)
+  167 passed/1 skipped; ПОЛНЫЙ suite один прогон:
+  `PYTHONIOENCODING=utf-8 python -m pytest tests/ -p no:cacheprovider -q` →
+  **1646 passed, 1 skipped, 1 failed**. Единственный failed — предсуществующий платформенный
+  `tests/test_demo_launcher.py::test_demo_cmd_references_existing_tracked_script` (POSIX трактует
+  `scripts\demo-run.ps1` из demo.cmd как имя файла; зелёный на Windows-базе владельца 1639/0; вне
+  моего диффа). skipped — архивный замок (нет build-toolchain в тест-venv). Δ vs база = +9 собрано
+  (+8 passed, +1 skipped). py3.11 `py_compile` изменённых модулей OK; `git diff --check` чисто;
+  секретов в диффе 0 (только имена env и плейсхолдеры)
+
+
 ### 2026-09-26 — claude-code — EXT-B: единая эффективная цель + preflight по контракту + судья из конфигурации (feat/ext-b-effective-target)
 
 - контекст: поток EXT-OPERATOR, карта 2/4. База — свежий main ae56227 (suite 1621/0,

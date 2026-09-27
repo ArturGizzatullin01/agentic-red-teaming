@@ -93,10 +93,31 @@ class Scenario:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+def _resolve_packaged_scenario(path: Path) -> Path | None:
+    """EXT-D (добивка P19): голое ИМЯ файла → путь упакованного сценария стартового
+    пака (memnotsafe.pilot_scenarios) или None. Явный путь с каталогом не трогаем —
+    из пакета резолвится только `<имя>.yaml`, чтобы не подменять чужой путь."""
+    if path.parent != Path("."):
+        return None
+    from memnotsafe.pilot_scenarios import packaged_scenario_path
+
+    resolved = packaged_scenario_path(path.name)
+    return Path(resolved) if resolved else None
+
+
 def load_scenario(path: str | Path) -> Scenario:
     path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"Сценарий не найден: {path}")
+        # EXT-D (добивка P19): из голого `pip install` без каталога репозитория
+        # `run --scenario <имя>` / `go --scenario <имя>` обязаны находить упакованный
+        # сценарий стартового пака по имени. Содержимое байт-в-байт равно
+        # scenarios/<имя> (замок test_packaged_pilot_scenarios_match_repo_originals) —
+        # experiment_id и семантика не дрейфуют. Неизвестное имя/явный путь → прежняя
+        # FileNotFoundError (fallback не маскирует опечатку).
+        packaged = _resolve_packaged_scenario(path)
+        if packaged is None:
+            raise FileNotFoundError(f"Сценарий не найден: {path}")
+        path = packaged
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
     try:

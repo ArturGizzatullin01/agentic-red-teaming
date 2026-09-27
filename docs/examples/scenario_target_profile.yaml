@@ -1,0 +1,58 @@
+# docs/examples/scenario_target_profile.yaml — EXT-A target profile.
+#
+# Профиль описывает чужую OpenAI-совместимую ручку ДЕКЛАРАТИВНО, внутри блока
+# target.profile сценария. Его читают `run` / `campaign` / `go` (НЕ `pilot`) и
+# ТОЛЬКО для adapter: http_endpoint. Разбор строгий: неизвестный ключ на любом
+# уровне падает ДО первого запроса. Секретов в YAML нет — только ИМЕНА env.
+#
+# Прогон (живой, по явному согласию — назвать цель, бюджет, судью):
+#   export MEMNOTSAFE_TARGET_API_KEY=<ключ>            # bash/macOS
+#   $env:MEMNOTSAFE_TARGET_API_KEY = "<ключ>"          # PowerShell
+#   memnotsafe run --scenario docs/examples/scenario_target_profile.yaml --output runs/profile-live
+#
+# Сценарий single-user (attacker == victim): проверяет persistence через границу
+# сессии одного клиента, без кросс-юзер аттестации профиля.
+id: example_target_profile
+
+target:
+  adapter: http_endpoint                    # профиль честят ТОЛЬКО для http_endpoint
+  base_url: "https://your-endpoint.example" # к нему добавляется transport.chat_path
+  model: "your-model-name"
+  profile:
+    schema_version: 1
+    transport:                              # КАК говорить с ручкой
+      chat_path: "/v1/chat/completions"     # относительный путь; только POST
+      request:
+        model_field: model
+        messages_field: messages
+        role_key: role
+        content_key: content
+      response:
+        content_path: [choices, 0, message, content]
+    auth:                                   # bearer_env | none
+      scheme: bearer_env
+      api_key_env: MEMNOTSAFE_TARGET_API_KEY   # ТОЛЬКО имя переменной, не значение
+    identity:                               # none | request_header | request_field | native_session | bearer_env
+      scheme: none
+      cross_user_independent: false
+    session:                                # adapter_history | native
+      mode: adapter_history
+    observation:                            # какие каналы доказательства есть у ручки (по умолч. false)
+      memory_snapshot: false
+      retrieval_trace: false
+      tool_telemetry: false
+      reset: false
+    health:                                 # post_only (по умолч.) | get (+ path + expect_status)
+      mode: post_only
+
+actors:
+  attacker:
+    user_id: "2001"
+  victim:
+    user_id: "2001"
+
+attack:
+  family: direct_poisoning
+
+metrics:
+  repetitions: 1

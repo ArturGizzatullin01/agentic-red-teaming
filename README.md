@@ -15,6 +15,69 @@ metrics → report
 Постановка задачи кейса — [description_interim.md](description_interim.md).
 Карта репозитория, история сборки и статус — [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md).
 
+## Установка из wheel и первый прогон (Windows / Linux)
+
+Оператору без клона репозитория достаточно wheel: стартовые сценарии пилота едут
+в пакет и находятся по имени — каталог `scenarios/` не нужен. Команды `memnotsafe`
+одинаковы на всех ОС; различаются только установка переменной окружения и открытие
+HTML-отчёта. Пути ниже относительные, машинных путей нет.
+
+Установка (подставьте путь к своему `.whl`):
+
+```bash
+python -m pip install ./memnotsafe-0.1.0-py3-none-any.whl      # bash / macOS
+```
+
+```powershell
+python -m pip install .\memnotsafe-0.1.0-py3-none-any.whl       # PowerShell
+```
+
+Mock-smoke за 2 минуты (без сети, без ключей, из любого каталога):
+
+```bash
+memnotsafe probe --target mock
+memnotsafe run --scenario cross_user_bac.yaml --target mock --output runs/smoke
+memnotsafe threat-report --input runs/smoke
+```
+
+`run --scenario` принимает путь; голое имя упакованного сценария
+(`cross_user_bac.yaml`, `cross_user_bac_c_mk_operand.yaml`, `direct_poisoning.yaml`,
+`cross_user_bac_protected.yaml`) резолвится из пакета, если файла нет в текущем
+каталоге. `memnotsafe go` без `--scenario` тоже перечисляет эти упакованные
+сценарии, когда рядом нет каталога `./scenarios`.
+
+Пилот к чужой OpenAI-совместимой ручке — ключ только ИМЕНЕМ переменной, значение вне репо:
+
+```bash
+memnotsafe pilot --init
+export MEMNOTSAFE_TARGET_API_KEY=<ключ>          # значение остаётся в окружении
+# впишите base_url и model в pilot.yaml, затем:
+memnotsafe pilot --config pilot.yaml --output runs/pilot-run
+```
+
+```powershell
+memnotsafe pilot --init
+$env:MEMNOTSAFE_TARGET_API_KEY = "<ключ>"
+# впишите base_url и model в pilot.yaml, затем:
+memnotsafe pilot --config pilot.yaml --output runs/pilot-run
+```
+
+Готовые примеры — в [`docs/examples/`](docs/examples/): `pilot.yaml` и
+`scenario_target_profile.yaml` (EXT-A target-профиль для `run`/`go`; `pilot` профиль
+не принимает). Руководство оператора для Claude —
+[`artifacts/memnotsafe-claude-skill/memnotsafe-operator/SKILL.md`](artifacts/memnotsafe-claude-skill/memnotsafe-operator/SKILL.md).
+
+Открыть отчёт: `xdg-open runs/smoke/threat-report.html` (Linux), `open …` (macOS),
+`Invoke-Item runs\smoke\threat-report.html` (PowerShell).
+
+**Чтение threat-report.** Вердикт кейса — одно из трёх: **PROVEN** (компрометация
+доказана независимой, не-судейской уликой); **NOT PROVEN** (наблюдаемая стадия
+опровергла — но это **не** «безопасно»: записанное до разрыва может остаться в
+памяти); **INCONCLUSIVE** (не наблюдалось или противоречиво — payload может всё ещё
+быть в памяти). Штамп кампании — `COMPROMISE PROVEN` / `COMPROMISE NOT PROVEN` /
+`INCONCLUSIVE`. Доктрина: **UNKNOWN ≠ безопасно** — ненаблюдённая стадия не пройдена
+и не провалена, это предел видимости, а не чистый результат.
+
 ## Быстрый старт (без Docker, без сети, без ключей)
 
 Обязательный локальный `mock`-таргет (`src/memnotsafe/adapters/mock.py`) детерминированно

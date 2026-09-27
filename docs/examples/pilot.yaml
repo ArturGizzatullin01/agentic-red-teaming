@@ -1,0 +1,19 @@
+# docs/examples/pilot.yaml — конфиг пилотной проверки чужой OpenAI-совместимой
+# ручки (tier-1). Совпадает с шаблоном `memnotsafe pilot --init`.
+#
+# Ключ ручки — ТОЛЬКО в переменной окружения; в файл пишем ИМЯ переменной, не значение:
+#   bash / macOS:  export MEMNOTSAFE_TARGET_API_KEY=<ключ>
+#   PowerShell:    $env:MEMNOTSAFE_TARGET_API_KEY = "<ключ>"
+#
+# Прогон:
+#   memnotsafe pilot --config docs/examples/pilot.yaml --output runs/pilot-run
+#   # затем открыть runs/pilot-run/threat-report.html
+version: 1
+target:
+  adapter: http_endpoint
+  # КОРЕНЬ ручки БЕЗ /v1 — пилот сам шлёт на <base_url>/v1/chat/completions.
+  base_url: "https://your-endpoint.example"
+  model: "your-model-name"
+  api_key_env: MEMNOTSAFE_TARGET_API_KEY          # ТОЛЬКО имя переменной, не значение
+budget_cap: 20      # потолок прогонов пилота против ручки (обязателен)
+iterations: 1
