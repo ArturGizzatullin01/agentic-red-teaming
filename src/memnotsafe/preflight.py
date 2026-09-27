@@ -123,6 +123,20 @@ async def _default_http_get(url: str) -> HttpReply:
         return HttpReply(status_code=None, error=type(exc).__name__)
 
 
+async def _default_http_post(url: str, json: dict | None = None) -> HttpReply:
+    """Живой POST-транспорт для контрактной пробы OpenAI-совместимой цели (в
+    тестах подменяется слотом http_post). Используется ТОЛЬКО когда дан budget-
+    ledger (POST — платный target_call); без леджера бесплатный preflight POST не
+    делает. Аутентификация к живой ручке — предмет вызова цели в прогоне; здесь
+    проба минимальна и без секретов в тексте (только имя типа исключения)."""
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+            resp = await client.post(url, json=json or {})
+            return HttpReply(status_code=resp.status_code)
+    except Exception as exc:  # noqa: BLE001 — транспортный отказ — тоже ответ
+        return HttpReply(status_code=None, error=type(exc).__name__)
+
+
 def _adapter_mongo_db_default() -> str:
     """Имя базы, которое возьмёт адаптер при отсутствии mongo_db в сценарии:
     значение по умолчанию параметра — часть сигнатуры InvestmentStandAdapter,
@@ -320,6 +334,77 @@ def _http_checks(base_url: str | None, http_get) -> list[Check]:
     return asyncio.run(_all())
 
 
+def _contract_http_checks(effective, http_get, http_post, ledger) -> list[Check]:
+    """EXT-B (задача 3): проверка ДОСТУПНОСТИ OpenAI-совместимой цели по КОНТРАКТУ
+    адаптера (http_endpoint/openai), а не по форме investment_stand.
+
+    У такой цели НЕТ обязательного GET /healthz — его отсутствие НЕ блокер
+    (W1-БЛОКЕР /healthz — форма investment_stand, а не общий контракт). Живость:
+      - profile.health.mode=get → бесплатная GET-проба по объявленному пути
+        (только чтение, не target_call);
+      - иначе → POST chat-completion, а это ПЛАТНЫЙ вызов цели (budget-ledger).
+        Бесплатный preflight POST НЕ делает: без леджера — SKIP с объяснением; с
+        леджером — POST-проба, помеченная target_call и записанная в леджер.
+    401/403/404 ≠ «доступно»: host_responds/auth_passed/contract_ok различаются."""
+    from memnotsafe.adapters.http_endpoint import DEFAULT_CHAT_PATH, classify_probe_status
+    from memnotsafe.core.ledger import OP_TARGET_CALL, PHASE_EXECUTED, PHASE_UNKNOWN_OUTCOME
+
+    base_url = effective.base_url
+    profile = effective.profile
+    if not base_url:
+        return [Check("C1", "Контракт цели (OpenAI-совместимая)", SKIP,
+                      "base_url не задан — контракт проверять нечем")]
+    root = base_url.rstrip("/")
+
+    # profile.health GET → бесплатная проба по контракту (только чтение).
+    if profile is not None and getattr(profile.health, "mode", None) == "get":
+        path = profile.health.path or "/"
+        expect = profile.health.expect_status
+        reply = asyncio.run(http_get(root + path))
+        if reply.status_code is None:
+            return [Check("C1", f"GET {path} (profile.health)", BLOCKER,
+                          f"транспортный отказ ({reply.error or 'без деталей'}) — цель недостижима")]
+        if reply.status_code == expect:
+            return [Check("C1", f"GET {path} (profile.health)", OK,
+                          f"HTTP {reply.status_code} — цель отвечает по объявленному health-контракту")]
+        return [Check("C1", f"GET {path} (profile.health)", WARNING,
+                      f"HTTP {reply.status_code} — ожидался {expect} по profile.health; "
+                      "host отвечает, но health-контракт не подтверждён")]
+
+    chat_path = (profile.transport.chat_path if profile is not None else DEFAULT_CHAT_PATH)
+    title = f"POST {chat_path} (контракт chat-completion)"
+    if ledger is None:
+        return [Check("C1", title, SKIP,
+                      "у цели нет GET /healthz по контракту — это НЕ блокер (форма "
+                      "investment_stand ≠ общий контракт OpenAI-совместимой цели). Живость "
+                      "проверяется POST chat-completion — это ПЛАТНЫЙ вызов цели (target_call, "
+                      "budget-ledger). Бесплатный preflight POST не делает: запустите через "
+                      "go/pilot с бюджетом или объявите profile.health для бесплатной GET-пробы.")]
+
+    # Леджер дан → POST-проба как target_call.
+    reply = asyncio.run(http_post(root + chat_path,
+                                  {"model": "preflight-probe",
+                                   "messages": [{"role": "user", "content": "ping"}]}))
+    flags = classify_probe_status(reply.status_code)
+    if reply.status_code is None:
+        ledger.record(OP_TARGET_CALL, PHASE_UNKNOWN_OUTCOME, note="preflight probe",
+                      error=reply.error)
+        return [Check("C1", title, BLOCKER,
+                      f"транспортный отказ ({reply.error or 'без деталей'}) — цель недостижима")]
+    ledger.record(OP_TARGET_CALL, PHASE_EXECUTED, note="preflight probe")
+    if flags["contract_ok"]:
+        return [Check("C1", title, OK,
+                      f"HTTP {reply.status_code} — цель отвечает по контракту chat-completion "
+                      "(host_responds, auth_passed, contract_ok)")]
+    if not flags["auth_passed"]:
+        return [Check("C1", title, BLOCKER,
+                      f"HTTP {reply.status_code} — авторизация отвергнута (host отвечает, но "
+                      "auth не прошёл): 401/403 ≠ доступно, прогон упадёт")]
+    return [Check("C1", title, WARNING,
+                  f"HTTP {reply.status_code} — host отвечает, авторизация не отвергнута, но "
+                  "контракт не выполнен (не 2xx): 404/4xx/5xx ≠ доступно")]
+
+
 def _mongo_checks(mongo_uri, mongo_db, mongo_probe) -> list[Check]:
     """W3 (mongo_uri не задан), W4 (недоступен/нет базы), W5 (pymongo),
     W6 (коллекция журнала извлечения)."""
@@ -425,22 +510,38 @@ def _deployment_check(base_url, mongo_uri) -> Check:
                  f"ни с одним известным развёртыванием. Известные: {known}")
 
 
-def run_preflight(scenario_path: str | Path, *, http_get=None, mongo_probe=None,
-                  environ=None) -> PreflightResult:
-    """Все проверки по сценарию. Только чтение; значения ключей наружу не
-    выходят. http_get/mongo_probe/environ — слоты для офлайн-тестов (по
-    умолчанию — живые httpx/pymongo и os.environ процесса)."""
-    from memnotsafe.core.config import load_scenario
+def run_preflight(scenario_path: str | Path, *, target_override: str | None = None,
+                  http_get=None, http_post=None, mongo_probe=None,
+                  environ=None, ledger=None) -> PreflightResult:
+    """Все проверки по сценарию. Только чтение (кроме явной POST-пробы под
+    budget-ledger, см. ниже); значения ключей наружу не выходят.
+    http_get/http_post/mongo_probe/environ — слоты для офлайн-тестов (по
+    умолчанию — живые httpx/pymongo и os.environ процесса).
+
+    EXT-B (задача 3): проверки HTTP идут по КОНТРАКТУ ЭФФЕКТИВНОЙ цели
+    (target_override уважается — preflight go/run бьёт по той же цели, что и
+    прогон). investment_stand сохраняет свои W1(/healthz)+W2(/debug/sampling);
+    http_endpoint/openai проверяются своим контрактом (profile.health или POST
+    chat-completion). POST-проба — ПЛАТНЫЙ target_call: выполняется только при
+    переданном ledger и записывается в него; иначе бесплатный preflight POST не
+    делает (SKIP с объяснением)."""
+    from memnotsafe.core.config import load_scenario, resolve_effective_target
 
     scenario = load_scenario(str(scenario_path))
+    effective = resolve_effective_target(scenario, target_override)
     result = PreflightResult(scenario_id=scenario.id, scenario_path=str(scenario_path))
     result.checks.extend(_identity_checks(
         scenario.target.extra.get("identities") or {},
         os.environ if environ is None else environ,
     ))
     result.checks.append(_topology_check(scenario))
-    result.checks.extend(_http_checks(
-        scenario.target.base_url, http_get or _default_http_get))
+    if effective.adapter in ("http_endpoint", "openai", "openai_compatible"):
+        # Контракт OpenAI-совместимой цели: без обязательного GET /healthz.
+        result.checks.extend(_contract_http_checks(
+            effective, http_get or _default_http_get, http_post or _default_http_post, ledger))
+    else:
+        # investment_stand (и прочие с /healthz-контрактом) — прежние W1/W2.
+        result.checks.extend(_http_checks(effective.base_url, http_get or _default_http_get))
     result.checks.extend(_mongo_checks(
         scenario.target.extra.get("mongo_uri"),
         # щупаем ту же базу, которую возьмёт адаптер: без mongo_db в сценарии
@@ -450,7 +551,7 @@ def run_preflight(scenario_path: str | Path, *, http_get=None, mongo_probe=None,
         mongo_probe or _default_mongo,
     ))
     result.checks.append(_deployment_check(
-        scenario.target.base_url, scenario.target.extra.get("mongo_uri")))
+        effective.base_url, scenario.target.extra.get("mongo_uri")))
     return result
 
 

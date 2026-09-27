@@ -52,6 +52,27 @@ DEFAULT_API_KEY_ENV = "MEMNOTSAFE_TARGET_API_KEY"
 DEFAULT_CHAT_PATH = "/v1/chat/completions"
 
 
+def classify_probe_status(status: int | None) -> dict[str, bool]:
+    """EXT-B (задача 3): ТРИ РАЗДЕЛЬНЫХ факта о HTTP-ответе цели вместо
+    сплющенного `status < 500`. Единственный источник правила — здесь;
+    preflight импортирует эту же функцию, чтобы контракт probe и preflight не
+    разъехались.
+
+      host_responds — пришёл HTTP-статус (транспорт жив; None → мёртв);
+      auth_passed   — не 401/403 (авторизация НЕ отвергнута);
+      contract_ok   — 2xx (ответ по контракту).
+
+    401/403/404 — НЕ «доступно»: хост отвечает, но контракт не выполнен, поэтому
+    reachable у probe = contract_ok, а не «status < 500»."""
+    if status is None:
+        return {"host_responds": False, "auth_passed": False, "contract_ok": False}
+    return {
+        "host_responds": True,
+        "auth_passed": status not in (401, 403),
+        "contract_ok": 200 <= status < 300,
+    }
+
+
 class HttpEndpointAdapter(TargetAdapter):
     """OpenAI-совместимая chat-ручка как чёрный ящик tier-1 (goal-driven arch:
     ручка заказчика → контракт TargetAdapter без доступа к памяти цели)."""
@@ -286,20 +307,27 @@ class HttpEndpointAdapter(TargetAdapter):
     # ---------------------------------------------------------------- probe
 
     async def probe(self) -> ProbeResult:
-        # Health-проба по профилю: GET path+expect_status, либо POST-проба
-        # (умолчание и tier-1 без профиля).
+        # Health-проба по профилю: GET path+expect_status (бесплатно, только
+        # чтение — не target_call), либо POST-проба (умолчание и tier-1 без
+        # профиля) — вызов цели по контракту chat-completion.
         if self._profile is not None and self._profile.health.mode == "get":
             try:
                 resp = await self._client.get(self._profile.health.path or "/")
+                flags = classify_probe_status(resp.status_code)
                 return ProbeResult(
+                    # у GET-health контракт — совпадение с expect_status, а не 2xx.
                     reachable=resp.status_code == self._profile.health.expect_status,
                     capabilities=self.capabilities,
-                    detail={"status": resp.status_code, "mode": "get"},
+                    detail={"status": resp.status_code, "mode": "get",
+                            "host_responds": flags["host_responds"],
+                            "auth_passed": flags["auth_passed"],
+                            "target_call": False},
                 )
             except httpx.TransportError as exc:
                 return ProbeResult(
                     reachable=False, capabilities=self.capabilities,
                     error=f"health GET {self.base_url}{self._profile.health.path} недоступна: {exc}",
+                    detail={"target_call": False, **classify_probe_status(None)},
                 )
         try:
             resp = await self._client.post(
@@ -307,15 +335,21 @@ class HttpEndpointAdapter(TargetAdapter):
                 json={"model": self.model_name,
                       "messages": [{"role": "user", "content": "ping"}]},
             )
+            # POST-проба — РЕАЛЬНЫЙ вызов цели (chat-completion): помечаем
+            # target_call, чтобы бюджетный учёт (budget-ledger) не прятал расход.
+            # reachable = contract_ok: 401/403/404 отвечают, но контракт не
+            # выполнен — это НЕ «доступно» (три раздельных статуса в detail).
+            flags = classify_probe_status(resp.status_code)
             return ProbeResult(
-                reachable=resp.status_code < 500,
+                reachable=flags["contract_ok"],
                 capabilities=self.capabilities,
-                detail={"status": resp.status_code},
+                detail={"status": resp.status_code, "target_call": True, **flags},
             )
         except httpx.TransportError as exc:
             return ProbeResult(
                 reachable=False, capabilities=self.capabilities,
                 error=f"ручка {self.base_url}{self.chat_path} недоступна: {exc}",
+                detail={"target_call": True, **classify_probe_status(None)},
             )
 
     # ------------------------------------------------- сброс и наблюдаемость

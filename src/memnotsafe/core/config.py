@@ -220,26 +220,125 @@ def validate_judge_spec(spec: JudgeSpec, scenario_id: str) -> None:
         raise RunnerError(f"Сценарий {scenario_id}: judge.temperature={spec.temperature} должен быть >= 0")
 
 
-def build_adapter(scenario: Scenario, target_override: str | None = None):
-    """Резолвит TargetAdapter по scenario.target.adapter. --target с CLI
-    переопределяет base_url (или сам adapter, если передано имя известного
-    адаптера вместо URL) — не трогает атаку/сценарий."""
-    from memnotsafe.adapters.mock import MockTarget
+# EXT-B (ДЕФЕКТ-3): имена известных адаптеров. --target с одним из них — ЯВНОЕ
+# переключение адаптера; любая другая строка трактуется как URL (base_url).
+KNOWN_ADAPTERS = ("mock", "openai", "openai_compatible", "http_endpoint", "investment_stand")
 
-    adapter_name = scenario.target.adapter
+
+@dataclass(frozen=True)
+class EffectiveTarget:
+    """Единая эффективная цель прогона (EXT-B): то, с чем РЕАЛЬНО будут говорить,
+    а не только строка adapter из YAML (ДЕФЕКТ-3). Одна точка резолва
+    (resolve_effective_target) снабжает ею build_adapter, ExperimentSpec и
+    метаданные кампании — смена цели меняет тождество эксперимента."""
+
+    adapter: str
+    base_url: str | None
+    profile: "TargetProfile | None"
+
+
+def resolve_effective_target(scenario: Scenario, target_override: str | None = None) -> EffectiveTarget:
+    """ЕДИНАЯ точка резолва эффективной цели (EXT-B, ДЕФЕКТ-3). --target:
+      - имя известного адаптера → ЯВНОЕ переключение адаптера (документированная
+        семантика флага; mock — сброс base_url/profile в smoke);
+      - строка-URL → переопределение base_url;
+      - 'mock' → явный mock.
+    Замок «никогда тихий mock»: URL поверх mock-сценария — ОТКАЗ с причиной и
+    подсказкой, а не молчаливый MockTarget, игнорирующий URL (иначе прогон думает,
+    что бьёт живую цель). Профиль (EXT-A) исполняет только http_endpoint tier-1;
+    на mock профиль осознанно не переносится (явный smoke)."""
+    adapter = scenario.target.adapter
     base_url = scenario.target.base_url
-    if target_override and target_override != "mock":
-        base_url = target_override
+    profile = scenario.target.profile
 
-    if scenario.target.profile is not None and adapter_name != "http_endpoint" and target_override != "mock":
+    if target_override:
+        if target_override in KNOWN_ADAPTERS:
+            adapter = target_override
+        else:
+            # target_override — URL. НИКОГДА не тихий mock.
+            if adapter == "mock":
+                raise ValueError(
+                    f"Сценарий {scenario.id}: adapter=mock, а --target={target_override!r} — это URL. "
+                    "Молчаливый mock по URL запрещён: URL был бы проигнорирован, а прогон считал бы, что "
+                    "бьёт живую цель. Подсказка: смените adapter в сценарии на живой "
+                    "(openai/openai_compatible/http_endpoint/investment_stand); либо передайте "
+                    "--target <имя-известного-адаптера> для ЯВНОГО переключения; либо --target mock "
+                    "для явного smoke."
+                )
+            base_url = target_override
+
+    if adapter == "mock":
+        # mock не ходит по сети и не исполняет профиль — эффективная цель чиста.
+        return EffectiveTarget(adapter="mock", base_url=None, profile=None)
+
+    if profile is not None and adapter != "http_endpoint":
         # Профиль не имеет права молча простаивать на чужом адаптере (EXT-A):
         # его исполняет только http_endpoint tier-1.
         raise ValueError(
             f"Сценарий {scenario.id}: target.profile поддерживается только adapter=http_endpoint "
-            f"(EXT-A), получен adapter={adapter_name!r}"
+            f"(EXT-A), эффективный adapter={adapter!r}"
         )
+    return EffectiveTarget(adapter=adapter, base_url=base_url, profile=profile)
 
-    if adapter_name == "mock" or target_override == "mock":
+
+def apply_project_judge_defaults(scenario: Scenario, args=None, environ=None) -> None:
+    """EXT-B (судья из конфигурации): единый КАНОНИЧЕСКИЙ порядок резолва судьи
+    (задокументирован здесь и в LOG):
+
+        1) явные флаги --judge-*  (применяются раньше, в cli._apply_judge_overrides);
+        2) блок `judge:` сценария;
+        3) дефолт ПРОЕКТА из окружения: MEMNOTSAFE_JUDGE_MODEL / _BASE_URL / _API_KEY_ENV;
+        4) при отсутствии настроенной цели — человеческая ошибка ДО обращения к
+           таргету (validate_judge_spec: enabled без model → RunnerError, exit 1).
+
+    Захардкоженный OpenRouter больше НЕ активный молчаливый дефолт: он остаётся
+    лишь инертным значением поля (сериализация/выключенный судья), но включённый
+    судья без настроенной цели не уходит на OpenRouter молча — он падает
+    человеческой ошибкой на шаге 4.
+
+    Заполняем из проектного ENV ТОЛЬКО сценарии БЕЗ своего блока `judge:` и ТОЛЬКО
+    поля, не заданные ни флагом, ни блоком (замок: judge-блоки и D1-пресет не
+    ломаются — блок пропускается целиком, а флаги имеют приоритет)."""
+    environ = os.environ if environ is None else environ
+    if isinstance(scenario.raw.get("judge"), dict):
+        return  # сценарий выбрал свой судью — не трогаем
+    spec = scenario.judge
+
+    def _flag(name: str):
+        return getattr(args, name, None) if args is not None else None
+
+    if not _flag("judge_model") and not spec.model:
+        env_model = (environ.get("MEMNOTSAFE_JUDGE_MODEL") or "").strip()
+        if env_model:
+            spec.model = env_model
+    if not _flag("judge_base_url"):
+        env_base = (environ.get("MEMNOTSAFE_JUDGE_BASE_URL") or "").strip()
+        if env_base:
+            spec.base_url = env_base
+    if not _flag("judge_api_key_env"):
+        env_key = (environ.get("MEMNOTSAFE_JUDGE_API_KEY_ENV") or "").strip()
+        if env_key:
+            spec.api_key_env = env_key
+
+
+def build_adapter(scenario: Scenario, target_override: str | None = None):
+    """Резолвит TargetAdapter по ЕДИНОЙ эффективной цели (EXT-B). --target с CLI
+    переопределяет base_url (или сам adapter, если передано имя известного
+    адаптера) — не трогает атаку/сценарий. Тонкая обёртка над
+    resolve_effective_target + build_adapter_from_effective: одна точка резолва."""
+    return build_adapter_from_effective(scenario, resolve_effective_target(scenario, target_override))
+
+
+def build_adapter_from_effective(scenario: Scenario, effective: EffectiveTarget):
+    """Строит адаптер из уже разрешённой эффективной цели. Отдельная точка входа,
+    чтобы вызывающий (cli) резолвил цель ОДИН раз и прокинул ту же EffectiveTarget
+    в эксперимент/метаданные (совпадение адаптера и артефактов)."""
+    from memnotsafe.adapters.mock import MockTarget
+
+    adapter_name = effective.adapter
+    base_url = effective.base_url
+
+    if adapter_name == "mock":
         vulnerable = bool(scenario.target.extra.get("vulnerable", True))
         return MockTarget(vulnerable=vulnerable)
 
@@ -255,16 +354,16 @@ def build_adapter(scenario: Scenario, target_override: str | None = None):
 
         if not base_url:
             raise ValueError(f"Сценарию {scenario.id} нужен target.base_url или --target <url> для adapter=http_endpoint")
-        if scenario.target.profile is not None:
+        if effective.profile is not None:
             # EXT-A: отказ ДО прогона (G3) — cross-user без доказанной независимости
             # принципалов не строит адаптер и не читает ключ. Человекочитаемая
             # причина поднимается из profile.validate_for_actors.
-            scenario.target.profile.validate_for_actors(
+            effective.profile.validate_for_actors(
                 scenario.attacker.user_id, scenario.victim.user_id
             )
             return HttpEndpointAdapter(
                 base_url=base_url,
-                profile=scenario.target.profile,
+                profile=effective.profile,
                 model_name=scenario.target.extra.get("model_name", "target-agent"),
             )
         return HttpEndpointAdapter(base_url=base_url, **scenario.target.extra)

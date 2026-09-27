@@ -6,6 +6,74 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-26 — claude-code — EXT-B: единая эффективная цель + preflight по контракту + судья из конфигурации (feat/ext-b-effective-target)
+
+- контекст: поток EXT-OPERATOR, карта 2/4. База — свежий main ae56227 (suite 1621/0,
+  EXT-A влита 2806ee4, строим поверх). НЕ live, НЕ Docker; секреты — только ИМЕНА env.
+  Ветка feat/ext-b-effective-target
+- (1) единая эффективная цель (ДЕФЕКТ-3 полностью): `core/config.py` — новые
+  `EffectiveTarget(adapter, base_url, profile)` + `resolve_effective_target(scenario,
+  target_override)` — ЕДИНАЯ точка резолва. `build_adapter` = тонкая обёртка над
+  resolve + `build_adapter_from_effective`. `core/experiment.py` — `build_experiment_spec`
+  получил опциональный `effective_target` (None → из scenario.target, регресс experiment_id
+  побайтово сохранён; задан → adapter/base_url/profile из него, смена --target меняет
+  experiment_id). `core/campaign.py` — `Campaign(effective_target=…)` прокидывает цель в
+  spec и в метаданные (`_run_metadata` называет эффективный adapter/target). `cli.py` —
+  `_run_campaign` резолвит цель один раз и передаёт в Campaign (run/campaign/go идут этим
+  путём). Замок: смена B меняет target/adapter в experiment.json/campaign.json и
+  experiment_id
+- (2) никогда тихий mock: `resolve_effective_target` — URL поверх mock-сценария → `ValueError`
+  с причиной и подсказкой (URL игнорировался бы, прогон считал бы, что бьёт живую цель);
+  `--target <имя известного адаптера>` → ЯВНОЕ переключение адаптера; `--target mock` → явный
+  mock. В cli отказ резолва — человеческая ошибка (emit_error, exit 1), не трейсбек и не
+  молчаливый MockTarget
+- (3) preflight по контракту адаптера: `adapters/http_endpoint.py` (только probe) — новая
+  чистая `classify_probe_status(status)` → три РАЗДЕЛЬНЫХ факта host_responds/auth_passed/
+  contract_ok; `probe()` POST-ветка: `reachable=contract_ok` (401/403/404 ≠ доступно, было
+  `<500`), detail помечает `target_call=True`. `preflight.py` — `run_preflight` получил
+  `target_override` (уважает эффективную цель), `http_post`, `ledger`; развилка по контракту:
+  investment_stand сохраняет W1(/healthz)+W2(/debug/sampling) без изменений; http_endpoint/
+  openai — контрактная проверка `C1` (profile.health GET бесплатно, иначе POST chat-completion),
+  отсутствие /healthz у них НЕ блокер; POST-проба — ПЛАТНЫЙ target_call: только при
+  переданном `ledger`, записывается в budget-ledger (OP_TARGET_CALL); без леджера бесплатный
+  preflight POST не делает (SKIP с объяснением). `selfserve.py` — go зовёт preflight с
+  target_override (эффективная цель)
+- (4) судья из конфигурации: `core/config.py` — `apply_project_judge_defaults(scenario, args,
+  environ)`; КАНОНИЧЕСКИЙ порядок (задокументирован в докстринге): флаги `--judge-*` → блок
+  `judge:` сценария → проектный ENV-дефолт `MEMNOTSAFE_JUDGE_MODEL/BASE_URL/API_KEY_ENV` →
+  человеческая ошибка ДО цели (validate_judge_spec: enabled без model → RunnerError, exit 1).
+  Захардкоженный OpenRouter больше НЕ активный молчаливый дефолт (остаётся инертным значением
+  поля для сериализации/выключенного судьи — регресс digest experiment_id и test_experiment_spec_p10b
+  сохранён; включённый судья без настроенной цели падает человеческой ошибкой, а не уходит на
+  OpenRouter молча). Заполняются ТОЛЬКО сценарии без своего блока judge: и ТОЛЬКО незаданные
+  поля — D1-пресет (Yandex через args-флаги) и judge-блоки не ломаются. `cli._run_campaign`
+  зовёт после `_apply_judge_overrides`
+- флаг **D** (отклонение ALLOWLIST): `pilot_pack.py` НЕ в буквальном списке файлов, но замок
+  задачи 1 «каждая pilot-запись называет B» требует правки там (Campaign строится в
+  `_run_pack`, не в cli). Минимально: `_pilot_chain` резолвит эффективную цель из synth-конфига
+  и прокидывает `effective_target` в под-кампании — иначе experiment.json пилота называл бы mock
+  из сценариев реестра, а не ручку. Одна логическая правка, легко откатывается
+- NOTICED: (а) probe пилота (pilot_pack line ~405) и `memnotsafe probe` делают POST-пробу без
+  budget-ledger — способность «POST-проба ложится в budget-ledger» реализована и покрыта тестом
+  на уровне preflight (инъекция ledger); её боевое проведение через go/pilot требует создания
+  ledger до out_dir/experiment (вне минимального scope selfserve «только вызов preflight»/pilot
+  не в ALLOWLIST) — отложено. (б) `_default_http_post` не шлёт auth-заголовок: боевая
+  POST-проба живой ручки с ключом — тот же отложенный узел. (в) `test_demo_launcher` (demo.cmd
+  `%~dp0scripts\demo-run.ps1`, обратный слэш) падает на Linux — платформенное, вне диффа,
+  зелёное на Windows-среде владельца (там база 1621/0)
+- ALLOWLIST (по факту): core/config.py, core/experiment.py, core/campaign.py, preflight.py,
+  adapters/http_endpoint.py (только probe), selfserve.py (только вызов preflight), cli.py
+  (врезки run/campaign), pilot_pack.py (флаг D), тесты (новый test_ext_b_effective_target.py +
+  правка моков run_preflight в test_selfserve*.py под новую сигнатуру), LOG.md
+- проверка (venv312, python3.12): RED — новый файл не собирался (нет символов EffectiveTarget/
+  resolve_effective_target/apply_project_judge_defaults), 0 passed/1 error; GREEN targeted —
+  `pytest tests/test_ext_b_effective_target.py` = 18 passed; полный suite один прогон —
+  `pytest tests/ -p no:cacheprovider` = **1638 passed, 1 failed** (единственный провал —
+  предсуществующий платформенный test_demo_launcher; Δ=+18 к базе 1621). py3.11 py_compile
+  изменённых модулей OK; `git diff --check` чисто; секретов в диффе 0 (только ИМЕНА env). НЕ
+  трогал: runner-стадии, атаки, оракулы, mock-адаптер, investment_stand (W1/W2 сохранены),
+  adapters/profile.py (EXT-A), чужие ветки. Не самопринимал — приёмка A0
+
 ### 2026-09-26 — claude-code — EXT-A: версионированная target-profile схема для tier-1 (feat/ext-a-target-profile)
 
 - контекст: поток EXT-OPERATOR, карта 1/4. Оператор ИБ подключает ЧУЖУЮ цель по URL —
