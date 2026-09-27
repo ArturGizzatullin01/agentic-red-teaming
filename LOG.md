@@ -6,6 +6,34 @@ project: memnotsafe
 # LOG — memnotsafe
 
 
+### 2026-09-27 — claude-code — LIVE-COVERAGE: все семьи в бой + живой атакер (feat/live-coverage @ 752a14a)
+
+- дизайн принят A0 (DESIGN ACCEPT 9.5/10); порядок 1→5→2→4→3, RED→GREEN на каждую, единый suite
+- (1) 16 live-сценариев на stack2 (investment_stand 9600/28017, reset_scope namespace): 14 mock-only
+  (список карты + delimiter_summary_injection, A0 Q1 «ВСЕ») + 2 pilot-batch (cross_topic/document) на
+  stack2-MAIN; зеркало mock-smoke базы, сменён только target-блок. Новый замок test_mock_live_symmetry
+  (семья→live + mock; mock только smoke, A0 Q4); test_control_factor_inventory +16 пар, −7 из UNPAIRED;
+  правило «mock только smoke» в AGENTS/CLAUDE
+- (5) --attacker-preset общий → работает в run/campaign/generate/pilot (apply_attacker_preset,
+  управляемый отказ на unknown, печать выбранного)
+- (2) «никогда больше»: threat_report.attacker_status (англ., замок no-cyrillic) + строка в шапке;
+  карточка «до» предупреждает live+static; pilot-гейт без --online/--allow-static → блокер; сводка пака
+  показывает атакующего; фикс публичного имени (замок приватных cross-module импортов)
+- (4) мягкий семантический WRITE поверх маркерного: semantic_candidate_match (инъект. embed, cosine,
+  порог 0.83), EVIDENCE_KIND_SEMANTIC_MATCH∈SOFT (FIX-A: не HARD); оракул зовёт мягкий путь только на
+  промахе маркера И при инъект. эмбеддере (умолчание None → регресс); spec 002 amendment. Живой embedding
+  и калибровка порога — A0 (Q6)
+- (3) диагностика conditional-движка: узкий гейт trust_step (умолчание True → канон не тронут) +
+  scenarios/cond-2x2/ (подкаталог, инвентарём не сканируется) 2×2 trust×marker; spec 001 amendment
+  (атрибуция write по source_session_id). Живой 2×2 — A0
+- движок/campaign/worker/runner/mock/канон-оракулы не тронуты (кроме узкой мягкой ветки §4 и param-гейта §3)
+- RED→GREEN каждой задачи (targeted 33/76/58/35/37); полный suite 1672 passed / 0 (=1621+51); diff --check
+  чист; секреты — только ИМЕНА env; live НЕ запускал; main не двигал, не пушил; не самопринимаю
+- DEVIATIONS: D-подпись Opus 4.8 (карта→Fable, STANDING-RULES §8); 7 (не 6) баз вышли из UNPAIRED
+  (с Q1=yes добавился delimiter). NOTICED: live-активация §4 (config→runner→ec) и чтение source_session_id
+  §3 — тонкие швы за A0 (живые вызовы)
+
+
 ### 2026-09-26 — claude-code — EXT-A: версионированная target-profile схема для tier-1 (feat/ext-a-target-profile)
 
 - контекст: поток EXT-OPERATOR, карта 1/4. Оператор ИБ подключает ЧУЖУЮ цель по URL —
