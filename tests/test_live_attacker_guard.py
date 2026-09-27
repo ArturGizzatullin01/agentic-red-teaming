@@ -27,7 +27,7 @@ if str(TESTS) not in sys.path:
 
 from memnotsafe import selfserve  # noqa: E402
 from memnotsafe.core.config import load_scenario  # noqa: E402
-from memnotsafe.reporting.threat_report import _attacker_status, render_html  # noqa: E402
+from memnotsafe.reporting.threat_report import attacker_status, render_html  # noqa: E402
 
 SCENARIOS = SRC.parent / "scenarios"
 LIVE = SCENARIOS / "scope_escalation_live.yaml"      # investment_stand (живой)
@@ -42,14 +42,14 @@ def _console() -> tuple[Console, io.StringIO]:
 # ------------------------------------------------------------ _attacker_status
 def test_attacker_status_static_online_missing(tmp_path: Path) -> None:
     # Английские строки: threat-report — англоязычный отчёт (замок no-cyrillic).
-    assert _attacker_status(tmp_path) == "UNKNOWN (no experiment.json)"
+    assert attacker_status(tmp_path) == "UNKNOWN (no experiment.json)"
     (tmp_path / "experiment.json").write_text(
         json.dumps({"attacker": {"online": False, "provider": "stub", "model": "?"}}), encoding="utf-8")
-    assert _attacker_status(tmp_path) == "STATIC (not an LLM)"
+    assert attacker_status(tmp_path) == "STATIC (not an LLM)"
     (tmp_path / "experiment.json").write_text(
         json.dumps({"attacker": {"online": True, "provider": "openai", "model": "gpt://f/qwen/latest"}}),
         encoding="utf-8")
-    assert _attacker_status(tmp_path) == "LLM (gpt://f/qwen/latest)"
+    assert attacker_status(tmp_path) == "LLM (gpt://f/qwen/latest)"
 
 
 # ------------------------------------------------------------ threat-report шапка

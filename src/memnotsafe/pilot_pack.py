@@ -358,8 +358,8 @@ def _render_summary(console: Console, report: Any, combined: CampaignResult, pat
     console.print(f"  доказано:      {m.get('successful')} of {m.get('attempts')} (N of M)")
     # CARD-LIVE-COVERAGE Задача 2.4: сводка пака обязана показывать атакующего —
     # статический прогон не должен читаться как живой (источник — experiment.json прогона).
-    from memnotsafe.reporting.threat_report import _attacker_status
-    console.print(f"  атакующий:     {_attacker_status(path.parent)}")
+    from memnotsafe.reporting.threat_report import attacker_status
+    console.print(f"  атакующий:     {attacker_status(path.parent)}")
     console.print(f"  threat-report: {path}")
     console.print("  [dim]UNKNOWN ≠ safe: INCONCLUSIVE означает «не доказано», а не «цель защищена»[/dim]")
 

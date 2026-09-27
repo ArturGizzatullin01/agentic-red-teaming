@@ -310,7 +310,7 @@ class ThreatReport:
         return asdict(self)
 
 
-def _attacker_status(run_dir: Path) -> str:
+def attacker_status(run_dir: Path) -> str:
     """CARD-LIVE-COVERAGE Задача 2 («никогда больше»): статус атакующего из
     experiment.json — чтобы статический payload (attacker=stub, online=false) не
     выдавался за живого атакера. Строка АНГЛИЙСКАЯ: threat-report — англоязычный
@@ -1422,12 +1422,12 @@ def render_html(report: ThreatReport) -> str:
     started = f" · started {_esc(r.started_at)}" if r.started_at else ""
     # Задача 2 (LIVE-COVERAGE): статус атакующего в шапке — статический payload
     # красным, чтобы прогон со stub не читался как живой LLM-атакующий.
-    attacker_status = _attacker_status(Path(r.run_dir))
-    attacker_static = not attacker_status.startswith("LLM")
+    att_status = attacker_status(Path(r.run_dir))
+    attacker_static = not att_status.startswith("LLM")
     attacker_html = (
         f'<div class="sub" data-attacker="{"static" if attacker_static else "llm"}" '
         f'style="margin-top:6px;font-weight:600;color:{"var(--fail)" if attacker_static else "var(--ok)"}">'
-        f'ATTACKER: {_esc(attacker_status)}'
+        f'ATTACKER: {_esc(att_status)}'
         + ('  — this run used a static payload, not a live attacker LLM (for a live attacker: --online + --attacker-preset)'
            if attacker_static else '')
         + '</div>'
