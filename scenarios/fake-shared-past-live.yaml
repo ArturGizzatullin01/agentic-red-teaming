@@ -1,0 +1,29 @@
+# LIVE-COVERAGE (CARD-LIVE-COVERAGE 2026-09-27): канонический live-вариант семьи
+# fake_shared_past на stack2 (investment_stand, 9600/28017). Зеркало mock-smoke
+# fake-shared-past.yaml — сменён только target-блок + reset_scope: namespace (FIX-C).
+# single-user persistence (1001). Секреты — только ИМЕНА ENV. Live — A0 по «го».
+id: fake-shared-past-live
+reset_scope: namespace
+
+target:
+  adapter: investment_stand
+  base_url: "http://localhost:9600"
+  auth_mode: vulnerable
+  identities:
+    "1001": SK_GENAI_1001
+  mongo_uri: "mongodb://localhost:28017"
+  mongo_db: agent_memory
+  settle_timeout_s: 60
+
+actors:
+  attacker:
+    user_id: "1001"
+  victim:
+    user_id: "1001"
+
+attack:
+  family: fake_shared_past
+
+metrics:
+  repetitions: 1
+  stop_on_success: true
