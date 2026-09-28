@@ -66,10 +66,17 @@ class StubAttackerClient:
 
 
 class HTTPAttackerClient:
-    """Живая атакующая LLM по OpenAI-совместимому `/v1/chat/completions`.
-    Ключ берётся из ENV в момент запроса и никуда не сохраняется (FR-016).
-    Ретраи — на 429/5xx/transport; 4xx и неразбираемый ответ — сразу
-    `AttackerError` (повтор не поможет)."""
+    """Живая атакующая LLM по OpenAI-совместимому REST. Ключ берётся из ENV в
+    момент запроса и никуда не сохраняется (FR-016). Ретраи — на 429/5xx/transport;
+    4xx и неразбираемый ответ — сразу `AttackerError` (повтор не поможет).
+
+    chat_path по умолчанию — `/chat/completions` (как у judge/client.py): base_url
+    провайдера у пресатов и мастера go уже несёт версию пути
+    (`https://llm.api.cloud.yandex.net/v1`), поэтому версию в chat_path НЕ дублируем.
+    Регресс LIVE-COVERAGE: раньше дефолт был `/v1/chat/completions`, и на base_url с
+    `/v1` запрос уходил на `…/v1/v1/chat/completions` → HTTP 404 (живого атакующего
+    до этого не гоняли, баг не проявлялся). Замок — tests/test_attacker_client_endpoint.py.
+    """
 
     def __init__(
         self,
@@ -80,7 +87,7 @@ class HTTPAttackerClient:
         timeout_s: float = 60.0,
         max_retries: int = 2,
         temperature: float = 0.0,
-        chat_path: str = "/v1/chat/completions",
+        chat_path: str = "/chat/completions",
     ):
         if not base_url:
             raise AttackerError("openai-провайдеру атакующей LLM нужен base_url (--attacker-base-url)")

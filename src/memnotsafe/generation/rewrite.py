@@ -85,8 +85,17 @@ async def rewrite(
         # Привязки попытки (маркер) в digest не входят: их смена легальна.
         from memnotsafe.core.goal_contract import GoalContract
 
-        previous_contract = GoalContract.from_effect(feedback.previous.expected_effect)
-        new_contract = GoalContract.from_effect(record.expected_effect)
+        # LIVE-COVERAGE регресс: если тип эффекта семьи не в авторитетном наборе
+        # GoalContract (например tool_selection_changed у tool_route_hijack),
+        # from_effect бросает ValueError. Раньше он был НЕПОЙМАН и ронял всю
+        # онлайн-эскалацию (exit 1 + traceback). Цель контракта — не пропустить
+        # смену цели; если её нельзя проверить, консервативно отбраковываем
+        # кандидата (None, FR-012), а не рушим прогон.
+        try:
+            previous_contract = GoalContract.from_effect(feedback.previous.expected_effect)
+            new_contract = GoalContract.from_effect(record.expected_effect)
+        except ValueError:
+            return None
         if not previous_contract.same_goal(new_contract):
             return None
     if record_issues(record):

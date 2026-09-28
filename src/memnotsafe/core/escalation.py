@@ -60,7 +60,7 @@ from memnotsafe.core.ledger import (
     PHASE_UNKNOWN_OUTCOME,
 )
 from memnotsafe.core.models import AttackResult
-from memnotsafe.core.runner import RunnerError, new_case_id, run_attack
+from memnotsafe.core.runner import CaseMarkerError, RunnerError, new_case_id, run_attack
 from memnotsafe.tracing.recorder import TraceRecorder
 
 
@@ -216,6 +216,22 @@ async def escalate(
                 gen, new_ctx, target, run_id=run_id, recorder=recorder, judge=judge,
                 require_case_marker=require_case_marker,
             )
+        except CaseMarkerError:
+            # LIVE-COVERAGE: rewrite живого атакующего потерял {case_marker}. По
+            # контракту (докстринг выше) это ОТБРАКОВКА попытки, а НЕ FATAL всей
+            # кампании: фиксируем rewrite_rejected, попытка потрачена (бюджет уже
+            # списан в backend.rewrite) и продолжаем в пределах лимита/бюджета.
+            # Настоящий транспортный RunnerError по-прежнему пробрасывается ниже.
+            if history is not None:
+                history.record(
+                    case_id=base_ctx.case_id,
+                    candidate_id=new_ctx.case_id,
+                    parent_candidate_id=parent_candidate_id,
+                    outcome=OUTCOME_REWRITE_REJECTED,
+                    attempt_no=attempts,
+                    goal_digest=goal_digest_or_none(new_record.expected_effect),
+                )
+            continue
         except RunnerError as exc:
             # Транспортный сбой повтора: в историю (candidate тот же — retry не
             # новый кандидат), затем НЕ глотаем — exit-контракт CLI.

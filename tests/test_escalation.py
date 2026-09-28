@@ -339,6 +339,62 @@ def _k3_script(effect: dict) -> str:
     }, ensure_ascii=False)
 
 
+def test_marker_less_rewrite_is_rejected_not_fatal():
+    # LIVE-COVERAGE регресс (ПЕРВЫЙ живой прогон атакующего): под --online
+    # атакующая LLM переписывает payload и роняет {case_marker}. Раньше
+    # run_attack бросал RunnerError (config error маркера), а эскалация
+    # пробрасывала его как транспортный сбой → падала ВСЯ кампания (FATAL).
+    # Контракт (докстринг core/escalation.py): rewrite без маркера ОТКЛОНЯЕТСЯ
+    # (тратит попытку), прогон продолжается. Проверяем: escalate НЕ бросает,
+    # возвращает исход, успех не выдуман.
+    import json
+
+    from memnotsafe.core.escalation import escalate
+    from memnotsafe.core.runner import new_run_id, run_attack
+    from memnotsafe.generation.attacker_client import StubAttackerClient
+    from memnotsafe.generation.budget import CallBudget
+    from memnotsafe.generation.corpus import read_corpus, valid_records
+
+    attack, base_ctx = _seed_case()
+    rec = valid_records(read_corpus(SEED_CORPUS))[0]
+    marker_less = json.dumps({
+        "payload": "переписанный payload без служебного кода регламента",
+        "trigger": rec.trigger,
+        "expected_effect": dict(rec.expected_effect),
+        "signal_strength": "weak",
+    }, ensure_ascii=False)
+    target = MockTarget(vulnerable=True)
+    run_id = new_run_id()
+
+    async def go():
+        first = await run_attack(attack, base_ctx, target, run_id=run_id, require_case_marker=False)
+        assert first.success is False
+        return await escalate(
+            attack, base_ctx, target, first, limit=3,
+            client=StubAttackerClient([marker_less, marker_less]),
+            budget=CallBudget(limit=5), run_id=run_id, require_case_marker=True,
+        )
+
+    outcome = asyncio.run(go())        # НЕ должно бросать RunnerError (FATAL кампании)
+    assert outcome.succeeded is False  # маркер-less rewrite не «пробил» — просто отклонён
+    assert outcome.attempts >= 2       # попытки потрачены, прогон завершён штатно
+
+
+def test_rewrite_unsupported_effect_type_is_rejected_not_crash():
+    # LIVE-COVERAGE регресс: tool_route_hijack несёт expected_effect.type=
+    # 'tool_selection_changed', которого НЕТ в авторитетном наборе GoalContract.
+    # rewrite() строил GoalContract.from_effect(previous.effect) и ронял ValueError
+    # → НЕПОЙМАННЫЙ краш всей онлайн-эскалации (exit 1 + traceback). Должно быть:
+    # отбраковка кандидата (None), прогон продолжается (FR-012).
+    from memnotsafe.generation.attacker_client import StubAttackerClient
+    from memnotsafe.generation.budget import CallBudget
+    from memnotsafe.generation.rewrite import rewrite
+
+    eff = {"type": "tool_selection_changed", "tool": "route_lookup", "selected": "attacker_route"}
+    out = asyncio.run(rewrite(_k3_feedback(eff), StubAttackerClient([_k3_script(dict(eff))]), CallBudget(limit=5)))
+    assert out is None  # не бросить ValueError, а честно отбраковать
+
+
 def test_rewrite_rejects_goal_type_change():
     # «совершить эффект» не превращается в «упомянуть»: смена expected_effect.type
     # отбраковывает rewrite (None) ДО target, попытка потрачена (FR-012)

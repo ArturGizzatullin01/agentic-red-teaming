@@ -62,6 +62,16 @@ class RunnerError(RuntimeError):
     -> exit 1, второе -> exit 0 + finding NOT_EXPLOITABLE."""
 
 
+class CaseMarkerError(RunnerError):
+    """Кандидат без объявленного case-маркера в доставке (маркерная изоляция).
+    Подкласс RunnerError → на ПРЯМОМ пути (run/campaign базовой попытки) ведёт
+    себя как прежде: exit 1 config-error. Но онлайн-эскалация ловит ИМЕННО его
+    (core/escalation.py) и трактует как отбраковку rewrite'а (тратит попытку,
+    прогон продолжается), а не как FATAL всей кампании — так и задумано
+    докстрингом escalation.py: «rewrite без {case_marker} отклоняется раннером».
+    LIVE-COVERAGE регресс: живой атакующий роняет маркер при переписывании."""
+
+
 class _SessionBook:
     """Учёт сессий, созданных одним run_attack. Попытка close фиксируется ДО
     await; сессия получает ровно одну попытку закрытия в любом исходе:
@@ -243,8 +253,10 @@ async def run_attack(
             marker_placed = any(ctx.case_marker in t for t in delivery_texts if t)
             if not marker_placed:
                 # кандидат без маркера при объявленной маркерной изоляции —
-                # config error ДО доставки (FR-B), exit 1 на уровне CLI
-                raise RunnerError(
+                # config error ДО доставки (FR-B), exit 1 на уровне CLI.
+                # CaseMarkerError (подкласс RunnerError): базовый путь ловит его
+                # как прежде (exit 1), а онлайн-эскалация — как отбраковку rewrite.
+                raise CaseMarkerError(
                     f"config error на случае {ctx.case_id}: scenario требует case-marker "
                     f"({ctx.case_marker}), но ни payload, ни delivery-реплики его "
                     "не содержат — подстановка возможна только через явный "
